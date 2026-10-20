@@ -50,3 +50,13 @@ async def test_verify_action_handles_offline_gateway():
         await app.action_verify()
         await pilot.pause()
         assert app.last_verify == []
+
+
+async def test_browse_action_prefills_prompt():
+    app = SovereignApp(settings=Settings(), demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app.action_browse()
+        prompt = app.query_one("#prompt")
+        assert prompt.value == "/browse "
+        assert prompt.cursor_position == len("/browse ")

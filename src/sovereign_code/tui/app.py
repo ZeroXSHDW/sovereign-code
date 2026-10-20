@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -35,12 +36,13 @@ HELP_TEXT = """\
 - `/codex [path]`, `/claude [path]` — local chat clients
 - `/clients` — show installed clients and capabilities
 - `/verify` — send a tiny test through the four core gateway aliases
+- `/browse <url> [task]` — drive a visible Chromium with the local model
 - `/free` — unload other models and free memory
 - `/clear` — new conversation
 - `/help` — this help
 - `/quit` — exit
 
-**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `F7` verify gateway · `Ctrl+N` new chat · `Ctrl+Q` quit
+**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `F7` verify gateway · `F8` browse · `Ctrl+N` new chat · `Ctrl+Q` quit
 """
 
 
@@ -68,6 +70,7 @@ class SovereignApp(App[None]):
         Binding("f5", "refresh", "Refresh"),
         Binding("f6", "launch_claude", "Claude"),
         Binding("f7", "verify", "Verify"),
+        Binding("f8", "browse", "Browse"),
         Binding("ctrl+n", "clear_chat", "New"),
     ]
 
@@ -419,6 +422,8 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Status refreshed.")
         elif command == "/verify":
             await self.action_verify()
+        elif command == "/browse":
+            await self._launch_browse(arg)
         elif command == "/free":
             if self.snapshot:
                 for view in self.snapshot.loaded:
@@ -448,6 +453,34 @@ class SovereignApp(App[None]):
 
     async def action_clear_chat(self) -> None:
         await self.clear_chat()
+
+    async def action_browse(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        prompt.value = "/browse "
+        prompt.cursor_position = len(prompt.value)
+        prompt.focus()
+
+    async def _launch_browse(self, arg: str) -> None:
+        if not arg.strip():
+            await self.add_message(
+                "system", "Usage: `/browse https://example.com what to find`"
+            )
+            return
+        parts = arg.split(maxsplit=1)
+        url = parts[0].strip()
+        task = parts[1].strip() if len(parts) > 1 else ""
+        command = [sys.executable, "-m", "sovereign_code", "browse", url]
+        if task:
+            command += ["--task", task]
+        await self.add_message(
+            "system",
+            f"Opening browser at `{url}`" + (f" — {task}" if task else ""),
+        )
+        try:
+            with self.suspend():
+                subprocess.call(command)
+        finally:
+            await self.refresh_snapshot()
 
     async def action_verify(self) -> None:
         if self._verify_busy:

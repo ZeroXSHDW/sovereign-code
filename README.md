@@ -146,7 +146,7 @@ sovereign browse URL --task "…" --dry-run   # show the first planned action on
 The local model drives a visible, persistent Chromium profile through Playwright,
 reading the page and performing one structured action at a time (`navigate`,
 `click`, `fill`, `select`, `press`, `scroll`, `extract`), then hands back control
-when it needs you.
+when it needs you. In the dashboard, press `F8` (or `/browse <url> [task]`).
 
 - **No CAPTCHA solving, bot-check bypass, user-agent spoofing, or fingerprint
   evasion.** The browser runs with its normal identity.

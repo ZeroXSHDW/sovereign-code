@@ -96,6 +96,10 @@ Sovereign Code keeps the idea and changes the foundation.
   `/index`, `/summarize`, `/backup`, and `/browse` shell out to the same CLI, so
   the console stays a single entry point. Doctor gained an embedding-model check
   (16 checks), and `sovereign backup --keep N` prunes old archives.
+- **Config and storage are visible.** `sovereign config` shows and edits settings
+  (`--get`, `--set`); `sovereign stats` reports per-component disk usage;
+  `sovereign sessions --search` finds past chats; and `sovereign browse
+  --screenshots` saves a PNG at each terminal state for review.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -107,7 +111,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 80 pytest tests cover model merging, router context behaviour, config,
+- 86 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

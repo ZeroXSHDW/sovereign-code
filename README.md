@@ -125,6 +125,9 @@ sovereign backup           # tarball of configs + chat data
 sovereign summarize FILE   # or --url URL, via the local model
 sovereign index .          # embed a directory for semantic search
 sovereign search "query"   # find relevant chunks (--path DIR --top N)
+sovereign config           # view settings; --get KEY, --set KEY=VALUE
+sovereign stats            # disk usage across the stack
+sovereign sessions --search "term"   # search chat history
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
@@ -147,6 +150,7 @@ sovereign uninstall-login
 ```sh
 sovereign browse https://example.com --task "find the pricing table and summarize it"
 sovereign browse URL --allow-local --headless --max-steps 6
+sovereign browse URL --task "…" --screenshots   # save a PNG at each terminal state
 sovereign browse URL --task "…" --dry-run   # show the first planned action only
 ```
 

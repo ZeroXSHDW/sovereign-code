@@ -189,6 +189,7 @@ class BrowserAgent:
         confirm: Callable[[str], bool] | None = None,
         pause: Callable[[str], None] | None = None,
         audit: AuditLog | None = None,
+        screenshots_dir: Path | None = None,
     ) -> None:
         self.session = session
         self.planner = planner
@@ -198,11 +199,25 @@ class BrowserAgent:
         self.confirm = confirm
         self.pause = pause
         self.audit = audit
+        self.screenshots_dir = screenshots_dir
         self.extracts: list[str] = []
+        self.screenshots: list[str] = []
 
     def _log(self, kind: str, **data: object) -> None:
         if self.audit is not None:
             self.audit.write(kind, **data)
+
+    def _capture(self, name: str) -> None:
+        if self.screenshots_dir is None:
+            return
+        path = self.screenshots_dir / f"{name}-{time.strftime('%H%M%S')}.png"
+        shot = self.session.screenshot(path)
+        if shot:
+            self.screenshots.append(str(shot))
+
+    def _finish(self, stopped: str, summary: str, steps: int) -> BrowseResult:
+        self._capture(stopped)
+        return BrowseResult(summary, steps, stopped, self.extracts)
 
     def run(self, task: str) -> BrowseResult:
         history: list[str] = []
@@ -219,26 +234,21 @@ class BrowserAgent:
             )
             if observation.get("captcha"):
                 if self.headless:
-                    return BrowseResult(
+                    return self._finish(
+                        "captcha",
                         "A CAPTCHA or bot check appeared; rerun without --headless to solve it manually.",
                         step,
-                        "captcha",
-                        self.extracts,
                     )
                 if self.pause is None:
-                    return BrowseResult(
+                    return self._finish(
+                        "captcha",
                         "CAPTCHA detected and no interactive handoff is available.",
                         step,
-                        "captcha",
-                        self.extracts,
                     )
                 pauses += 1
                 if pauses > 5:
-                    return BrowseResult(
-                        "Still blocked by a CAPTCHA after several handoffs.",
-                        step,
-                        "captcha",
-                        self.extracts,
+                    return self._finish(
+                        "captcha", "Still blocked by a CAPTCHA after several handoffs.", step
                     )
                 self.pause(
                     "CAPTCHA or browser check detected. Solve it in the visible window, "
@@ -263,17 +273,15 @@ class BrowserAgent:
                     )
                     action = parse_action(raw)
             except (PlannerError, ActionError) as exc:
-                return BrowseResult(f"Planner error: {exc}", step, "error", self.extracts)
+                return self._finish("error", f"Planner error: {exc}", step)
 
             self._log("plan", step=step, action=_action_record(action))
             if action.kind == "done":
                 self._log("done", step=step, summary=action.summary)
-                return BrowseResult(action.summary, step, "done", self.extracts)
+                return self._finish("done", action.summary, step)
             if action.kind == "handoff":
                 if self.headless or self.pause is None:
-                    return BrowseResult(
-                        f"Handoff required: {action.reason}", step, "handoff", self.extracts
-                    )
+                    return self._finish("handoff", f"Handoff required: {action.reason}", step)
                 self.pause(
                     f"Handoff: {action.reason}\nTake over in the browser window, then return here."
                 )
@@ -284,7 +292,7 @@ class BrowserAgent:
                 result = self.session.perform(action, confirm=self.confirm)
             except SensitiveFieldError as exc:
                 if self.headless or self.pause is None:
-                    return BrowseResult(str(exc), step, "handoff", self.extracts)
+                    return self._finish("handoff", str(exc), step)
                 self.pause(
                     f"{exc}\nType the secret yourself in the browser, then return here."
                 )
@@ -292,7 +300,7 @@ class BrowserAgent:
                 continue
             except (BrowserError, PolicyError) as exc:
                 self._log("error", step=step, detail=str(exc))
-                return BrowseResult(f"Action failed: {exc}", step, "error", self.extracts)
+                return self._finish("error", f"Action failed: {exc}", step)
 
             self._log(
                 "result",
@@ -304,13 +312,12 @@ class BrowserAgent:
             if result.get("extract"):
                 self.extracts.append(str(result["extract"]))
             if result.get("cancelled"):
-                return BrowseResult("Action cancelled by the user.", step, "cancelled", self.extracts)
+                return self._finish("cancelled", "Action cancelled by the user.", step)
             history.append(f"{step}. {action.kind}: {result.get('detail', 'ok')}")
 
         self._log("limit", steps=step)
-        return BrowseResult(
+        return self._finish(
+            "max-steps",
             f"Reached the {self.max_steps}-step limit before finishing.",
             step,
-            "max-steps",
-            self.extracts,
         )

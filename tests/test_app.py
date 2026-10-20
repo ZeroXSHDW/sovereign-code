@@ -124,3 +124,14 @@ async def test_backup_command_delegates(monkeypatch):
         await app.handle_command("/backup")
         await pilot.pause()
     assert calls == [("backup",)]
+
+
+async def test_config_coercion_helpers():
+    from sovereign_code.cli import _coerce_setting
+
+    assert _coerce_setting("true", False) is True
+    assert _coerce_setting("5", 0) == 5
+    assert _coerce_setting("2.5", 0.0) == 2.5
+    assert _coerce_setting("hello", "") == "hello"
+    assert _coerce_setting("", None) is None
+    assert _coerce_setting("x", None) == "x"

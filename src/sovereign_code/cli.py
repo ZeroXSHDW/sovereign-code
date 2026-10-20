@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import asdict, fields as dc_fields
 import html
 import json
 import os
@@ -48,11 +49,17 @@ from .search import (
     embed,
     index_path_for,
 )
+from .stats import collect_stats, human_size
 from .summarize import SourceError, read_text_source, summarize_text
 from .models import build_views, sort_views
 from .ollama import OllamaClient
 from .router import Task, choose, mode_label
-from .sessions import prune_sessions, scan_sessions, select_prunable
+from .sessions import (
+    prune_sessions,
+    scan_sessions,
+    search_sessions,
+    select_prunable,
+)
 from .status import Snapshot, collect
 from .system import command_exists, login_agent_installed, qwen_config_path, qwen_memory_path
 from .verify import CORE_ALIASES, EXPECTED_ALIASES, probe_aliases
@@ -256,13 +263,92 @@ def _age(seconds: float) -> str:
     return f"{int(seconds // 86400)}d"
 
 
+def _coerce_setting(value: str, current: object) -> object:
+    if current is None:
+        return value if value != "" else None
+    if isinstance(current, bool):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(current, int):
+        return int(value)
+    if isinstance(current, float):
+        return float(value)
+    return value
+
+
+def _config(settings: Settings, get_key: str | None, set_value: str | None) -> int:
+    names = [field.name for field in dc_fields(settings)]
+    if set_value is not None:
+        key, separator, value = set_value.partition("=")
+        key = key.strip()
+        if not separator or key not in names:
+            console.print("[red]Usage:[/] sovereign config --set KEY=VALUE")
+            console.print(f"[dim]Keys: {', '.join(names)}[/]")
+            return 1
+        try:
+            coerced = _coerce_setting(value.strip(), getattr(settings, key))
+        except (ValueError, TypeError):
+            console.print(f"[red]Could not set[/] {key} = {value!r}")
+            return 1
+        setattr(settings, key, coerced)
+        settings.save()
+        console.print(f"[green]Set[/] {key} = {coerced!r}")
+        return 0
+    if get_key is not None:
+        key = get_key.strip()
+        if key not in names:
+            console.print(f"[red]Unknown key[/] {key}")
+            return 1
+        console.print(f"{key} = {getattr(settings, key)!r}")
+        return 0
+    table = Table(title="Sovereign config", header_style="bold #b794f4")
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+    for name in names:
+        table.add_row(name, repr(getattr(settings, name)))
+    console.print(table)
+    console.print("[dim]Edit a value: sovereign config --set KEY=VALUE[/]")
+    return 0
+
+
+def _stats(settings: Settings) -> int:
+    stats = collect_stats()
+    table = Table(title="Local AI stack · disk usage", header_style="bold #b794f4")
+    table.add_column("Component", style="bold")
+    table.add_column("Size", justify="right")
+    total = 0
+    for name, info in stats.items():
+        table.add_row(name, str(info["human"]))
+        total += int(info["bytes"])
+    console.print(table)
+    console.print(f"[bold]Total[/] {human_size(total)}")
+    console.print(
+        "[dim]Generated dirs (legacy archive, browser profile, search index) can be "
+        "removed manually if unneeded.[/]"
+    )
+    return 0
+
+
 def _sessions(
     days: float = 30,
     keep: int = 50,
     prune: bool = False,
     dry_run: bool = False,
     limit: int = 20,
+    search: str | None = None,
 ) -> int:
+    if search:
+        matches = search_sessions(search)
+        if not matches:
+            console.print(f"[dim]No chats mention '{search}'.[/]")
+            return 0
+        table = Table(title=f"Chat search · {search}", header_style="bold #b794f4")
+        table.add_column("Session", style="bold")
+        table.add_column("Role")
+        table.add_column("Snippet", overflow="fold")
+        for match in matches:
+            table.add_row(str(match["path"]), str(match["role"]), str(match["snippet"]))
+        console.print(table)
+        return 0
     infos = scan_sessions()
     if not infos:
         console.print("[dim]No chat sessions stored yet.[/]")
@@ -424,6 +510,9 @@ def _browse(args, settings: Settings) -> int:
             confirm=confirm,
             pause=pause,
             audit=audit,
+            screenshots_dir=(
+                LOCAL_AI_ROOT / "data" / "browser" / "screenshots" if args.screenshots else None
+            ),
         )
         result = agent.run(args.task)
     except (BrowserError, PolicyError) as exc:
@@ -1064,6 +1153,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     browse.add_argument("--yes", action="store_true", help="skip destructive-action confirmations")
     browse.add_argument("--dry-run", action="store_true", help="show the first planned action only")
+    browse.add_argument(
+        "--screenshots", action="store_true", help="save a PNG at each terminal state"
+    )
 
     bench = sub.add_parser("bench", help="measure generation speed for chosen aliases")
     bench.add_argument("--models", default=None, help="comma-separated aliases")
@@ -1102,6 +1194,13 @@ def build_parser() -> argparse.ArgumentParser:
     sessions.add_argument("--keep", type=int, default=50, help="always keep the newest N")
     sessions.add_argument("--dry-run", action="store_true", help="show what --prune would delete")
     sessions.add_argument("--limit", type=int, default=20, help="rows to list")
+    sessions.add_argument("--search", default=None, metavar="TEXT", help="search chat history")
+
+    config = sub.add_parser("config", help="view or edit sovereign config")
+    config.add_argument("--set", dest="set_value", default=None, metavar="KEY=VALUE")
+    config.add_argument("--get", dest="get_key", default=None, metavar="KEY")
+
+    sub.add_parser("stats", help="show disk usage across the local AI stack")
 
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
     launch.add_argument("client", choices=("qwen", "codex", "claude"))
@@ -1212,7 +1311,12 @@ def main(argv: list[str] | None = None) -> int:
             prune=args.prune,
             dry_run=args.dry_run,
             limit=args.limit,
+            search=args.search,
         )
+    if command == "config":
+        return _config(settings, get_key=args.get_key, set_value=args.set_value)
+    if command == "stats":
+        return _stats(settings)
     if command == "pull-recommended":
         return _pull_recommended(settings)
     if command == "install-login":

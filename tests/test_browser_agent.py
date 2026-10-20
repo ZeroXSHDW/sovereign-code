@@ -140,3 +140,19 @@ def test_step_limit_is_reported() -> None:
     assert result.stopped == "max-steps"
     assert result.steps == 2
     assert len(session.actions) == 2
+
+
+def test_screenshots_captured_on_done(tmp_path) -> None:
+    class ShotSession(FakeSession):
+        def screenshot(self, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"png")
+            return dest
+
+    session = ShotSession([OK_OBSERVATION])
+    planner = FakePlanner(['{"action":"done","summary":"ok"}'])
+    agent = _agent(session, planner, screenshots_dir=tmp_path)
+    result = agent.run("summarize")
+    assert result.stopped == "done"
+    assert len(agent.screenshots) == 1
+    assert agent.screenshots[0].endswith(".png")

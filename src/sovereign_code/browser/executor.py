@@ -313,6 +313,16 @@ class BrowserSession:
 
         raise BrowserError(f"unsupported action {action.kind}")
 
+    def screenshot(self, dest: Path) -> Path | None:
+        if self.page is None:
+            return None
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            self.page.screenshot(path=str(dest))
+            return dest
+        except Exception:
+            return None
+
     def close(self) -> None:
         if self.context is not None:
             try:

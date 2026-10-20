@@ -70,6 +70,27 @@ def recent_sessions(limit: int = 10) -> list[Path]:
     return files[:limit]
 
 
+def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
+    """Return message records whose content matches the query (case-insensitive)."""
+    needle = query.lower()
+    matches: list[dict] = []
+    for info in scan_sessions(directory):
+        for record in read_session(info.path):
+            if record.get("type") != "message":
+                continue
+            content = str(record.get("content") or "")
+            if needle in content.lower():
+                matches.append(
+                    {
+                        "path": info.path.name,
+                        "role": record.get("role"),
+                        "ts": record.get("ts", ""),
+                        "snippet": content[:240],
+                    }
+                )
+    return matches
+
+
 def read_session(path: Path) -> list[dict]:
     records: list[dict] = []
     try:

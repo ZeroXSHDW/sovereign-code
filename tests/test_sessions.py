@@ -60,3 +60,21 @@ def test_prune_sessions_unlinks_files(tmp_path: Path) -> None:
     assert removed == 2
     assert not first.exists()
     assert not second.exists()
+
+
+def test_search_sessions(tmp_path: Path) -> None:
+    from sovereign_code.sessions import search_sessions
+
+    path = tmp_path / "a.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "model": "m"})
+        + "\n"
+        + json.dumps({"type": "message", "role": "user", "content": "find the gateway restart"})
+        + "\n",
+        encoding="utf-8",
+    )
+    matches = search_sessions("gateway", directory=tmp_path)
+    assert len(matches) == 1
+    assert matches[0]["role"] == "user"
+    assert "gateway restart" in matches[0]["snippet"]
+    assert search_sessions("nothing", directory=tmp_path) == []

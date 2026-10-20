@@ -20,7 +20,7 @@ def test_codex_profile_targets_loopback(home):
     assert path == home / "local-ai" / "config" / "codex" / "local.config.toml"
     assert 'model = "local-code"' in text
     assert 'base_url = "http://127.0.0.1:4000/v1"' in text
-    assert "model_context_window = 20480" in text
+    assert "model_context_window = 32768" in text
     assert "api.openai.com" not in text
 
 

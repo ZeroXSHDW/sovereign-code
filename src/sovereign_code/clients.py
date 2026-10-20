@@ -56,7 +56,7 @@ CODEX_PROFILE = """\
 # Lives in ~/Documents/local-ai/config/codex (CODEX_HOME for local launches).
 model = "local-code"
 model_provider = "sovereign-local"
-model_context_window = 20480
+model_context_window = 32768
 
 [model_providers.sovereign-local]
 name = "Sovereign local gateway"

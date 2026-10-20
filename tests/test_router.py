@@ -25,7 +25,7 @@ def views(*names, loaded=None):
 def test_code_prefers_14b_when_present():
     selection = choose(Task.CODE, views("qwen2.5-coder:14b", "qwen3.5:4b"), free_gb=20)
     assert selection.tag == "qwen2.5-coder:14b"
-    assert selection.context == 20480
+    assert selection.context == 32768
 
 
 def test_code_falls_back_to_7b():
@@ -37,7 +37,7 @@ def test_context_shrinks_under_pressure():
     all_views = views("qwen2.5-coder:14b")
     roomy = choose(Task.CODE, all_views, free_gb=30)
     tight = choose(Task.CODE, all_views, free_gb=12)
-    assert roomy.context == 20480
+    assert roomy.context == 32768
     assert tight.context <= 16384
     assert estimated_total_gb(all_views["qwen2.5-coder:14b"], tight.context) <= 12
 

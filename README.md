@@ -73,7 +73,7 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 
 | Model | Role | Notes |
 | --- | --- | --- |
-| `qwen2.5-coder:14b` | best coder | 9.0 GB; preferred for code; verified ceiling **20,480 tokens** |
+| `qwen2.5-coder:14b` | best coder | 9.0 GB; preferred for code; verified at **32k** with q8 KV |
 | `qwen2.5-coder:7b` | coder fallback | 4.7 GB; 32k works but tool calls through agent clients are unreliable |
 | `qwen3.5:4b` | chat / vision / tools | 4.0 GB; 65k with `think:false` |
 | `gemma4:12b` | agent + deep reasoning / vision | 7.7 GB; 32k with `think:false`; verified tool calls |
@@ -82,9 +82,10 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 The router picks the best **installed** model for the task, then chooses the
 largest context that fits in ~85% of free memory. Agentic coding prefers a
 model that is verified to call tools (`gemma4:12b`, then `qwen3.5:4b`) rather
-than a code model that only chats. The 14B coder is capped at 20,480 tokens
-because 24,576 and 32,768 return empty output on this machine; the context
-choices are `20480, 16384, 8192, 4096, 2048`. `sovereign free` evicts resident
+than a code model that only chats. The 14B coder reaches 32,768 tokens because
+Ollama runs with flash attention and a q8_0 KV cache; without those settings its
+verified ceiling is 20,480. The context choices are
+`32768, 24576, 20480, 16384, 8192, 4096, 2048`. `sovereign free` evicts resident
 models before a turn so a 4B model is not squeezed into a 2k context by a
 resident 12B. If the 14B coder is missing it falls back to 7B and says so;
 `sovereign pull-recommended` installs it.
@@ -116,6 +117,7 @@ sovereign                  # live dashboard
 sovereign status           # one-shot status
 sovereign models           # installed + recommended, with roles
 sovereign doctor           # checks and concrete fixes
+sovereign verify           # tiny completion per core alias (--all for nine)
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]

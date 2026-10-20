@@ -39,6 +39,7 @@ from .ollama import OllamaClient
 from .router import Task, choose, mode_label
 from .status import Snapshot, collect
 from .system import command_exists, login_agent_installed, qwen_config_path, qwen_memory_path
+from .verify import CORE_ALIASES, EXPECTED_ALIASES, probe_aliases
 
 LABEL = "com.user.sovereign-code"
 console = Console()
@@ -127,6 +128,39 @@ def _models(snap: Snapshot) -> None:
         )
     console.print(table)
     console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
+
+
+def _verify(snap: Snapshot, all_aliases: bool = False, timeout: float = 120.0) -> int:
+    if not snap.gateway.up:
+        console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway")
+        return 1
+    aliases = EXPECTED_ALIASES if all_aliases else CORE_ALIASES
+    available = set(snap.gateway.models)
+    missing = [alias for alias in aliases if alias not in available]
+    if missing:
+        console.print(f"[red]Missing aliases in gateway:[/] {', '.join(missing)}")
+
+    console.print(
+        f"[dim]Sending a tiny completion through {len(aliases)} aliases "
+        f"(timeout {timeout:.0f}s each)...[/]"
+    )
+    results = probe_aliases(snap.settings.gateway_url, aliases, timeout)
+
+    table = Table(box=None, padding=(0, 1))
+    table.add_column("Alias", style="bold")
+    table.add_column("Result")
+    table.add_column("Time", justify="right")
+    table.add_column("Reply", style="dim")
+    for result in results:
+        mark = "[green]PASS[/]" if result.ok else "[red]FAIL[/]"
+        table.add_row(result.alias, mark, f"{result.seconds:.1f}s", result.detail)
+    console.print(table)
+
+    passed = sum(1 for result in results if result.ok)
+    failed = len(results) - passed + len(missing)
+    style = "green" if failed == 0 else "red"
+    console.print(f"[{style}]{passed}/{len(aliases)} aliases replied[/]")
+    return 0 if failed == 0 else 1
 
 
 def _doctor(snap: Snapshot) -> int:
@@ -506,6 +540,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="one-shot system status")
     sub.add_parser("models", help="list installed and recommended models")
     sub.add_parser("doctor", help="check the local stack and print fixes")
+    verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
+    verify.add_argument("--all", action="store_true", help="test all nine aliases")
+    verify.add_argument(
+        "--timeout", type=float, default=120.0, help="per-alias timeout in seconds"
+    )
     sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
@@ -567,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "doctor":
         return _doctor(_snapshot(settings))
+    if command == "verify":
+        return _verify(_snapshot(settings), all_aliases=args.all, timeout=args.timeout)
     if command == "gateway":
         return _gateway(_snapshot(settings))
     if command == "env":

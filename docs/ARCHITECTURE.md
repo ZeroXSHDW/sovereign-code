@@ -41,8 +41,10 @@ where total_gb ≤ free_gb × 0.85
 
 This is deliberately conservative: the goal is to avoid paging the KV cache,
 not to squeeze out the last token. Tested on 24 GB unified memory: the 14B
-coder is stable at 20,480 tokens and fails (empty output) at 24,576 or 32,768,
-so its catalog ceiling is 20,480. Gemma 12B reaches 32k only with
+coder reaches 32,768 tokens with `OLLAMA_FLASH_ATTENTION=1` and
+`OLLAMA_KV_CACHE_TYPE=q8_0` (12 GB resident), and returns empty output at 24k+
+without them. Those variables are set by `com.user.ollama.env` before Ollama
+launches, so the catalog ceiling is 32,768. Gemma 12B reaches 32k only with
 `think:false`; under pressure the router drops to 16k or 8k.
 
 ## Local clients

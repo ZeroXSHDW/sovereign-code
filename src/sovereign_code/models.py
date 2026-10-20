@@ -36,11 +36,11 @@ CATALOG: dict[str, ModelSpec] = {
         role=CODING,
         params_b=14.7,
         size_gb=9.0,
-        # 24k/32k allocations return empty output on a 24 GB Mac in practice.
-        # 20k is the largest verified context for this model at full GPU offload.
-        max_context=20480,
+        # 32k verified with OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0
+        # (set by com.user.ollama.env). Without them the ceiling is 20,480.
+        max_context=32768,
         strengths=("code", "refactor", "tools"),
-        summary="Best coding model that fits 24 GB; verified at 20k context.",
+        summary="Best coding model that fits 24 GB; verified at 32k with q8 KV.",
         recommended=True,
     ),
     "qwen2.5-coder:7b": ModelSpec(

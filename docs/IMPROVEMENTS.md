@@ -50,8 +50,9 @@ Sovereign Code keeps the idea and changes the foundation.
   files locally. Codex and Claude Code are wired to the loopback gateway for
   chat, but their streamed tool calls do not execute reliably through LiteLLM +
   Ollama, so the UI labels them chat-only instead of claiming parity.
-- **Verified context ceilings.** The 14B coder is capped at 20,480 tokens
-  (24k+ returns empty output); agent models run with `think:false` so reasoning
+- **Verified context ceilings.** The 14B coder runs at 32,768 tokens with
+  flash attention and a q8_0 KV cache (12 GB resident); without those settings
+  24k+ returns empty output. Agent models run with `think:false` so reasoning
   tokens cannot consume the whole reply budget.
 - **Opt-in YOLO.** `sovereign code` uses Qwen's default approval mode unless
   `--yolo` is passed.
@@ -71,9 +72,13 @@ Sovereign Code keeps the idea and changes the foundation.
   venvs, and chats are ignored.
 - **Backups are intentional.** Time Machine excludes the 34 GB model store,
   legacy archive, and gateway venv, while keeping configs and sessions eligible.
+- **The stack can prove itself.** `sovereign verify` sends one short completion
+  through the four core aliases (or all nine with `--all`) and fails on HTTP
+  errors, malformed bodies, or empty replies. The thinking alias gets a 512-token
+  budget because hidden reasoning would otherwise consume all 8 tokens.
 
 ## Testing
 
-- 26 pytest tests cover model merging, router context behaviour, config,
-  sessions, memory, client launch planning, and headless TUI boot.
+- 33 pytest tests cover model merging, router context behaviour, config,
+  sessions, memory, gateway probes, client launch planning, and headless TUI boot.
 - Textual `run_test` exercises the real widget tree without a network.

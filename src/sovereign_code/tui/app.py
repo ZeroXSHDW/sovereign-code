@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..router import Task, choose, mode_label, system_prompt
 from ..sessions import SessionWriter
 from ..status import Snapshot, collect
 from ..system import Memory
+from ..verify import CORE_ALIASES, AliasResult, probe_aliases
 
 HELP_TEXT = """\
 **Commands**
@@ -32,12 +34,13 @@ HELP_TEXT = """\
 - `/open [path]`, `/qwen [path]` — Qwen Code local agent
 - `/codex [path]`, `/claude [path]` — local chat clients
 - `/clients` — show installed clients and capabilities
+- `/verify` — send a tiny test through the four core gateway aliases
 - `/free` — unload other models and free memory
 - `/clear` — new conversation
 - `/help` — this help
 - `/quit` — exit
 
-**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `Ctrl+N` new chat · `Ctrl+Q` quit
+**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `F7` verify gateway · `Ctrl+N` new chat · `Ctrl+Q` quit
 """
 
 
@@ -64,6 +67,7 @@ class SovereignApp(App[None]):
         Binding("f4", "launch_codex", "Codex"),
         Binding("f5", "refresh", "Refresh"),
         Binding("f6", "launch_claude", "Claude"),
+        Binding("f7", "verify", "Verify"),
         Binding("ctrl+n", "clear_chat", "New"),
     ]
 
@@ -85,6 +89,8 @@ class SovereignApp(App[None]):
         self._streaming = False
         self._assistant: Markdown | None = None
         self._refresh_busy = False
+        self._verify_busy = False
+        self.last_verify: list[AliasResult] = []
         self._model_signature: tuple = ()
         self.ollama = OllamaClient(self.settings.ollama_url)
 
@@ -411,6 +417,8 @@ class SovereignApp(App[None]):
             self._render_status()
             self._render_system()
             await self.add_message("system", "Status refreshed.")
+        elif command == "/verify":
+            await self.action_verify()
         elif command == "/free":
             if self.snapshot:
                 for view in self.snapshot.loaded:
@@ -440,6 +448,37 @@ class SovereignApp(App[None]):
 
     async def action_clear_chat(self) -> None:
         await self.clear_chat()
+
+    async def action_verify(self) -> None:
+        if self._verify_busy:
+            return
+        if not self.snapshot or not self.snapshot.gateway.up:
+            await self.add_message(
+                "system",
+                "Gateway is offline. Restart it with `sovereign gateway --restart`.",
+            )
+            return
+        self._verify_busy = True
+        self.query_one("#statusbar", Static).update("verifying gateway aliases…")
+        try:
+            results = await asyncio.to_thread(
+                probe_aliases, self.settings.gateway_url, CORE_ALIASES, 60.0
+            )
+            self.last_verify = results
+        except Exception as exc:  # noqa: BLE001 - surfaced in the chat pane
+            await self.add_message("system", f"Verify failed: {exc}")
+            return
+        finally:
+            self._verify_busy = False
+        passed = sum(1 for result in results if result.ok)
+        lines = [f"**Gateway verify** — {passed}/{len(results)} passed"]
+        for result in results:
+            mark = "PASS" if result.ok else "FAIL"
+            lines.append(
+                f"- `{result.alias}` · **{mark}** · {result.seconds:.1f}s · {result.detail}"
+            )
+        await self.add_message("system", "\n".join(lines))
+        await self.refresh_snapshot()
 
     async def action_cycle_model(self) -> None:
         if not self.snapshot:

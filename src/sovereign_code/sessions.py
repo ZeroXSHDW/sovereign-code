@@ -79,3 +79,69 @@ def read_session(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         return records
     return records
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    path: Path
+    model: str
+    messages: int
+    size_kb: float
+    modified: float
+
+
+def scan_sessions(directory: Path | None = None) -> list[SessionInfo]:
+    """Summarise every session file, newest first."""
+    root = directory or SESSIONS_DIR
+    infos: list[SessionInfo] = []
+    try:
+        paths = list(root.glob("*.jsonl"))
+    except OSError:
+        return infos
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        model = "unknown"
+        messages = 0
+        for record in read_session(path):
+            if record.get("type") == "session":
+                model = str(record.get("model") or model)
+            elif record.get("type") == "message":
+                messages += 1
+        infos.append(
+            SessionInfo(
+                path=path,
+                model=model,
+                messages=messages,
+                size_kb=round(stat.st_size / 1024, 1),
+                modified=stat.st_mtime,
+            )
+        )
+    return sorted(infos, key=lambda info: info.modified, reverse=True)
+
+
+def select_prunable(
+    sessions: list[SessionInfo],
+    days: float = 30,
+    keep: int = 50,
+    now: float | None = None,
+) -> list[SessionInfo]:
+    """Keep the newest `keep` files; prune the rest once older than `days`."""
+    if days <= 0:
+        return []
+    cutoff = (now if now is not None else datetime.now().timestamp()) - days * 86400
+    ordered = sorted(sessions, key=lambda info: info.modified, reverse=True)
+    return [info for info in ordered[max(0, int(keep)) :] if info.modified < cutoff]
+
+
+def prune_sessions(sessions: list[SessionInfo]) -> int:
+    removed = 0
+    for info in sessions:
+        try:
+            info.path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed

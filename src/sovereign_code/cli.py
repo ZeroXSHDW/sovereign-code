@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from rich.console import Console
@@ -34,9 +35,11 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
+from .logs import TARGETS, log_path, tail_lines
 from .models import build_views, sort_views
 from .ollama import OllamaClient
 from .router import Task, choose, mode_label
+from .sessions import prune_sessions, scan_sessions, select_prunable
 from .status import Snapshot, collect
 from .system import command_exists, login_agent_installed, qwen_config_path, qwen_memory_path
 from .verify import CORE_ALIASES, EXPECTED_ALIASES, probe_aliases
@@ -161,6 +164,92 @@ def _verify(snap: Snapshot, all_aliases: bool = False, timeout: float = 120.0) -
     style = "green" if failed == 0 else "red"
     console.print(f"[{style}]{passed}/{len(aliases)} aliases replied[/]")
     return 0 if failed == 0 else 1
+
+
+def _logs(target: str, lines: int = 40, follow: bool = False) -> int:
+    path = log_path(target)
+    if not path.is_file():
+        console.print(f"[yellow]No {target} log at[/] {path}")
+        if target == "gateway":
+            console.print("[dim]Start it with: sovereign gateway --restart[/]")
+        elif target == "dashboard":
+            console.print("[dim]Install the login terminal: sovereign install-login[/]")
+        return 1
+    if follow:
+        console.print(f"[dim]Following {path} — Ctrl+C to stop[/]")
+        try:
+            subprocess.call(["/usr/bin/tail", "-n", str(max(1, lines)), "-F", str(path)])
+        except KeyboardInterrupt:
+            pass
+        return 0
+    content = tail_lines(path, lines)
+    console.print(f"[dim]{path} · last {len(content)} lines[/]")
+    if content:
+        sys.stdout.write("\n".join(content) + "\n")
+    return 0
+
+
+def _age(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _sessions(
+    days: float = 30,
+    keep: int = 50,
+    prune: bool = False,
+    dry_run: bool = False,
+    limit: int = 20,
+) -> int:
+    infos = scan_sessions()
+    if not infos:
+        console.print("[dim]No chat sessions stored yet.[/]")
+        return 0
+
+    if prune:
+        victims = select_prunable(infos, days=days, keep=keep)
+        if not victims:
+            console.print(
+                f"[green]Nothing to prune[/] · {len(infos)} sessions, "
+                f"keep newest {keep}, retention {days:g} days"
+            )
+            return 0
+        if dry_run:
+            for info in victims:
+                console.print(f"[yellow]would delete[/] {info.path.name}")
+            console.print(f"[dim]{len(victims)} of {len(infos)} sessions qualify[/]")
+            return 0
+        removed = prune_sessions(victims)
+        console.print(
+            f"[green]Removed {removed} sessions[/] · kept {len(infos) - removed}"
+        )
+        return 0
+
+    table = Table(title="Chat sessions", header_style="bold #b794f4")
+    table.add_column("Session", style="bold")
+    table.add_column("Model")
+    table.add_column("Messages", justify="right")
+    table.add_column("Size", justify="right")
+    table.add_column("Age", justify="right")
+    now = time.time()
+    for info in infos[: max(1, limit)]:
+        table.add_row(
+            info.path.name,
+            info.model,
+            str(info.messages),
+            f"{info.size_kb:.1f} KB",
+            _age(now - info.modified),
+        )
+    console.print(table)
+    total_kb = sum(info.size_kb for info in infos)
+    console.print(
+        f"[dim]{len(infos)} sessions · {total_kb:.1f} KB · "
+        f"prune with: sovereign sessions --prune[/]"
+    )
+    return 0
 
 
 def _doctor(snap: Snapshot) -> int:
@@ -402,9 +491,48 @@ def _gateway(snap: Snapshot) -> int:
     )
     table.add_row("", "Config", str(gateway_dir / "config.yaml"))
     table.add_row("", "Log", str(gateway_dir / "gateway.log"))
-    table.add_row("", "Restart", "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway")
+    table.add_row("", "Restart", "sovereign gateway --restart")
     console.print(table)
     return 0 if snap.gateway.up else 1
+
+
+def _gateway_restart(settings: Settings) -> int:
+    import httpx
+
+    base = settings.gateway_url.rstrip("/")
+
+    def up() -> bool:
+        try:
+            return httpx.get(f"{base}/health/liveliness", timeout=1.5).status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    console.print("[dim]Stopping supervisor and LiteLLM…[/]")
+    for pattern in ("run_gateway.sh", "gateway/venv/bin/litellm"):
+        subprocess.run(["pkill", "-f", pattern], check=False)
+    deadline = time.monotonic() + 15
+    while up() and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if up():
+        console.print("[red]Gateway is still serving; refusing to claim a restart.[/]")
+        console.print("[dim]Inspect: sovereign logs gateway -n 80[/]")
+        return 1
+
+    console.print("[dim]Asking the login agent to start it again…[/]")
+    subprocess.run(
+        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.user.ailocalgateway"],
+        check=False,
+    )
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if up():
+            time.sleep(0.5)
+            console.print("[green]Gateway restarted.[/]")
+            return _gateway(_snapshot(settings))
+        time.sleep(1)
+
+    console.print("[red]Gateway did not come back.[/] Check: sovereign logs gateway -n 80")
+    return 1
 
 
 def _clients(snap: Snapshot) -> None:
@@ -545,11 +673,26 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--timeout", type=float, default=120.0, help="per-alias timeout in seconds"
     )
-    sub.add_parser("gateway", help="show gateway status, paths, and restart command")
+    gateway = sub.add_parser("gateway", help="show gateway status, paths, and restart command")
+    gateway.add_argument(
+        "--restart", action="store_true", help="restart the supervisor and wait for health"
+    )
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
+
+    logs = sub.add_parser("logs", help="show the last lines of a local log")
+    logs.add_argument("target", nargs="?", default="gateway", choices=TARGETS)
+    logs.add_argument("-n", "--lines", type=int, default=40)
+    logs.add_argument("-f", "--follow", action="store_true", help="keep following (Ctrl+C to stop)")
+
+    sessions = sub.add_parser("sessions", help="list or prune stored chat sessions")
+    sessions.add_argument("--prune", action="store_true", help="delete old sessions")
+    sessions.add_argument("--days", type=float, default=30.0, help="retention in days (default 30)")
+    sessions.add_argument("--keep", type=int, default=50, help="always keep the newest N")
+    sessions.add_argument("--dry-run", action="store_true", help="show what --prune would delete")
+    sessions.add_argument("--limit", type=int, default=20, help="rows to list")
 
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
     launch.add_argument("client", choices=("qwen", "codex", "claude"))
@@ -609,6 +752,8 @@ def main(argv: list[str] | None = None) -> int:
     if command == "verify":
         return _verify(_snapshot(settings), all_aliases=args.all, timeout=args.timeout)
     if command == "gateway":
+        if args.restart:
+            return _gateway_restart(settings)
         return _gateway(_snapshot(settings))
     if command == "env":
         _env(settings)
@@ -622,6 +767,16 @@ def main(argv: list[str] | None = None) -> int:
         return _launch(args.client, args.path, yolo=args.yolo)
     if command == "free":
         return _free(settings)
+    if command == "logs":
+        return _logs(args.target, lines=args.lines, follow=args.follow)
+    if command == "sessions":
+        return _sessions(
+            days=args.days,
+            keep=args.keep,
+            prune=args.prune,
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
     if command == "pull-recommended":
         return _pull_recommended(settings)
     if command == "install-login":

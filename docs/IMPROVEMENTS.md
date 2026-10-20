@@ -72,6 +72,15 @@ Sovereign Code keeps the idea and changes the foundation.
   venvs, and chats are ignored.
 - **Backups are intentional.** Time Machine excludes the 34 GB model store,
   legacy archive, and gateway venv, while keeping configs and sessions eligible.
+- **Both services self-heal.** Every five minutes the watchdog checks Ollama as
+  well as the gateway. If Ollama is gone it kickstarts `com.user.ollama.env`,
+  which reapplies flash attention and q8 KV before reopening the app. The
+  supervisor now takes LiteLLM down on TERM, so a restart cannot orphan the
+  port or leave an unsupervised process behind.
+- **Operations are one command away.** `sovereign logs` tails the gateway,
+  watchdog, or dashboard log; `sovereign sessions` lists chats and prunes by
+  age while always keeping the newest N; `sovereign gateway --restart` performs
+  a real stop/start and waits for health.
 - **The stack can prove itself.** `sovereign verify` sends one short completion
   through the four core aliases (or all nine with `--all`) and fails on HTTP
   errors, malformed bodies, or empty replies. The thinking alias gets a 512-token
@@ -79,6 +88,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 33 pytest tests cover model merging, router context behaviour, config,
-  sessions, memory, gateway probes, client launch planning, and headless TUI boot.
+- 40 pytest tests cover model merging, router context behaviour, config,
+  sessions/retention, logs, memory, gateway probes, client launch planning, and
+  headless TUI boot.
 - Textual `run_test` exercises the real widget tree without a network.

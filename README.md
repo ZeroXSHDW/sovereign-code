@@ -123,6 +123,9 @@ sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
 sovereign clients          # installed clients and verified capabilities
 sovereign gateway          # gateway status, paths, and restart command
+sovereign gateway --restart # stop supervisor + LiteLLM, start, wait for health
+sovereign logs [gateway|watchdog|dashboard] [-n 40] [-f]
+sovereign sessions         # list stored chats; --prune --days 30 --keep 50
 sovereign install-clients  # Codex profile + *-local wrappers
 sovereign chat --model qwen3.5:4b
 sovereign env              # exports for OpenAI-compatible local clients

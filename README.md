@@ -6,6 +6,17 @@
 
 ![Sovereign Code dashboard](docs/assets/dashboard.png)
 
+## Architecture
+
+![Sovereign Code architecture](docs/assets/architecture.png)
+
+The terminal configuration as a 3D stack:
+
+![Sovereign Code 3D stack](docs/assets/architecture-3d.png)
+
+(`docs/assets/social-preview.png` is the 1200×630 image to set as the repository's
+social preview card.)
+
 Sovereign Code replaces the Swift menu-bar approach of the earlier Local Bar
 projects with a portable Python/Textual system. At login, Terminal opens a live
 dashboard showing the local stack, the loaded model, free memory, the gateway,

@@ -1,0 +1,15 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+<rect width="1200" height="630" fill="#0f0f1a"/>
+<rect x="0" y="0" width="1200" height="6" fill="#b794f4"/>
+<text x="80" y="150" fill="#b794f4" font-size="64" font-family="sans-serif" font-weight="800">Sovereign Code</text>
+<text x="80" y="215" fill="#e8e8f0" font-size="30" font-family="sans-serif">Terminal-first, local-first AI coding console</text>
+<text x="80" y="255" fill="#8a8aa0" font-size="24" font-family="sans-serif">for Apple Silicon</text>
+<text x="80" y="380" fill="#7c6cf0" font-size="22" font-family="monospace">dashboard · models · gateway · pipeline · skills · browser</text>
+<rect x="80" y="430" width="180" height="46" rx="23" fill="#b794f4"/>
+<text x="170" y="459" text-anchor="middle" fill="#0f0f1a" font-size="20" font-family="sans-serif" font-weight="700">local-only</text>
+<rect x="290" y="430" width="150" height="46" rx="23" fill="none" stroke="#8a8aa0" stroke-width="2"/>
+<text x="365" y="459" text-anchor="middle" fill="#8a8aa0" font-size="20" font-family="sans-serif">offline</text>
+<rect x="470" y="430" width="180" height="46" rx="23" fill="none" stroke="#8a8aa0" stroke-width="2"/>
+<text x="560" y="459" text-anchor="middle" fill="#8a8aa0" font-size="20" font-family="sans-serif">no telemetry</text>
+<text x="80" y="590" fill="#8a8aa0" font-size="18" font-family="sans-serif">Python · Textual · Ollama · LiteLLM · Playwright</text>
+</svg>

@@ -10,14 +10,13 @@ import time
 from pathlib import Path
 
 from rich.text import Text
-from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Markdown, Static
 
-from ..config import Settings
 from ..clients import local_clients, plan_launch
+from ..config import Settings
 from ..memory import project_context
 from ..models import ModelView
 from ..ollama import OllamaClient
@@ -50,7 +49,8 @@ HELP_TEXT = """\
 - `/help` — this help
 - `/quit` — exit
 
-**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `F7` verify gateway · `F8` browse · `Ctrl+N` new chat · `Ctrl+Q` quit
+**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh
+· `F7` verify gateway · `F8` browse · `Ctrl+N` new chat · `Ctrl+Q` quit
 """
 
 
@@ -63,7 +63,10 @@ class ModelListItem(ListItem):
         label.append(f"  {view.size_gb:.1f}G", style="dim")
         if view.spec.role:
             label.append(f"  {view.spec.role}", style="dim italic")
-        super().__init__(Label(label), id="model-" + view.tag.replace(":", "-").replace("/", "-").replace(".", "-"))
+        super().__init__(
+            Label(label),
+            id="model-" + view.tag.replace(":", "-").replace("/", "-").replace(".", "-"),
+        )
 
 
 class SovereignApp(App[None]):
@@ -141,9 +144,7 @@ class SovereignApp(App[None]):
         days = self.settings.session_retention_days
         if days <= 0:
             return
-        victims = select_prunable(
-            scan_sessions(), days=days, keep=self.settings.session_keep
-        )
+        victims = select_prunable(scan_sessions(), days=days, keep=self.settings.session_keep)
         if victims:
             prune_sessions(victims)
 
@@ -192,10 +193,16 @@ class SovereignApp(App[None]):
             self.query_one("#statusbar", Static).update(text)
             return
         text.append("OLLAMA ", style="bold")
-        text.append("● online" if snap.ollama_up else "○ offline", style="green" if snap.ollama_up else "red")
+        text.append(
+            "● online" if snap.ollama_up else "○ offline",
+            style="green" if snap.ollama_up else "red",
+        )
         text.append(f" {snap.version}", style="dim")
         text.append("   GATEWAY ", style="bold")
-        text.append("● online" if snap.gateway.up else "○ offline", style="green" if snap.gateway.up else "yellow")
+        text.append(
+            "● online" if snap.gateway.up else "○ offline",
+            style="green" if snap.gateway.up else "yellow",
+        )
         text.append(f"   RAM {snap.memory.label}", style="dim")
         text.append(f"   MODE {mode_label(self.ai_task)}", style="bold cyan")
         current = self.selected_model or (snap.chat_selection.tag if snap.chat_selection else None)
@@ -241,9 +248,7 @@ class SovereignApp(App[None]):
         snap = self.snapshot
         if not snap:
             return
-        signature = tuple(
-            (v.tag, v.installed, v.loaded, v.context) for v in snap.sorted_models
-        )
+        signature = tuple((v.tag, v.installed, v.loaded, v.context) for v in snap.sorted_models)
         if signature == self._model_signature:
             return
         self._model_signature = signature
@@ -251,9 +256,7 @@ class SovereignApp(App[None]):
         await list_view.clear()
         for view in snap.sorted_models:
             await list_view.append(ModelListItem(view))
-        current = self.selected_model or (
-            snap.chat_selection.tag if snap.chat_selection else None
-        )
+        current = self.selected_model or (snap.chat_selection.tag if snap.chat_selection else None)
         if current:
             for index, view in enumerate(snap.sorted_models):
                 if view.tag == current:
@@ -400,9 +403,7 @@ class SovereignApp(App[None]):
         elif command == "/models":
             if not self.snapshot:
                 return
-            rows = "\n".join(
-                f"- `{v.tag}` — {v.status}" for v in self.snapshot.sorted_models
-            )
+            rows = "\n".join(f"- `{v.tag}` — {v.status}" for v in self.snapshot.sorted_models)
             await self.add_message("system", rows)
         elif command == "/model":
             if not self.snapshot or arg not in self.snapshot.views:
@@ -525,7 +526,7 @@ class SovereignApp(App[None]):
             results = await asyncio.to_thread(
                 search_query, self.settings.ollama_url, db, query, "nomic-embed-text", 5
             )
-        except Exception as exc:  # noqa: BLE001 - surfaced in the chat pane
+        except Exception as exc:
             await self.add_message("system", f"Search failed: {exc}")
             return
         if not results:
@@ -546,9 +547,7 @@ class SovereignApp(App[None]):
 
     async def _launch_browse(self, arg: str) -> None:
         if not arg.strip():
-            await self.add_message(
-                "system", "Usage: `/browse https://example.com what to find`"
-            )
+            await self.add_message("system", "Usage: `/browse https://example.com what to find`")
             return
         parts = arg.split(maxsplit=1)
         url = parts[0].strip()
@@ -582,7 +581,7 @@ class SovereignApp(App[None]):
                 probe_aliases, self.settings.gateway_url, CORE_ALIASES, 60.0
             )
             self.last_verify = results
-        except Exception as exc:  # noqa: BLE001 - surfaced in the chat pane
+        except Exception as exc:
             await self.add_message("system", f"Verify failed: {exc}")
             return
         finally:

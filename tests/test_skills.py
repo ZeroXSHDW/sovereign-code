@@ -13,9 +13,7 @@ def test_skills_list_read_and_render(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "code-review.md").write_text(
         "# Review code\nYou review:\n\n{{prompt}}\n", encoding="utf-8"
     )
-    (tmp_path / "explain.md").write_text(
-        "# Explain\nExplain:\n\n{{prompt}}\n", encoding="utf-8"
-    )
+    (tmp_path / "explain.md").write_text("# Explain\nExplain:\n\n{{prompt}}\n", encoding="utf-8")
 
     rows = list_skills()
     assert [name for name, _ in rows] == ["code-review", "explain"]

@@ -16,7 +16,10 @@ from sovereign_code.browser.actions import (
 
 
 def test_parse_navigate_and_clicks() -> None:
-    assert parse_action('{"action":"navigate","url":"https://example.com"}').url == "https://example.com"
+    assert (
+        parse_action('{"action":"navigate","url":"https://example.com"}').url
+        == "https://example.com"
+    )
     assert parse_action({"action": "click", "id": 4}) == Action("click", target=4)
     assert parse_action('```json\n{"action":"click","id":0}\n```').target == 0
 

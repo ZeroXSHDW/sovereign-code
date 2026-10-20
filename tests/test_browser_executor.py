@@ -35,7 +35,7 @@ CAPTCHA = """<!doctype html>
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         body = CAPTCHA if self.path == "/captcha" else FIXTURE
         data = body.encode("utf-8")
         self.send_response(200)

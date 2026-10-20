@@ -80,9 +80,7 @@ def test_done_is_terminal() -> None:
 
 def test_invalid_json_is_retried_once() -> None:
     session = FakeSession([OK_OBSERVATION])
-    planner = FakePlanner(
-        ["not json", '{"action":"done","summary":"recovered"}']
-    )
+    planner = FakePlanner(["not json", '{"action":"done","summary":"recovered"}'])
     result = _agent(session, planner).run("summarize")
     assert result.stopped == "done"
     assert planner.calls == 2

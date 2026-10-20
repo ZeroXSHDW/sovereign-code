@@ -22,7 +22,9 @@ async def check(url: str = "http://127.0.0.1:4000", timeout: float = 3.0) -> Gat
             if response.status_code == 200:
                 try:
                     payload = response.json()
-                    models = [str(item.get("id")) for item in payload.get("data", []) if item.get("id")]
+                    models = [
+                        str(item.get("id")) for item in payload.get("data", []) if item.get("id")
+                    ]
                 except ValueError:
                     models = []
                 return GatewayStatus(True, models, "OpenAI-compatible endpoint is up")

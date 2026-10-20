@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import SESSIONS_DIR, ensure_layout
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _slug(text: str) -> str:
@@ -28,7 +28,7 @@ class SessionWriter:
     messages: int = 0
 
     @classmethod
-    def create(cls, model: str, cwd: str | None = None) -> "SessionWriter":
+    def create(cls, model: str, cwd: str | None = None) -> SessionWriter:
         ensure_layout()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path = SESSIONS_DIR / f"{stamp}-{_slug(model)}.jsonl"

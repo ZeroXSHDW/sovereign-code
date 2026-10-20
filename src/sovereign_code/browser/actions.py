@@ -105,7 +105,11 @@ class BrowserPolicy:
         object.__setattr__(
             self,
             "allowed_domains",
-            tuple(domain.strip().lower().lstrip(".") for domain in self.allowed_domains if domain.strip()),
+            tuple(
+                domain.strip().lower().lstrip(".")
+                for domain in self.allowed_domains
+                if domain.strip()
+            ),
         )
 
 

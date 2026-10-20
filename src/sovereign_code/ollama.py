@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -39,7 +40,9 @@ class OllamaClient:
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
         if response.status_code >= 400:
-            raise OllamaError(f"Ollama {path} returned {response.status_code}: {response.text[:300]}")
+            raise OllamaError(
+                f"Ollama {path} returned {response.status_code}: {response.text[:300]}"
+            )
         try:
             return response.json()
         except ValueError as exc:

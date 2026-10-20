@@ -14,9 +14,7 @@ def _reply(content: str, status: int = 200) -> httpx.MockTransport:
         payload = json.loads(request.content)
         assert payload["max_tokens"] == 8
         assert payload["messages"][0]["content"]
-        return httpx.Response(
-            status, json={"choices": [{"message": {"content": content}}]}
-        )
+        return httpx.Response(status, json={"choices": [{"message": {"content": content}}]})
 
     return httpx.MockTransport(handler)
 

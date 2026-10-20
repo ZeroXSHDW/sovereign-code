@@ -6,10 +6,10 @@ import math
 import os
 import sqlite3
 from array import array
+from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterator
 
 import httpx
 
@@ -121,7 +121,7 @@ def unpack(blob: bytes) -> list[float]:
 
 
 def cosine(left: list[float], right: list[float]) -> float:
-    dot = sum(a * b for a, b in zip(left, right))
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
     norm_left = math.sqrt(sum(a * a for a in left))
     norm_right = math.sqrt(sum(b * b for b in right))
     if norm_left == 0 or norm_right == 0:
@@ -129,7 +129,9 @@ def cosine(left: list[float], right: list[float]) -> float:
     return dot / (norm_left * norm_right)
 
 
-def chunk_text(text: str, max_chars: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> list[tuple[int, str]]:
+def chunk_text(
+    text: str, max_chars: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP
+) -> list[tuple[int, str]]:
     """Split text into overlapping chunks tagged with their 1-based start line."""
     if not text.strip():
         return []
@@ -157,9 +159,7 @@ def iter_source_files(root: Path) -> Iterator[Path]:
     """Yield text source files, pruning ignored and hidden directories."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
-            name
-            for name in dirnames
-            if name not in IGNORED_DIRS and not name.startswith(".")
+            name for name in dirnames if name not in IGNORED_DIRS and not name.startswith(".")
         )
         for name in sorted(filenames):
             if name.startswith("."):
@@ -219,9 +219,7 @@ class IndexStore:
 
     def search(self, vector: list[float], top: int = 5) -> list[SearchResult]:
         results: list[SearchResult] = []
-        for path, line, text, blob in self.conn.execute(
-            "SELECT path, line, text, vec FROM chunks"
-        ):
+        for path, line, text, blob in self.conn.execute("SELECT path, line, text, vec FROM chunks"):
             results.append(
                 SearchResult(
                     path=path,
@@ -243,7 +241,7 @@ def search_query(
     query: str,
     model: str = DEFAULT_EMBED,
     top: int = 5,
-) -> list["SearchResult"]:
+) -> list[SearchResult]:
     """Embed a query and return the top matching chunks from an existing index."""
     store = IndexStore(db_path)
     try:
@@ -270,7 +268,7 @@ def build_index(
         if not batch:
             return
         vectors = embed(ollama_url, model, [text for _, _, text in batch])
-        for (path, line, text), vector in zip(batch, vectors):
+        for (path, line, text), vector in zip(batch, vectors, strict=True):
             store.add(path, line, text, vector)
         store.commit()
         chunks += len(batch)

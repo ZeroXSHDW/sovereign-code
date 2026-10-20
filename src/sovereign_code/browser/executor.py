@@ -5,10 +5,10 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from .actions import Action, BrowserPolicy, PolicyError, check_url, is_destructive
+from .actions import Action, BrowserPolicy, check_url, is_destructive
 
 CAPTCHA_MARKERS = (
     "captcha",
@@ -139,7 +139,7 @@ class BrowserSession:
         self.context = None
         self.page = None
 
-    def __enter__(self) -> "BrowserSession":
+    def __enter__(self) -> BrowserSession:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

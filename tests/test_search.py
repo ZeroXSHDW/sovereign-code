@@ -96,10 +96,8 @@ def test_search_query_uses_store_and_embedding(monkeypatch, tmp_path: Path) -> N
 
 def test_embed_integration_optional() -> None:
     try:
-        vectors = embed(
-            "http://127.0.0.1:11434", "nomic-embed-text", ["hello"], timeout=30.0
-        )
-    except Exception as exc:  # noqa: BLE001 - optional local dependency
+        vectors = embed("http://127.0.0.1:11434", "nomic-embed-text", ["hello"], timeout=30.0)
+    except Exception as exc:
         pytest.skip(f"Ollama embedding unavailable: {exc}")
     assert len(vectors) == 1
     assert len(vectors[0]) == 768

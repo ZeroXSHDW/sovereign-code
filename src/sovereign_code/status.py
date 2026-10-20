@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Settings
-from .gateway import GatewayStatus, check as check_gateway
+from .gateway import GatewayStatus
+from .gateway import check as check_gateway
 from .models import ModelView, build_views, sort_views
 from .ollama import OllamaClient
 from .router import Selection, Task, choose

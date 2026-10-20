@@ -138,9 +138,7 @@ def plan_launch(
 
     if client == "codex":
         if not codex_profile_path().is_file():
-            raise ValueError(
-                f"missing {codex_profile_path()}; run sovereign install-clients"
-            )
+            raise ValueError(f"missing {codex_profile_path()}; run sovereign install-clients")
         env["SOVEREIGN_API_KEY"] = "local"
         env["CODEX_HOME"] = str(codex_home_path())
         argv = ["codex", "--profile", "local", "-C", str(target)]
@@ -195,9 +193,7 @@ def install_client_wrappers() -> list[Path]:
     for client in ("qwen", "codex", "claude"):
         path = wrapper_path(client)
         path.write_text(
-            "#!/bin/bash\n"
-            "set -euo pipefail\n"
-            f'exec "{launcher}" launch {client} "$@"\n',
+            f'#!/bin/bash\nset -euo pipefail\nexec "{launcher}" launch {client} "$@"\n',
             encoding="utf-8",
         )
         path.chmod(0o755)

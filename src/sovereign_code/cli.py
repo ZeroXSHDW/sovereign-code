@@ -4,24 +4,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
-from dataclasses import asdict, fields as dc_fields
 import html
-import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+from dataclasses import fields as dc_fields
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-from rich.text import Text
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__
+from .backup import create_backup
+from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
+from .browser.executor import chromium_path
 from .clients import (
     codex_profile_path,
     install_client_wrappers,
@@ -38,27 +40,19 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
-from .backup import create_backup
-from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
-from .browser.executor import chromium_path
 from .logs import TARGETS, log_path, tail_lines
+from .memory import add_memory, clear_memory, project_context, read_memory
+from .models import sort_views
+from .ollama import OllamaClient
+from .pipeline import run_pipeline
+from .router import Task, choose
 from .search import (
     DEFAULT_EMBED,
     EmbedError,
-    IndexStore,
     build_index,
-    embed,
     index_path_for,
     search_query,
 )
-from .skills import list_skills, read_skill, render_skill
-from .memory import add_memory, clear_memory, project_context, read_memory
-from .stats import collect_stats, human_size
-from .summarize import SourceError, complete, read_text_source, summarize_text
-from .models import build_views, sort_views
-from .ollama import OllamaClient
-from .router import Task, choose, mode_label
-from .pipeline import run_pipeline
 from .sessions import (
     export_sessions,
     prune_sessions,
@@ -66,8 +60,11 @@ from .sessions import (
     search_sessions,
     select_prunable,
 )
+from .skills import list_skills, read_skill, render_skill
+from .stats import collect_stats, human_size
 from .status import Snapshot, collect
-from .system import command_exists, login_agent_installed, qwen_config_path, qwen_memory_path
+from .summarize import SourceError, complete, read_text_source, summarize_text
+from .system import command_exists, login_agent_installed, qwen_memory_path
 from .verify import CORE_ALIASES, EXPECTED_ALIASES, check_embedding, probe_aliases
 
 LABEL = "com.user.sovereign-code"
@@ -103,9 +100,14 @@ def _status(snap: Snapshot) -> None:
     table = Table(title="Runtime", show_header=False, box=None, padding=(0, 1))
     table.add_column(style="bold #8a8aa0")
     table.add_column()
-    table.add_row("Ollama", f"{snap.settings.ollama_url}  [{'green' if snap.ollama_up else 'red'}]{state}[/]")
+    table.add_row(
+        "Ollama", f"{snap.settings.ollama_url}  [{'green' if snap.ollama_up else 'red'}]{state}[/]"
+    )
     gateway = "online" if snap.gateway.up else "offline"
-    table.add_row("Gateway", f"{snap.settings.gateway_url}  [{'green' if snap.gateway.up else 'yellow'}]{gateway}[/]")
+    table.add_row(
+        "Gateway",
+        f"{snap.settings.gateway_url}  [{'green' if snap.gateway.up else 'yellow'}]{gateway}[/]",
+    )
     table.add_row("Memory", snap.memory.label)
     table.add_row("Disk free", f"{snap.disk_free_gb:.0f} GB")
     table.add_row("Loopback", "yes" if snap.loopback else "[red]NO[/]")
@@ -117,16 +119,13 @@ def _status(snap: Snapshot) -> None:
         console.print("\n[bold]Loaded[/]")
         for view in snap.loaded:
             console.print(
-                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · "
-                f"{view.size_gb:.1f} GB"
+                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · {view.size_gb:.1f} GB"
             )
 
     coder = snap.recommended_coder or snap.best_coder
     if coder:
         style = "green" if coder.installed else "yellow"
-        console.print(
-            f"\n[bold]Coder[/]  [{style}]{coder.tag}[/]  {coder.status}"
-        )
+        console.print(f"\n[bold]Coder[/]  [{style}]{coder.tag}[/]  {coder.status}")
         if not coder.installed:
             console.print("  [dim]best coder not installed[/]")
             if snap.best_coder:
@@ -244,7 +243,9 @@ def _bench(
             speed,
         )
     console.print(table)
-    console.print("[dim]First call per alias may include model load time; rerun for steady-state.[/]")
+    console.print(
+        "[dim]First call per alias may include model load time; rerun for steady-state.[/]"
+    )
     return 0
 
 
@@ -389,9 +390,7 @@ def _sessions(
             console.print(f"[dim]{len(victims)} of {len(infos)} sessions qualify[/]")
             return 0
         removed = prune_sessions(victims)
-        console.print(
-            f"[green]Removed {removed} sessions[/] · kept {len(infos) - removed}"
-        )
+        console.print(f"[green]Removed {removed} sessions[/] · kept {len(infos) - removed}")
         return 0
 
     table = Table(title="Chat sessions", header_style="bold #b794f4")
@@ -430,14 +429,16 @@ def _browse(args, settings: Settings) -> int:
 
     from .browser.actions import BrowserPolicy, PolicyError, check_url, parse_action
     from .browser.agent import AuditLog, BrowserAgent, ModelPlanner
-    from .browser.executor import BrowserSession, BrowserError
+    from .browser.executor import BrowserError, BrowserSession
 
     policy = BrowserPolicy(
         allow_local=args.allow_local,
         allowed_domains=tuple(args.allow_domain),
     )
     if not args.url:
-        console.print("[red]Give a starting URL:[/] sovereign browse https://example.com --task '…'")
+        console.print(
+            "[red]Give a starting URL:[/] sovereign browse https://example.com --task '…'"
+        )
         return 1
     raw_url = args.url if "://" in args.url else f"https://{args.url}"
     try:
@@ -461,9 +462,7 @@ def _browse(args, settings: Settings) -> int:
         return 1
 
     if not args.task:
-        console.print(
-            "[bold]Browser open.[/] Use it normally; press Enter here to close."
-        )
+        console.print("[bold]Browser open.[/] Use it normally; press Enter here to close.")
         try:
             input()
         except (EOFError, KeyboardInterrupt):
@@ -572,7 +571,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
         try:
             result = fn()
             rows.append(("[green]FIXED[/]", label, str(result)))
-        except Exception as exc:  # noqa: BLE001 - surfaced in the table
+        except Exception as exc:
             rows.append(("[red]FAILED[/]", label, str(exc)))
 
     run("config", lambda: write_default_config())
@@ -591,6 +590,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
     run("dashboard launcher", _launcher)
 
     if not any("embed" in view.tag for view in snap.installed):
+
         def _embedding() -> str:
             code = _pull(settings, "nomic-embed-text", "embedding model")
             if code != 0:
@@ -600,6 +600,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
         run("embedding model", _embedding)
 
     if not qwen_memory_path().is_file():
+
         def _rules() -> str:
             path = qwen_memory_path()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -726,15 +727,20 @@ def _doctor(snap: Snapshot) -> int:
     def add(ok: bool, name: str, detail: str, hint: str = "", warn: bool = False) -> None:
         checks.append(("PASS" if ok else ("WARN" if warn else "FAIL"), name, detail, hint))
 
-    add(snap.ollama_up, "Ollama API", f"{snap.settings.ollama_url} · {snap.version}", "open Ollama.app")
+    add(
+        snap.ollama_up,
+        "Ollama API",
+        f"{snap.settings.ollama_url} · {snap.version}",
+        "open Ollama.app",
+    )
     add(snap.loopback, "Loopback only", "Ollama and gateway are on 127.0.0.1", "never bind 0.0.0.0")
     best = snap.recommended_coder
     add(
         bool(best and best.installed),
         "Best coder",
-        best.tag if best and best.installed else (
-            f"14B missing; fallback is {snap.best_coder.tag}" if snap.best_coder else "no coder"
-        ),
+        best.tag
+        if best and best.installed
+        else (f"14B missing; fallback is {snap.best_coder.tag}" if snap.best_coder else "no coder"),
         f"ollama pull {best.tag}" if best and not best.installed else "",
         warn=True,
     )
@@ -752,7 +758,13 @@ def _doctor(snap: Snapshot) -> int:
         "ollama pull gemma4:12b" if not agent else "",
         warn=True,
     )
-    add(snap.gateway.up, "LiteLLM gateway", f"{len(snap.gateway.models)} models", "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway", warn=True)
+    add(
+        snap.gateway.up,
+        "LiteLLM gateway",
+        f"{len(snap.gateway.models)} models",
+        "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway",
+        warn=True,
+    )
     browser_exe = chromium_path()
     add(
         browser_exe is not None,
@@ -776,8 +788,20 @@ def _doctor(snap: Snapshot) -> int:
         "sovereign install-clients",
         warn=True,
     )
-    add(command_exists("qwen"), "Qwen Code CLI", shutil.which("qwen") or "missing", "npm i -g @qwen-code/qwen-code", warn=True)
-    add(qwen_memory_path().is_file(), "Qwen global rules", str(qwen_memory_path()), "recreate ~/.qwen/QWEN.md", warn=True)
+    add(
+        command_exists("qwen"),
+        "Qwen Code CLI",
+        shutil.which("qwen") or "missing",
+        "npm i -g @qwen-code/qwen-code",
+        warn=True,
+    )
+    add(
+        qwen_memory_path().is_file(),
+        "Qwen global rules",
+        str(qwen_memory_path()),
+        "recreate ~/.qwen/QWEN.md",
+        warn=True,
+    )
     add(
         codex_profile_path().is_file(),
         "Codex local profile",
@@ -792,7 +816,13 @@ def _doctor(snap: Snapshot) -> int:
         "sovereign install-clients",
         warn=True,
     )
-    add(login_agent_installed(), "Login terminal", "launch agent installed" if login_agent_installed() else "not installed", "sovereign install-login", warn=True)
+    add(
+        login_agent_installed(),
+        "Login terminal",
+        "launch agent installed" if login_agent_installed() else "not installed",
+        "sovereign install-login",
+        warn=True,
+    )
     add(
         GATEWAY_WATCHDOG.is_file(),
         "Gateway watchdog",
@@ -800,8 +830,20 @@ def _doctor(snap: Snapshot) -> int:
         "install local-ai/launchd/com.user.ailocalgateway.watchdog.plist",
         warn=True,
     )
-    add(snap.disk_free_gb >= 5, "Disk space", f"{snap.disk_free_gb:.0f} GB free", "free at least 5 GB", warn=True)
-    add(snap.memory.free_gb >= 2, "Free memory", f"{snap.memory.free_gb:.1f} GB", "unload a model: ollama stop <tag>", warn=True)
+    add(
+        snap.disk_free_gb >= 5,
+        "Disk space",
+        f"{snap.disk_free_gb:.0f} GB free",
+        "free at least 5 GB",
+        warn=True,
+    )
+    add(
+        snap.memory.free_gb >= 2,
+        "Free memory",
+        f"{snap.memory.free_gb:.1f} GB",
+        "unload a model: ollama stop <tag>",
+        warn=True,
+    )
 
     table = Table(title="Doctor", header_style="bold #b794f4")
     table.add_column("", width=4)
@@ -840,8 +882,8 @@ def _install_login(start_now: bool = False) -> int:
   </array>
   <key>RunAtLoad</key><true/>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
-  <key>StandardOutPath</key><string>{html.escape(str(PROJECT_ROOT / 'logs' / 'login.out.log'))}</string>
-  <key>StandardErrorPath</key><string>{html.escape(str(PROJECT_ROOT / 'logs' / 'login.err.log'))}</string>
+  <key>StandardOutPath</key><string>{html.escape(str(PROJECT_ROOT / "logs" / "login.out.log"))}</string>
+  <key>StandardErrorPath</key><string>{html.escape(str(PROJECT_ROOT / "logs" / "login.err.log"))}</string>
 </dict>
 </plist>
 """
@@ -851,7 +893,9 @@ def _install_login(start_now: bool = False) -> int:
     console.print(f"[green]Installed[/] {plist}")
     if start_now:
         uid = os.getuid()
-        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{LABEL}"], capture_output=True, check=False)
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}/{LABEL}"], capture_output=True, check=False
+        )
         result = subprocess.run(
             ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
             capture_output=True,
@@ -880,13 +924,15 @@ def _uninstall_login() -> int:
     return 0
 
 
-def _pull_recommended(settings: Settings) -> int:
+def _pull(settings: Settings, tag: str, note: str = "") -> int:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
+        console.print(f"[red]Invalid model tag:[/] {tag}")
+        return 1
     snap = _snapshot(settings)
-    tag = "qwen2.5-coder:14b"
     if snap.views.get(tag) and snap.views[tag].installed:
         console.print(f"[green]{tag} is already installed.[/]")
         return 0
-    console.print(f"Pulling [bold]{tag}[/] — this is the best coder that fits 24 GB.")
+    console.print(f"Pulling [bold]{tag}[/]" + (f" — {note}" if note else ""))
     client = OllamaClient(settings.ollama_url)
 
     async def run() -> None:
@@ -911,8 +957,12 @@ def _pull_recommended(settings: Settings) -> int:
             progress.update(task, description=f"{tag}: done")
 
     asyncio.run(run())
-    console.print(f"[green]Ready.[/] Test it: qwen --model {tag}")
+    console.print(f"[green]{tag} installed.[/] Run: sovereign models")
     return 0
+
+
+def _pull_recommended(settings: Settings) -> int:
+    return _pull(settings, "qwen2.5-coder:14b", "the best coder that fits 24 GB")
 
 
 def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
@@ -935,9 +985,13 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
         console.print("[red]No local model installed.[/] Run: sovereign pull-recommended")
         return 1
     tag = selection.tag or "qwen2.5-coder:7b"
-    console.print(f"[bold]Qwen Code[/] · model [green]{tag}[/] · {selection.context} ctx · {target}")
+    console.print(
+        f"[bold]Qwen Code[/] · model [green]{tag}[/] · {selection.context} ctx · {target}"
+    )
     if not qwen_memory_path().is_file():
-        console.print("[yellow]Warning:[/] ~/.qwen/QWEN.md is missing; Qwen may write into ~/.qwen/projects.")
+        console.print(
+            "[yellow]Warning:[/] ~/.qwen/QWEN.md is missing; Qwen may write into ~/.qwen/projects."
+        )
     os.chdir(target)
     os.environ["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
     args = ["qwen", "--model", tag, "--approval-mode", "yolo" if yolo else "default"]
@@ -963,7 +1017,9 @@ def _gateway(snap: Snapshot) -> int:
     table.add_column("Item", style="bold")
     table.add_column("Value", overflow="fold")
     state = "[green]PASS[/]" if snap.gateway.up else "[red]FAIL[/]"
-    table.add_row(state, "Gateway", f"{snap.settings.gateway_url} · {len(snap.gateway.models)} aliases")
+    table.add_row(
+        state, "Gateway", f"{snap.settings.gateway_url} · {len(snap.gateway.models)} aliases"
+    )
     table.add_row(
         "[green]PASS[/]" if supervisor else "[yellow]WARN[/]",
         "Supervisor",
@@ -1071,9 +1127,7 @@ def _launch(client: str, path: str, yolo: bool = False) -> int:
         if client == "codex":
             console.print("[dim]Run: sovereign install-clients[/]")
         return 1
-    console.print(
-        f"[bold]{info.name}[/] · model [green]{plan.model}[/] · {target}"
-    )
+    console.print(f"[bold]{info.name}[/] · model [green]{plan.model}[/] · {target}")
     if plan.note:
         console.print(f"[yellow]{plan.note}[/]")
     if client == "qwen" and yolo:
@@ -1130,7 +1184,9 @@ def _skills(settings: Settings) -> int:
     return 0
 
 
-def _skill(settings: Settings, name: str | None, prompt: str | None, model: str, tokens: int) -> int:
+def _skill(
+    settings: Settings, name: str | None, prompt: str | None, model: str, tokens: int
+) -> int:
     if not name:
         return _skills(settings)
     template = read_skill(name)
@@ -1366,9 +1422,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
     verify.add_argument("--embedding", action="store_true", help="also check the embedding model")
-    verify.add_argument(
-        "--timeout", type=float, default=120.0, help="per-alias timeout in seconds"
-    )
+    verify.add_argument("--timeout", type=float, default=120.0, help="per-alias timeout in seconds")
     gateway = sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     gateway.add_argument(
         "--restart", action="store_true", help="restart the supervisor and wait for health"
@@ -1432,7 +1486,9 @@ def build_parser() -> argparse.ArgumentParser:
     sessions.add_argument("--dry-run", action="store_true", help="show what --prune would delete")
     sessions.add_argument("--limit", type=int, default=20, help="rows to list")
     sessions.add_argument("--search", default=None, metavar="TEXT", help="search chat history")
-    sessions.add_argument("--export", default=None, metavar="PATH", help="export all sessions to JSONL")
+    sessions.add_argument(
+        "--export", default=None, metavar="PATH", help="export all sessions to JSONL"
+    )
 
     pipeline = sub.add_parser("pipeline", help="plan -> implement -> review across models")
     pipeline.add_argument("prompt")

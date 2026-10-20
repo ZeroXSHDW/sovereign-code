@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 import httpx
 
@@ -79,7 +79,17 @@ class ModelPlanner:
         for element in observation.get("elements", [])[:40]:
             item = {
                 key: element.get(key)
-                for key in ("id", "tag", "type", "role", "name", "value", "href", "disabled", "sensitive")
+                for key in (
+                    "id",
+                    "tag",
+                    "type",
+                    "role",
+                    "name",
+                    "value",
+                    "href",
+                    "disabled",
+                    "sensitive",
+                )
                 if element.get(key) not in (None, "", False)
             }
             elements.append(item)
@@ -236,7 +246,8 @@ class BrowserAgent:
                 if self.headless:
                     return self._finish(
                         "captcha",
-                        "A CAPTCHA or bot check appeared; rerun without --headless to solve it manually.",
+                        "A CAPTCHA or bot check appeared; rerun without --headless "
+                        "to solve it manually.",
                         step,
                     )
                 if self.pause is None:
@@ -293,9 +304,7 @@ class BrowserAgent:
             except SensitiveFieldError as exc:
                 if self.headless or self.pause is None:
                     return self._finish("handoff", str(exc), step)
-                self.pause(
-                    f"{exc}\nType the secret yourself in the browser, then return here."
-                )
+                self.pause(f"{exc}\nType the secret yourself in the browser, then return here.")
                 history.append(f"{step}. blocked sensitive field")
                 continue
             except (BrowserError, PolicyError) as exc:

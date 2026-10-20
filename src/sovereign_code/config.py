@@ -79,7 +79,7 @@ class Settings:
         return CONFIG_DIR / "config.toml"
 
     @classmethod
-    def load(cls) -> "Settings":
+    def load(cls) -> Settings:
         settings = cls()
         overrides = {
             "ollama_host": os.environ.get("SOVEREIGN_OLLAMA_HOST"),

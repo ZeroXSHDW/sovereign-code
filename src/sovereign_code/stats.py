@@ -30,7 +30,7 @@ def human_size(number: float) -> str:
 
 def dir_size(path: Path) -> int:
     total = 0
-    for dirpath, dirnames, filenames in os.walk(path):
+    for dirpath, _dirnames, filenames in os.walk(path):
         for name in filenames:
             file_path = Path(dirpath) / name
             try:

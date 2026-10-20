@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sovereign_code.stats import collect_stats, dir_size, human_size
+from sovereign_code.stats import dir_size, human_size
 
 
 def test_human_size() -> None:

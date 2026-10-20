@@ -67,6 +67,4 @@ def bench_alias(
             elapsed,
         )
     except httpx.HTTPError as exc:
-        return BenchResult(
-            alias, False, 0, 0, time.monotonic() - started, exc.__class__.__name__
-        )
+        return BenchResult(alias, False, 0, 0, time.monotonic() - started, exc.__class__.__name__)

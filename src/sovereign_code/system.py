@@ -29,9 +29,7 @@ class Memory:
 
 def _run(args: list[str], timeout: float = 3.0) -> str:
     try:
-        result = subprocess.run(
-            args, capture_output=True, text=True, timeout=timeout, check=False
-        )
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
         return result.stdout
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -58,8 +56,7 @@ def read_memory() -> Memory:
         if m:
             pages[m.group(1).strip()] = int(m.group(2))
     free_pages = sum(
-        pages.get(key, 0)
-        for key in ("Pages free", "Pages inactive", "Pages speculative")
+        pages.get(key, 0) for key in ("Pages free", "Pages inactive", "Pages speculative")
     )
     free_gb = round(free_pages * page_size / _GIB, 1)
     if total <= 0:

@@ -74,9 +74,7 @@ def probe_alias(
             return AliasResult(alias, False, elapsed, "empty reply")
         return AliasResult(alias, True, elapsed, text[:40])
     except httpx.HTTPError as exc:
-        return AliasResult(
-            alias, False, time.monotonic() - started, f"{exc.__class__.__name__}"
-        )
+        return AliasResult(alias, False, time.monotonic() - started, f"{exc.__class__.__name__}")
 
 
 def check_embedding(
@@ -90,10 +88,10 @@ def check_embedding(
     if not base.startswith("http"):
         base = f"http://{base}"
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0), transport=transport) as client:
-            response = client.post(
-                f"{base}/api/embed", json={"model": model, "input": ["ok"]}
-            )
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
+        ) as client:
+            response = client.post(f"{base}/api/embed", json={"model": model, "input": ["ok"]})
         if response.status_code != 200:
             return False, f"HTTP {response.status_code}"
         dimension = len(response.json()["embeddings"][0])

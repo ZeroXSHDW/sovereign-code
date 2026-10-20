@@ -25,6 +25,25 @@ def _entries(
             yield path, arcname
 
 
+def prune_backups(dest_dir: Path, keep: int) -> int:
+    """Delete the oldest backups, keeping the newest `keep`."""
+    if keep <= 0:
+        return 0
+    backups = sorted(
+        dest_dir.glob("sovereign-backup-*.tar.gz"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    removed = 0
+    for path in backups[keep:]:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def create_backup(
     include_dirs: list[Path],
     dest_dir: Path,

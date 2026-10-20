@@ -92,6 +92,10 @@ Sovereign Code keeps the idea and changes the foundation.
   `nomic-embed-text` and `sovereign search` ranks chunks by cosine similarity,
   so you can ask "where is X handled?" and get file:line answers. The index is
   local, rebuildable, and excluded from backups and Time Machine.
+- **Everything is reachable from the dashboard.** Slash commands `/search`,
+  `/index`, `/summarize`, `/backup`, and `/browse` shell out to the same CLI, so
+  the console stays a single entry point. Doctor gained an embedding-model check
+  (16 checks), and `sovereign backup --keep N` prunes old archives.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -103,7 +107,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 77 pytest tests cover model merging, router context behaviour, config,
+- 80 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

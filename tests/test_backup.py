@@ -40,3 +40,20 @@ def test_backup_includes_config_and_data_but_not_browser(tmp_path: Path) -> None
     assert "data/sessions/s.jsonl" in names
     assert not any("browser" in name for name in names)
     assert not any(".tmp" in name for name in names)
+
+
+def test_prune_backups_keeps_newest(tmp_path: Path) -> None:
+    import os
+
+    from sovereign_code.backup import prune_backups
+
+    for index in range(5):
+        path = tmp_path / f"sovereign-backup-{index}.tar.gz"
+        path.write_text("x", encoding="utf-8")
+        os.utime(path, (index + 1, index + 1))
+
+    removed = prune_backups(tmp_path, 2)
+    assert removed == 3
+    remaining = sorted(path.name for path in tmp_path.glob("sovereign-backup-*.tar.gz"))
+    assert len(remaining) == 2
+    assert remaining == ["sovereign-backup-3.tar.gz", "sovereign-backup-4.tar.gz"]

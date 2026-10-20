@@ -92,3 +92,35 @@ async def test_session_retention_disabled_by_default(monkeypatch, tmp_path):
         await pilot.pause()
         await pilot.pause()
     assert keep.exists()
+
+
+async def test_search_command_delegates(monkeypatch):
+    calls = []
+
+    async def fake_run_cli(*args):
+        calls.append(args)
+
+    app = SovereignApp(settings=Settings(), demo=True)
+    app._run_cli = fake_run_cli
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app.handle_command("/search gateway restart")
+        await pilot.pause()
+    assert calls
+    assert calls[0][0] == "search"
+    assert "gateway restart" in calls[0]
+
+
+async def test_backup_command_delegates(monkeypatch):
+    calls = []
+
+    async def fake_run_cli(*args):
+        calls.append(args)
+
+    app = SovereignApp(settings=Settings(), demo=True)
+    app._run_cli = fake_run_cli
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app.handle_command("/backup")
+        await pilot.pause()
+    assert calls == [("backup",)]

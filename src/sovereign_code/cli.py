@@ -500,7 +500,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
     return _doctor(_snapshot(settings))
 
 
-def _backup(settings: Settings) -> int:
+def _backup(settings: Settings, keep: int | None = None) -> int:
     include = [LOCAL_AI_ROOT / "config" / "sovereign", LOCAL_AI_ROOT / "data"]
     exclude = {LOCAL_AI_ROOT / "data": ("browser", "index")}
     extra = {
@@ -522,6 +522,12 @@ def _backup(settings: Settings) -> int:
         "[dim]Contains configs and data/ (sessions, logs, audit); excludes models, "
         "venv, Codex caches, and the browser profile.[/]"
     )
+    if keep is not None:
+        from .backup import prune_backups
+
+        removed = prune_backups(LOCAL_AI_ROOT / "backups", keep)
+        if removed:
+            console.print(f"[dim]Pruned {removed} older backup(s) (keeping {keep}).[/]")
     return 0
 
 
@@ -638,6 +644,14 @@ def _doctor(snap: Snapshot) -> int:
         "Browser engine",
         str(browser_exe) if browser_exe else "not installed",
         "pip install -e '.[browser]' && playwright install chromium",
+        warn=True,
+    )
+    has_embed = any("embed" in view.tag for view in snap.installed)
+    add(
+        has_embed,
+        "Embedding model",
+        "nomic-embed-text" if has_embed else "not installed",
+        "ollama pull nomic-embed-text",
         warn=True,
     )
     add(
@@ -1056,7 +1070,8 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--tokens", type=int, default=64, help="output tokens per alias")
     bench.add_argument("--prompt", default=None, help="prompt to benchmark")
 
-    sub.add_parser("backup", help="archive configs and chat data to a local tarball")
+    backup = sub.add_parser("backup", help="archive configs and chat data to a local tarball")
+    backup.add_argument("--keep", type=int, default=None, help="retain only the newest N backups")
 
     index = sub.add_parser("index", help="embed a directory for local semantic search")
     index.add_argument("path", nargs="?", default=".")
@@ -1176,7 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
     if command == "backup":
-        return _backup(settings)
+        return _backup(settings, keep=args.keep)
     if command == "index":
         return _index(settings, args.path, args.model, args.limit)
     if command == "search":

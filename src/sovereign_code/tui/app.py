@@ -37,6 +37,10 @@ HELP_TEXT = """\
 - `/clients` — show installed clients and capabilities
 - `/verify` — send a tiny test through the four core gateway aliases
 - `/browse <url> [task]` — drive a visible Chromium with the local model
+- `/search <query>` — semantic search over the indexed workspace
+- `/index [path]` — embed a directory for search
+- `/summarize <file|url>` — local-model summary
+- `/backup` — archive configs and chat data
 - `/free` — unload other models and free memory
 - `/clear` — new conversation
 - `/help` — this help
@@ -435,6 +439,25 @@ class SovereignApp(App[None]):
             await self.action_verify()
         elif command == "/browse":
             await self._launch_browse(arg)
+        elif command == "/search":
+            if not arg:
+                await self.add_message("system", "Usage: `/search <query>`")
+                return
+            workspace = str(Path(self.settings.workspace).expanduser())
+            await self._run_cli("search", arg, "--path", workspace)
+        elif command == "/index":
+            workspace = str(Path(self.settings.workspace).expanduser())
+            await self._run_cli("index", arg or workspace)
+        elif command == "/summarize":
+            if not arg:
+                await self.add_message("system", "Usage: `/summarize <file|url>`")
+                return
+            if arg.startswith(("http://", "https://")):
+                await self._run_cli("summarize", "--url", arg)
+            else:
+                await self._run_cli("summarize", arg)
+        elif command == "/backup":
+            await self._run_cli("backup")
         elif command == "/free":
             if self.snapshot:
                 for view in self.snapshot.loaded:
@@ -470,6 +493,13 @@ class SovereignApp(App[None]):
         prompt.value = "/browse "
         prompt.cursor_position = len(prompt.value)
         prompt.focus()
+
+    async def _run_cli(self, *args: str) -> None:
+        try:
+            with self.suspend():
+                subprocess.call([sys.executable, "-m", "sovereign_code", *args])
+        finally:
+            await self.refresh_snapshot()
 
     async def _launch_browse(self, arg: str) -> None:
         if not arg.strip():

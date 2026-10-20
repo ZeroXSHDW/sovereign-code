@@ -21,8 +21,10 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-CONFIG_DIR = _env_path("SOVEREIGN_CONFIG_DIR", _home() / ".config" / APP_NAME)
-DATA_DIR = _env_path("SOVEREIGN_DATA_DIR", _home() / ".local" / "share" / APP_NAME)
+CONFIG_DIR = _env_path(
+    "SOVEREIGN_CONFIG_DIR", _home() / "Documents" / "local-ai" / "config" / "sovereign"
+)
+DATA_DIR = _env_path("SOVEREIGN_DATA_DIR", _home() / "Documents" / "local-ai" / "data")
 SESSIONS_DIR = DATA_DIR / "sessions"
 LOG_DIR = DATA_DIR / "logs"
 
@@ -47,6 +49,7 @@ def find_project_root() -> Path:
 
 
 PROJECT_ROOT = find_project_root()
+LOCAL_AI_ROOT = Path.home() / "Documents" / "local-ai"
 
 
 @dataclass

@@ -48,12 +48,13 @@ so its catalog ceiling is 20,480. Gemma 12B reaches 32k only with
 ## Local clients
 
 `clients.py` is a pure planner: it detects commands, writes
-`~/.codex/local.config.toml`, and builds argv/env for each client without
+`~/Documents/local-ai/config/codex/local.config.toml`, and builds argv/env for each client without
 mutating the current process. The TUI and CLI share `plan_launch`.
 
 - Agent clients (Qwen Code, OpenCode) get the verified tool-calling model.
 - Chat clients (Codex, Claude Code) get loopback gateway settings only.
-- Wrappers are written to `~/.local/bin/{qwen,codex,claude}-local`.
+- Wrappers are written to `~/Documents/local-ai/bin` and symlinked into
+  `~/.local/bin` so they stay on `PATH`.
 
 The capability split is intentional. Ollama's streamed tool calls do not survive
 the LiteLLM translation reliably enough for Codex or Claude Code to edit files,
@@ -77,6 +78,29 @@ The plist runs `open -a Terminal <bin/sovereign-dashboard.command>`. The command
 uses the project venv (or `python3 -m sovereign_code`) and is independent of the
 user's shell config. `install-login` is idempotent and `uninstall-login` removes
 both the plist and the loaded job.
+
+## Gateway supervisor and TCC
+
+`~/Documents` is TCC-protected: a launchd job cannot read the gateway venv there
+(`Operation not permitted`). `com.user.ailocalgateway` therefore runs
+`open -gj -a Terminal start_gateway.command`, which detaches `run_gateway.sh`
+with `nohup` and exits. Terminal holds the user's Documents consent, and a
+detached child keeps that access after the window closes. The supervisor
+restarts LiteLLM on crash; no Full Disk Access grant is needed.
+
+## Storage layout
+
+All runtime state is in `~/Documents/local-ai`:
+
+- `gateway/` — config, venv, supervisor, logs
+- `config/{sovereign,codex}/` — app configs
+- `data/{sessions,logs}/` — conversations
+- `models/` — Ollama weights; `~/.ollama/models` is a symlink
+- `qwen/` — Qwen Code state; `~/.qwen` is a symlink
+- `bin/` — client wrappers (symlinked into `~/.local/bin`)
+
+`~/.codex` still holds the cloud Codex app state; only the local profile and
+`CODEX_HOME` for local launches live in Documents.
 
 ## Failure behaviour
 

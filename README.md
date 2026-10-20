@@ -19,8 +19,21 @@ cd ~/Documents/sovereign-code
 sovereign                       # open the dashboard now
 ```
 
-The first run creates `~/.config/sovereign-code/config.toml` and
-`~/.local/share/sovereign-code/`.
+The first run uses `~/Documents/local-ai/config/sovereign/config.toml` and
+`~/Documents/local-ai/data/` (sessions and logs).
+
+Everything the system owns lives in `~/Documents/local-ai`:
+
+```text
+~/Documents/local-ai/
+├── gateway/     LiteLLM config, venv, supervisor, logs
+├── bin/         qwen-local, codex-local, claude-local
+├── config/      sovereign/ and codex/ profiles
+├── data/        sessions and logs
+├── models/      Ollama weights (34 GB; ~/.ollama/models symlinks here)
+├── qwen/        Qwen Code state (~/.qwen symlinks here)
+└── legacy/      archived pre-migration ai-stack
+```
 
 ### Dashboard keys
 
@@ -38,7 +51,7 @@ Input commands: `/model <tag>`, `/models`, `/chat`, `/code`, `/reason`,
 `/vision`, `/fast`, `/status`, `/open [path]`, `/qwen`, `/codex`, `/claude`,
 `/clients`, `/clear`, `/help`, `/quit`.
 
-`workspace` lives in `~/.config/sovereign-code/config.toml` and defaults to
+`workspace` lives in `~/Documents/local-ai/config/sovereign/config.toml` and defaults to
 `~/Documents`; `/open /path/to/repo` overrides it for one session.
 
 ## Why this is better than the old Local Bar build
@@ -51,7 +64,7 @@ Input commands: `/model <tag>`, `/models`, `/chat`, `/code`, `/reason`,
 | No automated tests in the repo | 26 unit/headless-TUI tests, `pytest` |
 | Context fitting spread across UI code | `router.py` estimates KV + weights against free RAM |
 | Client setup mutates many apps | Detects clients, writes only its own profile and `*-local` wrappers |
-| No session history | JSONL per conversation under `~/.local/share` |
+| No session history | JSONL per conversation under `~/Documents/local-ai/data` |
 
 See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -79,7 +92,8 @@ resident 12B. If the 14B coder is missing it falls back to 7B and says so;
 ## Local coding clients
 
 `sovereign install-clients` writes a Codex profile at
-`~/.codex/local.config.toml` and three wrappers in `~/.local/bin`:
+`~/Documents/local-ai/config/codex/local.config.toml` and three wrappers in
+`~/Documents/local-ai/bin` (symlinked into `~/.local/bin` for `PATH`):
 `qwen-local`, `codex-local`, and `claude-local`. It never edits the cloud
 configuration of ChatGPT, Codex, or Claude Code.
 
@@ -106,6 +120,7 @@ sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
 sovereign clients          # installed clients and verified capabilities
+sovereign gateway          # gateway status, paths, and restart command
 sovereign install-clients  # Codex profile + *-local wrappers
 sovereign chat --model qwen3.5:4b
 sovereign env              # exports for OpenAI-compatible local clients
@@ -127,6 +142,29 @@ The `.command` starts the dashboard in the project venv. Install is idempotent;
 `--start-now` loads the agent immediately so you can see the terminal before
 logging out. `uninstall-login` removes it.
 
+### Gateway autostart (macOS TCC)
+
+macOS does not let a `launchd` job read `~/Documents`, so a plain
+`ProgramArguments` agent cannot even open the gateway venv. Terminal is the
+process that holds your Documents consent, so `com.user.ailocalgateway.plist`
+runs:
+
+```sh
+/usr/bin/open -gj -a Terminal ~/Documents/local-ai/gateway/start_gateway.command
+```
+
+That hidden Terminal window detaches `run_gateway.sh` with `nohup` and exits;
+the supervisor restarts LiteLLM on crash and keeps Documents access even after
+the window closes. No Full Disk Access grant is required. Reload it with:
+
+```sh
+launchctl bootout gui/$(id -u)/com.user.ailocalgateway 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.ailocalgateway.plist
+```
+
+Check it with `sovereign gateway` (paths, aliases, supervisor state, restart
+command). Closing the hidden window does not stop the gateway.
+
 ## Architecture
 
 ```text
@@ -138,7 +176,7 @@ Terminal / login agent
         ├── OllamaClient ──► 127.0.0.1:11434  (/api/tags, /api/ps, /api/chat)
         ├── Gateway check ─► 127.0.0.1:4000   (/v1/models)
         ├── Router ────────► model + context from free RAM
-        ├── SessionStore ──► ~/.local/share/sovereign-code/sessions/*.jsonl
+        ├── SessionStore ──► ~/Documents/local-ai/data/sessions/*.jsonl
         └── Clients ───────► Qwen Code / OpenCode (agent), Codex / Claude (chat)
 ```
 

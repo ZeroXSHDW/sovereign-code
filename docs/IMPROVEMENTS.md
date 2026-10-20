@@ -43,7 +43,8 @@ Sovereign Code keeps the idea and changes the foundation.
   exposed.
 - **No client auto-rewrite.** The old app aligned Codex/Claude/ChatGPT/etc. by
   editing their configs. Sovereign Code only writes its own
-  `~/.codex/local.config.toml` and `*-local` wrappers; your cloud app settings
+  `~/Documents/local-ai/config/codex/local.config.toml` and `*-local` wrappers
+  under `~/Documents/local-ai/bin`; your cloud app settings
   are never touched, and `sovereign clients` reports what is installed.
 - **Honest client capabilities.** Qwen Code and OpenCode are verified to edit
   files locally. Codex and Claude Code are wired to the loopback gateway for
@@ -56,6 +57,12 @@ Sovereign Code keeps the idea and changes the foundation.
   `--yolo` is passed.
 - **Local-only prompts** are stated in the system prompt and no telemetry is
   implemented.
+- **One visible root.** All local AI state lives in `~/Documents/local-ai`
+  (gateway, profiles, sessions, models, Qwen state, wrappers). `~/.ollama/models`
+  and `~/.qwen` are symlinks, so stock tools keep working. The gateway is
+  Terminal-supervised because macOS TCC blocks launchd from reading Documents.
+- **Recoverable migration.** The previous `~/.local/ai-stack` is archived under
+  `~/Documents/local-ai/legacy/` rather than deleted.
 
 ## Testing
 

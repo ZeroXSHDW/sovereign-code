@@ -6,13 +6,21 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import PROJECT_ROOT, Settings
+from .config import LOCAL_AI_ROOT, PROJECT_ROOT, Settings
 from .system import command_exists
 
 AGENT_MODEL = "gemma4:12b"
 CODE_MODEL = "qwen2.5-coder:14b"
 CLAUDE_ALIAS = "local-claude"
 CODEX_ALIAS = "local-code"
+
+
+def qwen_home_path() -> Path:
+    return LOCAL_AI_ROOT / "qwen"
+
+
+def codex_home_path() -> Path:
+    return LOCAL_AI_ROOT / "config" / "codex"
 
 
 @dataclass(frozen=True)
@@ -39,12 +47,13 @@ class LaunchPlan:
 
 
 def codex_profile_path() -> Path:
-    return Path.home() / ".codex" / "local.config.toml"
+    return codex_home_path() / "local.config.toml"
 
 
 CODEX_PROFILE = """\
 # Sovereign Code local profile. Launch with: codex --profile local
 # Uses the loopback LiteLLM gateway and never calls a cloud endpoint.
+# Lives in ~/Documents/local-ai/config/codex (CODEX_HOME for local launches).
 model = "local-code"
 model_provider = "sovereign-local"
 model_context_window = 20480
@@ -117,6 +126,7 @@ def plan_launch(
     env = os.environ.copy()
 
     if client == "qwen":
+        env["QWEN_HOME"] = str(qwen_home_path())
         argv = [
             "qwen",
             "--model",
@@ -132,6 +142,7 @@ def plan_launch(
                 f"missing {codex_profile_path()}; run sovereign install-clients"
             )
         env["SOVEREIGN_API_KEY"] = "local"
+        env["CODEX_HOME"] = str(codex_home_path())
         argv = ["codex", "--profile", "local", "-C", str(target)]
         return LaunchPlan(
             argv,
@@ -170,13 +181,15 @@ def plan_launch(
 
 
 def wrapper_path(client: str) -> Path:
-    return Path.home() / ".local" / "bin" / f"{client}-local"
+    return LOCAL_AI_ROOT / "bin" / f"{client}-local"
 
 
 def install_client_wrappers() -> list[Path]:
-    """Install small user-level wrappers that never change cloud app settings."""
-    bin_dir = Path.home() / ".local" / "bin"
+    """Install wrappers under Documents, symlinked into ~/.local/bin for PATH."""
+    bin_dir = LOCAL_AI_ROOT / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
+    link_dir = Path.home() / ".local" / "bin"
+    link_dir.mkdir(parents=True, exist_ok=True)
     launcher = PROJECT_ROOT / "bin" / "sovereign"
     written: list[Path] = []
     for client in ("qwen", "codex", "claude"):
@@ -188,5 +201,9 @@ def install_client_wrappers() -> list[Path]:
             encoding="utf-8",
         )
         path.chmod(0o755)
+        link = link_dir / path.name
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(path)
         written.append(path)
     return written

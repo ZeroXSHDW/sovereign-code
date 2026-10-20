@@ -26,6 +26,7 @@ from .clients import (
     wrapper_path,
 )
 from .config import (
+    LOCAL_AI_ROOT,
     PROJECT_ROOT,
     Settings,
     dashboard_command_path,
@@ -157,6 +158,13 @@ def _doctor(snap: Snapshot) -> int:
         warn=True,
     )
     add(snap.gateway.up, "LiteLLM gateway", f"{len(snap.gateway.models)} models", "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway", warn=True)
+    add(
+        (LOCAL_AI_ROOT / "gateway" / "config.yaml").is_file(),
+        "Local AI root",
+        str(LOCAL_AI_ROOT),
+        "sovereign install-clients",
+        warn=True,
+    )
     add(command_exists("qwen"), "Qwen Code CLI", shutil.which("qwen") or "missing", "npm i -g @qwen-code/qwen-code", warn=True)
     add(qwen_memory_path().is_file(), "Qwen global rules", str(qwen_memory_path()), "recreate ~/.qwen/QWEN.md", warn=True)
     add(
@@ -313,11 +321,40 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
     if not qwen_memory_path().is_file():
         console.print("[yellow]Warning:[/] ~/.qwen/QWEN.md is missing; Qwen may write into ~/.qwen/projects.")
     os.chdir(target)
+    os.environ["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
     args = ["qwen", "--model", tag, "--approval-mode", "yolo" if yolo else "default"]
     if prompt:
         args.extend(["-p", prompt])
     os.execvp(args[0], args)
     return 0
+
+
+def _gateway(snap: Snapshot) -> int:
+    """Show where the gateway lives, whether it is up, and how it is supervised."""
+    gateway_dir = LOCAL_AI_ROOT / "gateway"
+    supervisor = bool(
+        subprocess.run(
+            ["pgrep", "-f", "run_gateway.sh"],
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
+    )
+    table = Table(title="LiteLLM gateway", header_style="bold #b794f4")
+    table.add_column("", width=4)
+    table.add_column("Item", style="bold")
+    table.add_column("Value", overflow="fold")
+    state = "[green]PASS[/]" if snap.gateway.up else "[red]FAIL[/]"
+    table.add_row(state, "Gateway", f"{snap.settings.gateway_url} · {len(snap.gateway.models)} aliases")
+    table.add_row(
+        "[green]PASS[/]" if supervisor else "[yellow]WARN[/]",
+        "Supervisor",
+        "run_gateway.sh running" if supervisor else "not running (login agent restarts it)",
+    )
+    table.add_row("", "Config", str(gateway_dir / "config.yaml"))
+    table.add_row("", "Log", str(gateway_dir / "gateway.log"))
+    table.add_row("", "Restart", "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway")
+    console.print(table)
+    return 0 if snap.gateway.up else 1
 
 
 def _clients(snap: Snapshot) -> None:
@@ -453,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="one-shot system status")
     sub.add_parser("models", help="list installed and recommended models")
     sub.add_parser("doctor", help="check the local stack and print fixes")
+    sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
@@ -513,6 +551,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "doctor":
         return _doctor(_snapshot(settings))
+    if command == "gateway":
+        return _gateway(_snapshot(settings))
     if command == "env":
         _env(settings)
         return 0

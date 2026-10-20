@@ -8,7 +8,7 @@ from sovereign_code.config import Settings
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(clients, "LOCAL_AI_ROOT", tmp_path / "local-ai")
     monkeypatch.setattr(clients.Path, "home", classmethod(lambda cls: tmp_path))
     return tmp_path
 
@@ -17,7 +17,7 @@ def test_codex_profile_targets_loopback(home):
     path = clients.write_codex_profile()
     text = path.read_text(encoding="utf-8")
 
-    assert path == home / ".codex" / "local.config.toml"
+    assert path == home / "local-ai" / "config" / "codex" / "local.config.toml"
     assert 'model = "local-code"' in text
     assert 'base_url = "http://127.0.0.1:4000/v1"' in text
     assert "model_context_window = 20480" in text
@@ -29,12 +29,21 @@ def test_codex_launch_requires_profile(home, tmp_path):
         clients.plan_launch("codex", tmp_path, Settings())
 
 
+def test_codex_launch_uses_documents_home(home, tmp_path):
+    clients.write_codex_profile()
+    plan = clients.plan_launch("codex", tmp_path, Settings())
+
+    assert plan.env["CODEX_HOME"] == str(home / "local-ai" / "config" / "codex")
+    assert plan.env["SOVEREIGN_API_KEY"] == "local"
+
+
 def test_qwen_launch_uses_agent_model(home, tmp_path):
     plan = clients.plan_launch("qwen", tmp_path, Settings(), yolo=True)
 
     assert plan.argv[:2] == ["qwen", "--model"]
     assert plan.argv[2] == clients.AGENT_MODEL
     assert "yolo" in plan.argv
+    assert plan.env["QWEN_HOME"] == str(home / "local-ai" / "qwen")
     assert plan.cwd == tmp_path.resolve()
 
 
@@ -53,13 +62,16 @@ def test_launch_rejects_missing_directory(home, tmp_path):
         clients.plan_launch("qwen", tmp_path / "nope", Settings())
 
 
-def test_wrappers_are_executable(home):
+def test_wrappers_live_in_documents_and_are_linked(home):
     written = clients.install_client_wrappers()
 
     assert {path.name for path in written} == {"qwen-local", "codex-local", "claude-local"}
     for path in written:
+        assert path.parent == home / "local-ai" / "bin"
         assert path.stat().st_mode & 0o111
         assert "launch" in path.read_text(encoding="utf-8")
+        link = home / ".local" / "bin" / path.name
+        assert link.is_symlink() and link.readlink() == path
 
 
 def test_agent_clients_are_marked_agent():

@@ -1,0 +1,514 @@
+"""Sovereign Code live terminal dashboard."""
+
+from __future__ import annotations
+
+import subprocess
+import time
+from pathlib import Path
+
+from rich.text import Text
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Markdown, Static
+
+from ..config import Settings
+from ..clients import local_clients, plan_launch
+from ..models import ModelView
+from ..ollama import OllamaClient
+from ..router import Task, choose, mode_label, system_prompt
+from ..sessions import SessionWriter
+from ..status import Snapshot, collect
+from ..system import Memory
+
+HELP_TEXT = """\
+**Commands**
+
+- `/model <tag>` — switch model
+- `/models` — list installed models
+- `/chat`, `/code`, `/reason`, `/vision`, `/fast` — switch mode
+- `/status` — refresh system state
+- `/open [path]`, `/qwen [path]` — Qwen Code local agent
+- `/codex [path]`, `/claude [path]` — local chat clients
+- `/clients` — show installed clients and capabilities
+- `/free` — unload other models and free memory
+- `/clear` — new conversation
+- `/help` — this help
+- `/quit` — exit
+
+**Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh · `Ctrl+N` new chat · `Ctrl+Q` quit
+"""
+
+
+class ModelListItem(ListItem):
+    def __init__(self, view: ModelView) -> None:
+        self.view = view
+        label = Text()
+        label.append("▶ " if view.loaded else ("● " if view.installed else "↓ "), style="bold")
+        label.append(view.tag, style="bold" if view.loaded else "")
+        label.append(f"  {view.size_gb:.1f}G", style="dim")
+        if view.spec.role:
+            label.append(f"  {view.spec.role}", style="dim italic")
+        super().__init__(Label(label), id="model-" + view.tag.replace(":", "-").replace("/", "-").replace(".", "-"))
+
+
+class SovereignApp(App[None]):
+    CSS_PATH = Path(__file__).with_name("app.tcss")
+    TITLE = "Sovereign Code"
+    SUB_TITLE = "local-first coding console"
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit"),
+        Binding("f2", "launch_code", "Qwen"),
+        Binding("f3", "cycle_model", "Model"),
+        Binding("f4", "launch_codex", "Codex"),
+        Binding("f5", "refresh", "Refresh"),
+        Binding("f6", "launch_claude", "Claude"),
+        Binding("ctrl+n", "clear_chat", "New"),
+    ]
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        mode: str = "dashboard",
+        demo: bool = False,
+    ) -> None:
+        super().__init__()
+        self.settings = settings or Settings.load()
+        self.mode = mode
+        self.demo = demo
+        self.ai_task = Task.CODE if mode == "code" else Task.CHAT
+        self.selected_model: str | None = self.settings.default_model
+        self.history: list[dict[str, str]] = []
+        self.snapshot: Snapshot | None = None
+        self.session: SessionWriter | None = None
+        self._streaming = False
+        self._assistant: Markdown | None = None
+        self._refresh_busy = False
+        self._model_signature: tuple = ()
+        self.ollama = OllamaClient(self.settings.ollama_url)
+
+    # ---------------------------------------------------------------- layout
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="body"):
+            with Vertical(id="sidebar"):
+                yield Static("LOCAL MODELS", classes="section-title")
+                yield ListView(id="model-list")
+                yield Static("", id="system-panel", classes="panel")
+            with Vertical(id="main"):
+                yield VerticalScroll(id="chat-scroll")
+                yield Static("", id="hint", classes="hint")
+                yield Input(
+                    placeholder="Ask the local model…   /help for commands",
+                    id="prompt",
+                )
+        yield Static("starting…", id="statusbar")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.query_one("#prompt", Input).focus()
+        await self.add_message(
+            "system",
+            "**Sovereign Code** is running locally. No prompt leaves this Mac.\n\n"
+            "Type a question, or press `F2` to open Qwen Code in the current folder.",
+        )
+        if self.demo:
+            self._apply_demo()
+        else:
+            await self.refresh_snapshot()
+        self.set_interval(2.5, self.refresh_tick)
+
+    # ---------------------------------------------------------------- status
+    async def refresh_tick(self) -> None:
+        if self.demo:
+            return
+        await self.refresh_snapshot()
+
+    async def refresh_snapshot(self) -> None:
+        if self._refresh_busy or self.demo:
+            return
+        self._refresh_busy = True
+        try:
+            self.snapshot = await collect(self.settings)
+            self._render_status()
+            self._render_system()
+            await self._render_models()
+        finally:
+            self._refresh_busy = False
+
+    def _apply_demo(self) -> None:
+        from ..models import CATALOG, ModelView
+
+        views = {
+            tag: ModelView(spec=spec, installed=tag != "qwen2.5-coder:14b", size_gb=spec.size_gb)
+            for tag, spec in CATALOG.items()
+        }
+        self.snapshot = Snapshot(
+            settings=self.settings,
+            ollama_up=True,
+            version="demo",
+            views=views,
+            memory=Memory(24.0, 16.0, 67.0),
+        )
+        self.selected_model = "qwen3.5:4b"
+        self._render_status()
+        self._render_system()
+        self.run_worker(self._render_models())
+
+    def _render_status(self) -> None:
+        snap = self.snapshot
+        text = Text()
+        if not snap:
+            text.append("starting…", style="dim")
+            self.query_one("#statusbar", Static).update(text)
+            return
+        text.append("OLLAMA ", style="bold")
+        text.append("● online" if snap.ollama_up else "○ offline", style="green" if snap.ollama_up else "red")
+        text.append(f" {snap.version}", style="dim")
+        text.append("   GATEWAY ", style="bold")
+        text.append("● online" if snap.gateway.up else "○ offline", style="green" if snap.gateway.up else "yellow")
+        text.append(f"   RAM {snap.memory.label}", style="dim")
+        text.append(f"   MODE {mode_label(self.ai_task)}", style="bold cyan")
+        current = self.selected_model or (snap.chat_selection.tag if snap.chat_selection else None)
+        text.append(f"   MODEL {current or 'none'}", style="bold")
+        if not snap.loopback:
+            text.append("   LOOPBACK VIOLATION", style="bold red")
+        self.query_one("#statusbar", Static).update(text)
+
+    def _render_system(self) -> None:
+        snap = self.snapshot
+        text = Text()
+        if not snap:
+            text.append("waiting for Ollama…", style="dim")
+        else:
+            text.append("LOADED\n", style="bold")
+            if snap.loaded:
+                for view in snap.loaded:
+                    text.append(f"{view.tag} · {view.context or '?'}\n", style="green")
+            else:
+                text.append("  none\n", style="dim")
+            text.append("\nCODER\n", style="bold")
+            coder = snap.recommended_coder or snap.best_coder
+            if coder:
+                style = "cyan" if coder.installed else "yellow"
+                text.append(f"{coder.tag}\n", style=style)
+                text.append(f"  {coder.status}\n", style="dim")
+                if not coder.installed and snap.best_coder:
+                    text.append(f"  fallback {snap.best_coder.tag}\n", style="dim")
+            else:
+                text.append("  none installed\n", style="yellow")
+            text.append(
+                f"\nMEM {snap.memory.free_gb:.0f}G free / {snap.memory.total_gb:.0f}G\n",
+                style="dim",
+            )
+            text.append(
+                "LOGIN installed\n" if snap.login_installed else "LOGIN not installed\n",
+                style="dim",
+            )
+            text.append(f"WS {self.settings.workspace}\n", style="dim")
+        self.query_one("#system-panel", Static).update(text)
+
+    async def _render_models(self) -> None:
+        snap = self.snapshot
+        if not snap:
+            return
+        signature = tuple(
+            (v.tag, v.installed, v.loaded, v.context) for v in snap.sorted_models
+        )
+        if signature == self._model_signature:
+            return
+        self._model_signature = signature
+        list_view = self.query_one("#model-list", ListView)
+        await list_view.clear()
+        for view in snap.sorted_models:
+            await list_view.append(ModelListItem(view))
+        current = self.selected_model or (
+            snap.chat_selection.tag if snap.chat_selection else None
+        )
+        if current:
+            for index, view in enumerate(snap.sorted_models):
+                if view.tag == current:
+                    list_view.index = index
+                    break
+        else:
+            installed = [v for v in snap.sorted_models if v.installed]
+            if installed:
+                self.selected_model = installed[0].tag
+                list_view.index = snap.sorted_models.index(installed[0])
+
+    # ---------------------------------------------------------------- events
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        if isinstance(item, ModelListItem):
+            self.selected_model = item.view.tag
+            self._render_status()
+            self.query_one("#prompt", Input).focus()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = event.value.strip()
+        event.input.value = ""
+        if not value:
+            return
+        if value.startswith("/"):
+            await self.handle_command(value)
+            return
+        await self.send(value)
+
+    # ---------------------------------------------------------------- chat
+    def current_selection(self):
+        if not self.snapshot:
+            return None
+        return choose(
+            self.ai_task,
+            self.snapshot.views,
+            self.snapshot.potential_free_gb,
+            preferred=self.selected_model,
+            max_context=self.settings.max_context,
+        )
+
+    async def add_message(self, role: str, text: str) -> Markdown:
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        widget = Markdown(text, classes=f"message {role}")
+        await scroll.mount(widget)
+        scroll.scroll_end(animate=False)
+        return widget
+
+    async def send(self, text: str) -> None:
+        if self._streaming:
+            await self.add_message("system", "_Still generating — wait for the current reply._")
+            return
+        if not self.snapshot:
+            await self.add_message("system", "_Ollama is not reachable yet._")
+            return
+        selection = self.current_selection()
+        if not selection or not selection.model:
+            await self.add_message(
+                "system",
+                "_No local model is installed. Run `ollama pull qwen2.5-coder:14b`._",
+            )
+            return
+        await self._make_room(selection.model.tag)
+        selection = self.current_selection()
+        if not selection or not selection.model:
+            await self.add_message("system", "_No model available after eviction._")
+            return
+        self.history.append({"role": "user", "content": text})
+        await self.add_message("you", text)
+        self._assistant = await self.add_message("assistant", "…")
+        self._streaming = True
+        if self.session is None:
+            self.session = SessionWriter.create(selection.model.tag)
+        self.session.append("user", text)
+        self.run_worker(self._stream_reply(selection, text), exclusive=True)
+
+    async def _make_room(self, keep_tag: str) -> None:
+        """Unload other resident models so the selected model can use a real context."""
+        if not self.snapshot:
+            return
+        others = [v.tag for v in self.snapshot.loaded if v.tag != keep_tag]
+        if not others:
+            return
+        for tag in others:
+            try:
+                await self.ollama.unload(tag)
+            except Exception:
+                pass
+        await self.add_message("system", f"Unloaded {', '.join(others)} to free memory.")
+        await self.refresh_snapshot()
+
+    async def _stream_reply(self, selection, text: str) -> None:
+        assert self._assistant is not None
+        messages = [{"role": "system", "content": system_prompt(self.ai_task)}]
+        messages.extend(self.history[-20:])
+        chunks: list[str] = []
+        stats = ""
+        last_update = 0.0
+        try:
+            think = False if selection.model.spec.thinking else None
+            async for chunk in self.ollama.chat_stream(
+                selection.model.tag,
+                messages,
+                context=selection.context,
+                temperature=self.settings.temperature,
+                think=think,
+            ):
+                if chunk.content:
+                    chunks.append(chunk.content)
+                    now = time.monotonic()
+                    if now - last_update > 0.06:
+                        await self._assistant.update("".join(chunks))
+                        last_update = now
+                if chunk.done:
+                    stats = (
+                        f"\n\n`{selection.model.tag} · {selection.context} ctx · "
+                        f"{chunk.eval_count} tok · {chunk.total_duration_ns / 1e9:.1f}s`"
+                    )
+            answer = "".join(chunks).strip()
+            if not answer:
+                raise RuntimeError("the model returned no content")
+            await self._assistant.update(answer + stats)
+            self.history.append({"role": "assistant", "content": answer})
+            if self.session:
+                self.session.append("assistant", answer, model=selection.model.tag)
+        except Exception as exc:
+            await self._assistant.update(f"**Local model error:** {exc}")
+            if self.session:
+                self.session.append("error", str(exc))
+        finally:
+            self._streaming = False
+            self.query_one("#prompt", Input).focus()
+
+    async def handle_command(self, value: str) -> None:
+        parts = value.split(maxsplit=1)
+        command = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        if command == "/help":
+            await self.add_message("system", HELP_TEXT)
+        elif command == "/models":
+            if not self.snapshot:
+                return
+            rows = "\n".join(
+                f"- `{v.tag}` — {v.status}" for v in self.snapshot.sorted_models
+            )
+            await self.add_message("system", rows)
+        elif command == "/model":
+            if not self.snapshot or arg not in self.snapshot.views:
+                await self.add_message("system", f"Unknown model `{arg}`. Try `/models`.")
+                return
+            if not self.snapshot.views[arg].installed:
+                await self.add_message("system", f"`{arg}` is not installed yet.")
+                return
+            self.selected_model = arg
+            self._render_status()
+            await self.add_message("system", f"Model set to `{arg}`.")
+        elif command in {"/chat", "/code", "/reason", "/vision", "/fast"}:
+            self.ai_task = Task(command[1:])
+            selection = self.current_selection()
+            if selection and selection.model:
+                self.selected_model = selection.model.tag
+            self._render_status()
+            hint = " · press F2 to open Qwen Code" if self.ai_task is Task.CODE else ""
+            await self.add_message(
+                "system",
+                f"Mode: **{mode_label(self.ai_task)}** · `{self.selected_model}`{hint}",
+            )
+        elif command in {"/open", "/qwen"}:
+            await self.action_launch_code(arg or None)
+        elif command == "/codex":
+            await self.action_launch_codex(arg or None)
+        elif command == "/claude":
+            await self.action_launch_claude(arg or None)
+        elif command == "/clients":
+            rows = "\n".join(
+                f"- **{item.name}** — {item.capability} · `{item.model}` · "
+                f"{'ready' if item.installed else 'missing'}\n  {item.detail}"
+                for item in local_clients()
+            )
+            await self.add_message("system", rows)
+        elif command == "/status":
+            await self.refresh_snapshot()
+            self._render_status()
+            self._render_system()
+            await self.add_message("system", "Status refreshed.")
+        elif command == "/free":
+            if self.snapshot:
+                for view in self.snapshot.loaded:
+                    try:
+                        await self.ollama.unload(view.tag)
+                    except Exception:
+                        pass
+                await self.refresh_snapshot()
+            await self.add_message("system", "Resident models unloaded.")
+        elif command == "/clear":
+            await self.clear_chat()
+        elif command == "/quit":
+            self.exit()
+        else:
+            await self.add_message("system", f"Unknown command `{command}`. Try `/help`.")
+
+    async def clear_chat(self) -> None:
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        await scroll.remove_children()
+        self.history.clear()
+        self.session = None
+        await self.add_message("system", "_New conversation._")
+
+    # ---------------------------------------------------------------- actions
+    async def action_refresh(self) -> None:
+        await self.refresh_snapshot()
+
+    async def action_clear_chat(self) -> None:
+        await self.clear_chat()
+
+    async def action_cycle_model(self) -> None:
+        if not self.snapshot:
+            return
+        installed = [v.tag for v in self.snapshot.sorted_models if v.installed]
+        if not installed:
+            return
+        try:
+            index = installed.index(self.selected_model or "")
+        except ValueError:
+            index = -1
+        self.selected_model = installed[(index + 1) % len(installed)]
+        self._render_status()
+        await self.add_message("system", f"Model: `{self.selected_model}`")
+
+    async def _launch_client(self, client: str, path: str | None = None) -> None:
+        info = {item.key: item for item in local_clients()}.get(client)
+        if info is None or not info.installed:
+            name = info.name if info else client
+            await self.add_message("system", f"`{name}` is not installed or not on PATH.")
+            return
+        target = (
+            Path(path).expanduser().resolve()
+            if path
+            else Path(self.settings.workspace).expanduser().resolve()
+        )
+        if not target.is_dir():
+            target = Path.cwd()
+        if not target.is_dir():
+            await self.add_message("system", f"Not a directory: `{target}`")
+            return
+        if not self.snapshot:
+            await self.refresh_snapshot()
+        selection = choose(
+            Task.AGENT,
+            self.snapshot.views if self.snapshot else {},
+            self.snapshot.memory.free_gb if self.snapshot else None,
+            max_context=self.settings.max_context,
+        )
+        try:
+            plan = plan_launch(
+                client,
+                target,
+                self.settings,
+                agent_model=selection.tag or "gemma4:12b",
+            )
+        except ValueError as exc:
+            await self.add_message("system", f"Could not launch {info.name}: {exc}")
+            return
+        note = f" — {plan.note}" if plan.note else ""
+        await self.add_message(
+            "system",
+            f"Opening **{info.name}** with `{plan.model}` in `{target}`{note}…",
+        )
+        try:
+            with self.suspend():
+                subprocess.call(
+                    plan.argv,
+                    cwd=str(plan.cwd),
+                    env=plan.env,
+                )
+        finally:
+            await self.refresh_snapshot()
+
+    async def action_launch_code(self, path: str | None = None) -> None:
+        await self._launch_client("qwen", path)
+
+    async def action_launch_codex(self, path: str | None = None) -> None:
+        await self._launch_client("codex", path)
+
+    async def action_launch_claude(self, path: str | None = None) -> None:
+        await self._launch_client("claude", path)

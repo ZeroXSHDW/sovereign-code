@@ -1,0 +1,91 @@
+# Architecture
+
+## Modules
+
+| Module | Responsibility |
+| --- | --- |
+| `config.py` | XDG paths, TOML settings, project root, login paths |
+| `models.py` | Model catalog, `/api/tags` + `/api/ps` merge, display views |
+| `router.py` | Task→model priority, context fitting against free RAM, system prompts |
+| `ollama.py` | Async Ollama client, NDJSON streaming, pull progress |
+| `gateway.py` | LiteLLM `/v1/models` probe |
+| `system.py` | macOS memory, disk, ports, launch agent, client paths |
+| `status.py` | Single `Snapshot` used by CLI and TUI |
+| `sessions.py` | Append-only JSONL conversations, mode 0600 |
+| `tui/app.py` | Textual dashboard, streaming chat, suspend-to-Qwen |
+| `cli.py` | `sovereign` commands and login agent installer |
+
+## Data flow
+
+1. The dashboard calls `status.collect()` every 2.5 s.
+2. `collect()` gathers Ollama version/tags/ps, gateway models, memory, disk,
+   ports, and login-agent state concurrently.
+3. `models.build_views()` merges installed tags with the catalog and marks the
+   loaded model and its real context.
+4. `router.choose()` selects a model for the current task and the largest context
+   that fits; the TUI and `sovereign code` share this logic.
+5. Before a turn, `_make_room()` unloads any other resident model so the
+   selected model gets a real context instead of a 2k fallback.
+6. A prompt is sent to `/api/chat` with `stream: true`. The assistant Markdown
+   widget is updated as tokens arrive, then the exchange is appended to a JSONL
+   session.
+
+## Context fitting
+
+```text
+estimated_kv_gb ≈ max(0.35, weights_gb × context/20480 × 0.22)
+total_gb        = weights_gb + estimated_kv_gb
+pick the largest context in (20480, 16384, 8192, 4096, 2048)
+where total_gb ≤ free_gb × 0.85
+```
+
+This is deliberately conservative: the goal is to avoid paging the KV cache,
+not to squeeze out the last token. Tested on 24 GB unified memory: the 14B
+coder is stable at 20,480 tokens and fails (empty output) at 24,576 or 32,768,
+so its catalog ceiling is 20,480. Gemma 12B reaches 32k only with
+`think:false`; under pressure the router drops to 16k or 8k.
+
+## Local clients
+
+`clients.py` is a pure planner: it detects commands, writes
+`~/.codex/local.config.toml`, and builds argv/env for each client without
+mutating the current process. The TUI and CLI share `plan_launch`.
+
+- Agent clients (Qwen Code, OpenCode) get the verified tool-calling model.
+- Chat clients (Codex, Claude Code) get loopback gateway settings only.
+- Wrappers are written to `~/.local/bin/{qwen,codex,claude}-local`.
+
+The capability split is intentional. Ollama's streamed tool calls do not survive
+the LiteLLM translation reliably enough for Codex or Claude Code to edit files,
+so the project routes edits to Qwen Code rather than pretending otherwise.
+
+## TUI event loop
+
+- `on_mount` builds the shell, adds the welcome message, starts the 2.5 s refresh.
+- `on_input_submitted` handles slash commands or starts a `run_worker` chat task.
+- `_stream_reply` consumes `OllamaClient.chat_stream` and updates a `Markdown`
+  widget in place; it never blocks the refresh timer.
+- `sovereign free` and the TUI `/free` command unload residents on demand.
+- `F2` / `F4` / `F6` use Textual's `suspend()` to hand the real terminal to
+  Qwen Code, Codex, or Claude Code, then refresh on return.
+- `/qwen`, `/codex`, and `/claude` do the same from the input line;
+  `/clients` prints the capability matrix without leaving the dashboard.
+
+## Login agent
+
+The plist runs `open -a Terminal <bin/sovereign-dashboard.command>`. The command
+uses the project venv (or `python3 -m sovereign_code`) and is independent of the
+user's shell config. `install-login` is idempotent and `uninstall-login` removes
+both the plist and the loaded job.
+
+## Failure behaviour
+
+- Ollama offline: the dashboard stays usable and shows `○ offline`; chat reports
+  a clear error instead of crashing.
+- Gateway offline: yellow status, chat still works (it talks to Ollama directly).
+- Missing 14B: status/doctor show the 7B fallback and the exact pull command.
+- Missing Qwen: `F2` reports it; `sovereign code` exits with the install hint.
+- Missing Codex profile: `F4` prints the `sovereign install-clients` fix instead
+  of launching, so Codex never falls back to a cloud account.
+- Chat-only clients: `sovereign clients` and `doctor` label Codex and Claude
+  Code as chat-only for local edits; edits are routed to Qwen Code.

@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+# Resolve symlinks so `~/.local/bin/sovereign` still finds the project root.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$DIR/$SOURCE" ;;
+  esac
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+if [ -x "$ROOT/.venv/bin/sovereign" ]; then
+  exec "$ROOT/.venv/bin/sovereign" "$@"
+fi
+
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /usr/bin/env python3 -m sovereign_code "$@"

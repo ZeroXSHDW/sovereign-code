@@ -1,0 +1,98 @@
+Screen {
+    background: #0b0b12;
+    color: #e8e8f2;
+}
+
+Header {
+    background: #14141f;
+    color: #b794f4;
+}
+
+Footer {
+    background: #14141f;
+    color: #8a8aa0;
+}
+
+#body {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 38;
+    min-width: 30;
+    border-right: solid #2a2a3a;
+    padding: 0 1;
+}
+
+#main {
+    width: 1fr;
+}
+
+#chat-scroll {
+    height: 1fr;
+    padding: 1 2;
+}
+
+#prompt {
+    dock: bottom;
+    margin: 1 2;
+    border: tall #7c5cff;
+    background: #12121c;
+}
+
+#statusbar {
+    height: 1;
+    background: #14141f;
+    color: #a0a0b8;
+    padding: 0 1;
+}
+
+.section-title {
+    color: #b794f4;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+.message {
+    margin: 1 0;
+    padding: 0 1;
+    width: 100%;
+}
+
+.message.you {
+    border-left: solid #28cd41;
+}
+
+.message.assistant {
+    border-left: solid #b794f4;
+}
+
+.message.system {
+    color: #8a8aa0;
+    border-left: solid #3a3a50;
+}
+
+.hint {
+    height: 1;
+    color: #6a6a85;
+    padding: 0 2;
+}
+
+.panel {
+    margin-top: 1;
+    color: #a0a0b8;
+}
+
+#model-list {
+    height: auto;
+    max-height: 45%;
+    background: transparent;
+}
+
+ListView > ListItem {
+    padding: 0 1;
+}
+
+ListView > ListItem.--highlight {
+    background: #24243a;
+}

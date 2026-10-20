@@ -80,6 +80,20 @@ def test_index_path_is_stable(monkeypatch, tmp_path: Path) -> None:
     assert index_path_for(Path("/tmp/foo")) == index_path_for(Path("/tmp/foo"))
 
 
+def test_search_query_uses_store_and_embedding(monkeypatch, tmp_path: Path) -> None:
+    from sovereign_code.search import IndexStore, search_query
+
+    store = IndexStore(tmp_path / "idx.sqlite")
+    store.clear()
+    store.add("a.py", 1, "gateway restart", [1.0, 0.0])
+    store.add("b.py", 1, "unrelated", [0.0, 1.0])
+    store.commit()
+    store.close()
+    monkeypatch.setattr("sovereign_code.search.embed", lambda *a, **k: [[0.9, 0.1]])
+    results = search_query("http://gw", tmp_path / "idx.sqlite", "restart", top=2)
+    assert results[0].path == "a.py"
+
+
 def test_embed_integration_optional() -> None:
     try:
         vectors = embed(

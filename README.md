@@ -207,7 +207,9 @@ files, and a **reviewer** critiques the result. `--yes` auto-approves the agent'
 tool calls for unattended runs; `--no-review` skips the final stage. This is the
 local version of end-to-end, multi-model coding — one or two models resident at
 a time, swapped automatically by Ollama. `sovereign memory add "…"` stores a per-folder note that is injected
-into every dashboard chat, so project preferences persist. `sovereign clone
+into every dashboard chat, so project preferences persist. If a project has an
+`AGENTS.md` or `CLAUDE.md`, that too is injected into the dashboard chat, `sovereign
+code`, and `sovereign pipeline` automatically. `sovereign clone
 <url>` bootstraps a GitHub repo under `~/Documents/projects/` (then
 `sovereign index` it for search).
 

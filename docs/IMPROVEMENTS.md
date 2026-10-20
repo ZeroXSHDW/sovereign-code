@@ -110,6 +110,11 @@ Sovereign Code keeps the idea and changes the foundation.
   a plan, then real file changes, then a critique. `sovereign verify --embedding`
   checks the embedding model, and `sovereign sessions --export` dumps history to
   JSONL for portability.
+- **Project context is automatic.** `AGENTS.md` and `CLAUDE.md` (plus project
+  memory) are injected into the dashboard chat, `sovereign code`, and the
+  pipeline, so a repo's own instructions steer every model. Dashboard `/search`
+  now renders results inline instead of shelling out, and `sovereign doctor
+  --fix` installs the embedding model when it is missing.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -121,7 +126,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 94 pytest tests cover model merging, router context behaviour, config,
+- 96 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

@@ -18,7 +18,7 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Ma
 
 from ..config import Settings
 from ..clients import local_clients, plan_launch
-from ..memory import read_memory
+from ..memory import project_context
 from ..models import ModelView
 from ..ollama import OllamaClient
 from ..router import Task, choose, mode_label, system_prompt
@@ -348,9 +348,9 @@ class SovereignApp(App[None]):
     async def _stream_reply(self, selection, text: str) -> None:
         assert self._assistant is not None
         system = system_prompt(self.ai_task)
-        memory_text = self._project_memory()
-        if memory_text:
-            system += "\n\nProject memory (follow these notes):\n" + memory_text
+        context = self._project_memory()
+        if context:
+            system += "\n\nProject context (follow these notes):\n" + context
         messages = [{"role": "system", "content": system}]
         messages.extend(self.history[-20:])
         chunks: list[str] = []
@@ -451,8 +451,10 @@ class SovereignApp(App[None]):
             if not arg:
                 await self.add_message("system", "Usage: `/search <query>`")
                 return
-            workspace = str(Path(self.settings.workspace).expanduser())
-            await self._run_cli("search", arg, "--path", workspace)
+            workspace = Path(self.settings.workspace).expanduser()
+            if not workspace.is_dir():
+                workspace = Path.cwd()
+            await self._search_inline(arg, workspace)
         elif command == "/index":
             workspace = str(Path(self.settings.workspace).expanduser())
             await self._run_cli("index", arg or workspace)
@@ -510,8 +512,30 @@ class SovereignApp(App[None]):
         cwd = Path(self.settings.workspace).expanduser() if self.settings.workspace else Path.cwd()
         if not cwd.is_dir():
             cwd = Path.cwd()
-        content = read_memory(cwd)
-        return "\n".join(content.strip().splitlines()[1:]).strip()
+        return project_context(cwd)
+
+    async def _search_inline(self, query: str, root: Path) -> None:
+        from ..search import index_path_for, search_query
+
+        db = index_path_for(root.resolve())
+        if not db.is_file():
+            await self.add_message("system", f"No index for {root}. Run `/index` first.")
+            return
+        try:
+            results = await asyncio.to_thread(
+                search_query, self.settings.ollama_url, db, query, "nomic-embed-text", 5
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced in the chat pane
+            await self.add_message("system", f"Search failed: {exc}")
+            return
+        if not results:
+            await self.add_message("system", "No matching chunks.")
+            return
+        lines = [f"**Search**: `{query}`"]
+        for result in results:
+            snippet = " ".join(result.text.split())[:120]
+            lines.append(f"- `{result.path}:{result.line}` · {result.score:.2f}\n  {snippet}")
+        await self.add_message("system", "\n".join(lines))
 
     async def _run_cli(self, *args: str) -> None:
         try:

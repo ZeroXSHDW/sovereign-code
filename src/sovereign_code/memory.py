@@ -22,6 +22,30 @@ def memory_path(cwd: Path | None = None) -> Path:
     return path
 
 
+PROJECT_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def project_context(cwd: Path | None = None, max_chars: int = 6000) -> str:
+    """Concatenate AGENTS.md/CLAUDE.md and project memory for prompt injection."""
+    resolved = (cwd or Path.cwd()).resolve()
+    parts: list[str] = []
+    for name in PROJECT_CONTEXT_FILES:
+        path = resolved / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n…[truncated]"
+        parts.append(f"# {name}\n{text}")
+    body = "\n".join(read_memory(resolved).strip().splitlines()[1:]).strip()
+    if body:
+        parts.append(f"# Project memory\n{body}")
+    return "\n\n".join(parts)
+
+
 def read_memory(cwd: Path | None = None) -> str:
     try:
         return memory_path(cwd).read_text(encoding="utf-8")

@@ -237,6 +237,22 @@ class IndexStore:
         self.conn.close()
 
 
+def search_query(
+    ollama_url: str,
+    db_path: Path,
+    query: str,
+    model: str = DEFAULT_EMBED,
+    top: int = 5,
+) -> list["SearchResult"]:
+    """Embed a query and return the top matching chunks from an existing index."""
+    store = IndexStore(db_path)
+    try:
+        vector = embed(ollama_url, model, [query])[0]
+        return store.search(vector, top=top)
+    finally:
+        store.close()
+
+
 def build_index(
     root: Path,
     ollama_url: str,

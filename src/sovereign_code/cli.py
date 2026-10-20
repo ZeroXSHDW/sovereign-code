@@ -49,9 +49,10 @@ from .search import (
     build_index,
     embed,
     index_path_for,
+    search_query,
 )
 from .skills import list_skills, read_skill, render_skill
-from .memory import add_memory, clear_memory, read_memory
+from .memory import add_memory, clear_memory, project_context, read_memory
 from .stats import collect_stats, human_size
 from .summarize import SourceError, complete, read_text_source, summarize_text
 from .models import build_views, sort_views
@@ -589,6 +590,15 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
 
     run("dashboard launcher", _launcher)
 
+    if not any("embed" in view.tag for view in snap.installed):
+        def _embedding() -> str:
+            code = _pull(settings, "nomic-embed-text", "embedding model")
+            if code != 0:
+                raise RuntimeError("pull failed")
+            return "pulled nomic-embed-text"
+
+        run("embedding model", _embedding)
+
     if not qwen_memory_path().is_file():
         def _rules() -> str:
             path = qwen_memory_path()
@@ -663,15 +673,11 @@ def _search(settings: Settings, query: str, path: str, model: str, top: int) -> 
     if not db.is_file():
         console.print(f"[red]No index for {root}.[/] Run: sovereign index {path or '.'}")
         return 1
-    store = IndexStore(db)
     try:
-        vector = embed(settings.ollama_url, model, [query])[0]
-        results = store.search(vector, top=top)
+        results = search_query(settings.ollama_url, db, query, model=model, top=top)
     except EmbedError as exc:
         console.print(f"[red]{exc}[/]")
         return 1
-    finally:
-        store.close()
     if not results:
         console.print("[dim]No matching chunks.[/]")
         return 0
@@ -936,7 +942,8 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
     os.environ["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
     args = ["qwen", "--model", tag, "--approval-mode", "yolo" if yolo else "default"]
     if prompt:
-        args.extend(["-p", prompt])
+        context = project_context(target)
+        args.extend(["-p", (context + "\n\n" + prompt) if context else prompt])
     os.execvp(args[0], args)
     return 0
 
@@ -1233,10 +1240,13 @@ def _pipeline(
         )
 
     def implement_fn(prompt_text: str, plan_text: str) -> tuple[bool, str]:
+        context = project_context(target)
         combined = (
             f"{prompt_text}\n\nImplementation plan:\n{plan_text}\n\n"
             "Implement it now: create or edit the files."
         )
+        if context:
+            combined = context + "\n\n" + combined
         env = os.environ.copy()
         env["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
         command = [

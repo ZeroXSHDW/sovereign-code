@@ -94,21 +94,20 @@ async def test_session_retention_disabled_by_default(monkeypatch, tmp_path):
     assert keep.exists()
 
 
-async def test_search_command_delegates(monkeypatch):
+async def test_search_command_delegates_inline(monkeypatch):
     calls = []
 
-    async def fake_run_cli(*args):
-        calls.append(args)
+    async def fake_search(query, root):
+        calls.append((query, root))
 
     app = SovereignApp(settings=Settings(), demo=True)
-    app._run_cli = fake_run_cli
+    app._search_inline = fake_search
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await app.handle_command("/search gateway restart")
         await pilot.pause()
     assert calls
-    assert calls[0][0] == "search"
-    assert "gateway restart" in calls[0]
+    assert calls[0][0] == "gateway restart"
 
 
 async def test_backup_command_delegates(monkeypatch):

@@ -60,3 +60,35 @@ async def test_browse_action_prefills_prompt():
         prompt = app.query_one("#prompt")
         assert prompt.value == "/browse "
         assert prompt.cursor_position == len("/browse ")
+
+
+async def test_session_retention_prunes_on_start(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.setattr("sovereign_code.sessions.SESSIONS_DIR", tmp_path)
+    stale = tmp_path / "20200101-000000-old.jsonl"
+    stale.write_text(
+        '{"type":"session","model":"m"}\n{"type":"message","role":"user","content":"x"}\n',
+        encoding="utf-8",
+    )
+    os.utime(stale, (1, 1))
+    settings = Settings(session_retention_days=30, session_keep=0)
+    app = SovereignApp(settings=settings, demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+    assert not stale.exists()
+
+
+async def test_session_retention_disabled_by_default(monkeypatch, tmp_path):
+    import os
+
+    monkeypatch.setattr("sovereign_code.sessions.SESSIONS_DIR", tmp_path)
+    keep = tmp_path / "20200101-000000-old.jsonl"
+    keep.write_text('{"type":"session","model":"m"}\n', encoding="utf-8")
+    os.utime(keep, (1, 1))
+    app = SovereignApp(settings=Settings(), demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+    assert keep.exists()

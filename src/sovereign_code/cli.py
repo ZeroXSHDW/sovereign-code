@@ -36,9 +36,11 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
+from .backup import create_backup
 from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
 from .browser.executor import chromium_path
 from .logs import TARGETS, log_path, tail_lines
+from .summarize import SourceError, read_text_source, summarize_text
 from .models import build_views, sort_views
 from .ollama import OllamaClient
 from .router import Task, choose, mode_label
@@ -53,6 +55,12 @@ console = Console()
 GATEWAY_WATCHDOG = (
     Path.home() / "Library" / "LaunchAgents" / "com.user.ailocalgateway.watchdog.plist"
 )
+
+DEFAULT_QWEN_RULES = """# Sovereign Code local rules
+- Everything runs on this machine; never send code or data to a network service.
+- Prefer the verified local agent model (gemma4:12b) for edits and tool calls.
+- Keep generated changes minimal and reviewable.
+"""
 
 
 def _settings() -> Settings:
@@ -434,6 +442,103 @@ def _browse(args, settings: Settings) -> int:
     if audit is not None:
         console.print(f"[dim]Audit: {audit.path}[/]")
     return 0 if result.stopped in {"done", "handoff", "cancelled"} else 1
+
+
+def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
+    from .clients import install_client_wrappers, write_codex_profile
+    from .config import write_default_config
+
+    rows: list[tuple[str, str, str]] = []
+
+    def run(label: str, fn) -> None:
+        try:
+            result = fn()
+            rows.append(("[green]FIXED[/]", label, str(result)))
+        except Exception as exc:  # noqa: BLE001 - surfaced in the table
+            rows.append(("[red]FAILED[/]", label, str(exc)))
+
+    run("config", lambda: write_default_config())
+    if not login_agent_installed():
+        run("login agent", lambda: (_install_login(False), "installed")[1])
+    run("client wrappers", lambda: f"{len(install_client_wrappers())} wrappers")
+    run("codex profile", lambda: write_codex_profile())
+
+    def _launcher() -> str:
+        command = dashboard_command_path()
+        if not command.is_file():
+            raise FileNotFoundError(f"missing {command}")
+        command.chmod(0o755)
+        return "chmod +x"
+
+    run("dashboard launcher", _launcher)
+
+    if not qwen_memory_path().is_file():
+        def _rules() -> str:
+            path = qwen_memory_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(DEFAULT_QWEN_RULES, encoding="utf-8")
+            return str(path)
+
+        run("Qwen global rules", _rules)
+
+    table = Table(title="Applied fixes", header_style="bold #b794f4")
+    table.add_column("", width=7)
+    table.add_column("Item", style="bold")
+    table.add_column("Result", overflow="fold")
+    for status, label, result in rows:
+        table.add_row(status, label, result)
+    console.print(table)
+    console.print("[dim]Re-running doctor…[/]")
+    return _doctor(_snapshot(settings))
+
+
+def _backup(settings: Settings) -> int:
+    include = [LOCAL_AI_ROOT / "config" / "sovereign", LOCAL_AI_ROOT / "data"]
+    exclude = {LOCAL_AI_ROOT / "data": ("browser",)}
+    extra = {
+        LOCAL_AI_ROOT / "config" / "codex" / "local.config.toml": "config/codex/local.config.toml"
+    }
+    try:
+        path = create_backup(
+            include,
+            LOCAL_AI_ROOT / "backups",
+            exclude=exclude,
+            extra_files=extra,
+            root=LOCAL_AI_ROOT,
+        )
+    except Exception as exc:
+        console.print(f"[red]Backup failed:[/] {exc}")
+        return 1
+    console.print(f"[green]Backup[/] {path} ({path.stat().st_size / 1024:.1f} KB)")
+    console.print(
+        "[dim]Contains configs and data/ (sessions, logs, audit); excludes models, "
+        "venv, Codex caches, and the browser profile.[/]"
+    )
+    return 0
+
+
+def _summarize(
+    settings: Settings,
+    path: str | None,
+    url: str | None,
+    model: str,
+    max_chars: int,
+    max_tokens: int,
+) -> int:
+    try:
+        text = read_text_source(path=path, url=url, max_chars=max_chars)
+    except SourceError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    console.print(f"[dim]Summarizing {len(text)} chars via {model}…[/]")
+    try:
+        summary = summarize_text(settings.gateway_url, model, text, max_tokens=max_tokens)
+    except SourceError as exc:
+        console.print(f"[red]{exc}[/]")
+        console.print("[dim]Start the gateway: sovereign gateway --restart[/]")
+        return 1
+    console.print(Panel(Text(summary), title="summary", border_style="cyan"))
+    return 0
 
 
 def _doctor(snap: Snapshot) -> int:
@@ -859,7 +964,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("dashboard", help="open the live terminal dashboard (default)")
     sub.add_parser("status", help="one-shot system status")
     sub.add_parser("models", help="list installed and recommended models")
-    sub.add_parser("doctor", help="check the local stack and print fixes")
+    doctor = sub.add_parser("doctor", help="check the local stack and print fixes")
+    doctor.add_argument("--fix", action="store_true", help="apply the safe fixes automatically")
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
     verify.add_argument(
@@ -891,6 +997,15 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--models", default=None, help="comma-separated aliases")
     bench.add_argument("--tokens", type=int, default=64, help="output tokens per alias")
     bench.add_argument("--prompt", default=None, help="prompt to benchmark")
+
+    sub.add_parser("backup", help="archive configs and chat data to a local tarball")
+
+    summary = sub.add_parser("summarize", help="summarize a local file or URL")
+    summary.add_argument("path", nargs="?", default=None)
+    summary.add_argument("--url", default=None)
+    summary.add_argument("--model", default="local-chat")
+    summary.add_argument("--max-chars", type=int, default=24000)
+    summary.add_argument("--max-tokens", type=int, default=512)
 
     logs = sub.add_parser("logs", help="show the last lines of a local log")
     logs.add_argument("target", nargs="?", default="gateway", choices=TARGETS)
@@ -958,7 +1073,10 @@ def main(argv: list[str] | None = None) -> int:
         _models(_snapshot(settings))
         return 0
     if command == "doctor":
-        return _doctor(_snapshot(settings))
+        snap = _snapshot(settings)
+        if args.fix:
+            return _doctor_fix(settings, snap)
+        return _doctor(snap)
     if command == "verify":
         return _verify(_snapshot(settings), all_aliases=args.all, timeout=args.timeout)
     if command == "gateway":
@@ -988,6 +1106,17 @@ def main(argv: list[str] | None = None) -> int:
             else list(DEFAULT_MODELS)
         )
         return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
+    if command == "backup":
+        return _backup(settings)
+    if command == "summarize":
+        return _summarize(
+            settings,
+            args.path,
+            args.url,
+            args.model,
+            args.max_chars,
+            args.max_tokens,
+        )
     if command == "sessions":
         return _sessions(
             days=args.days,

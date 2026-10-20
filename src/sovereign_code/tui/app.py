@@ -20,7 +20,7 @@ from ..clients import local_clients, plan_launch
 from ..models import ModelView
 from ..ollama import OllamaClient
 from ..router import Task, choose, mode_label, system_prompt
-from ..sessions import SessionWriter
+from ..sessions import SessionWriter, prune_sessions, scan_sessions, select_prunable
 from ..status import Snapshot, collect
 from ..system import Memory
 from ..verify import CORE_ALIASES, AliasResult, probe_aliases
@@ -126,7 +126,18 @@ class SovereignApp(App[None]):
             self._apply_demo()
         else:
             await self.refresh_snapshot()
+        self._prune_sessions()
         self.set_interval(2.5, self.refresh_tick)
+
+    def _prune_sessions(self) -> None:
+        days = self.settings.session_retention_days
+        if days <= 0:
+            return
+        victims = select_prunable(
+            scan_sessions(), days=days, keep=self.settings.session_keep
+        )
+        if victims:
+            prune_sessions(victims)
 
     # ---------------------------------------------------------------- status
     async def refresh_tick(self) -> None:

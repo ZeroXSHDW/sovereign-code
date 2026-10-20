@@ -81,6 +81,13 @@ Sovereign Code keeps the idea and changes the foundation.
   watchdog, or dashboard log; `sovereign sessions` lists chats and prunes by
   age while always keeping the newest N; `sovereign gateway --restart` performs
   a real stop/start and waits for health.
+- **Self-repair and housekeeping.** `sovereign doctor --fix` applies the safe
+  fixes (config, login agent, wrappers, Codex profile, launcher, Qwen rules).
+  `sovereign backup` archives configs and chat data to a tarball that excludes
+  models, the venv, Codex caches, and the browser profile. Optional
+  `session_retention_days` prunes old chats at dashboard startup.
+- **Local summarization.** `sovereign summarize FILE` (or `--url`) reads a source
+  and returns a concise local-model summary without sending anything off-device.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -92,7 +99,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 40 pytest tests cover model merging, router context behaviour, config,
-  sessions/retention, logs, memory, gateway probes, client launch planning, and
-  headless TUI boot.
+- 69 pytest tests cover model merging, router context behaviour, config,
+  sessions/retention, logs, backup, summarization, browser policy/agent/executor,
+  memory, gateway probes, client launch planning, and headless TUI boot.
 - Textual `run_test` exercises the real widget tree without a network.

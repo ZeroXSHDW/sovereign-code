@@ -63,6 +63,9 @@ class Settings:
     theme: str = "sovereign"
     login_enabled: bool = True
     workspace: str = "~/Documents"
+    # 0 disables automatic pruning; the dashboard prunes at startup otherwise.
+    session_retention_days: float = 0.0
+    session_keep: int = 50
 
     @property
     def ollama_url(self) -> str:
@@ -99,6 +102,8 @@ class Settings:
             settings.default_model = None
         settings.max_context = max(2048, int(settings.max_context))
         settings.temperature = min(2.0, max(0.0, float(settings.temperature)))
+        settings.session_retention_days = max(0.0, float(settings.session_retention_days))
+        settings.session_keep = max(0, int(settings.session_keep))
         return settings
 
     def save(self) -> Path:
@@ -114,6 +119,8 @@ class Settings:
             f'theme = "{self.theme}"',
             f"login_enabled = {str(self.login_enabled).lower()}",
             f'workspace = "{self.workspace}"',
+            f"session_retention_days = {float(self.session_retention_days)}",
+            f"session_keep = {int(self.session_keep)}",
             "",
         ]
         self.config_path.write_text("\n".join(lines), encoding="utf-8")

@@ -65,6 +65,7 @@ Input commands: `/model <tag>`, `/models`, `/chat`, `/code`, `/reason`,
 | Context fitting spread across UI code | `router.py` estimates KV + weights against free RAM |
 | Client setup mutates many apps | Detects clients, writes only its own profile and `*-local` wrappers |
 | No session history | JSONL per conversation under `~/Documents/local-ai/data` |
+| Session retention | optional: `session_retention_days` / `session_keep` in `config.toml` |
 
 See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -117,8 +118,11 @@ sovereign                  # live dashboard
 sovereign status           # one-shot status
 sovereign models           # installed + recommended, with roles
 sovereign doctor           # checks and concrete fixes
+sovereign doctor --fix     # apply the safe fixes automatically
 sovereign verify           # tiny completion per core alias (--all for nine)
 sovereign bench            # tokens/sec for chosen aliases (--models a,b)
+sovereign backup           # tarball of configs + chat data
+sovereign summarize FILE   # or --url URL, via the local model
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]

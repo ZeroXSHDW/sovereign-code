@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 from dataclasses import asdict, fields as dc_fields
 import html
 import json
@@ -49,8 +50,10 @@ from .search import (
     embed,
     index_path_for,
 )
+from .skills import list_skills, read_skill, render_skill
+from .memory import add_memory, clear_memory, read_memory
 from .stats import collect_stats, human_size
-from .summarize import SourceError, read_text_source, summarize_text
+from .summarize import SourceError, complete, read_text_source, summarize_text
 from .models import build_views, sort_views
 from .ollama import OllamaClient
 from .router import Task, choose, mode_label
@@ -1062,6 +1065,111 @@ def _launch(client: str, path: str, yolo: bool = False) -> int:
     return 0
 
 
+def _consult(settings: Settings, prompt: str, models: list[str], tokens: int) -> int:
+    import httpx
+
+    try:
+        httpx.get(settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0).raise_for_status()
+    except httpx.HTTPError:
+        console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
+        return 1
+    for model in models:
+        console.print(f"[dim]Consulting {model}…[/]")
+        try:
+            answer = complete(
+                settings.gateway_url,
+                model,
+                [{"role": "user", "content": prompt}],
+                max_tokens=tokens,
+            )
+        except SourceError as exc:
+            console.print(f"[red]{model}: {exc}[/]")
+            continue
+        console.print(Panel(Text(answer), title=model, border_style="cyan"))
+    return 0
+
+
+def _skills(settings: Settings) -> int:
+    rows = list_skills()
+    if not rows:
+        console.print(
+            "[yellow]No skills yet.[/] Add Markdown files to ~/Documents/local-ai/config/skills/"
+        )
+        return 0
+    table = Table(title="Skills", header_style="bold #b794f4")
+    table.add_column("Name", style="bold")
+    table.add_column("Description")
+    for name, description in rows:
+        table.add_row(name, description)
+    console.print(table)
+    console.print("[dim]Run one: sovereign skill <name> --prompt '…'[/]")
+    return 0
+
+
+def _skill(settings: Settings, name: str | None, prompt: str | None, model: str, tokens: int) -> int:
+    if not name:
+        return _skills(settings)
+    template = read_skill(name)
+    if template is None:
+        console.print(f"[red]Unknown skill[/] {name}. Run: sovereign skills")
+        return 1
+    if not prompt:
+        console.print(Panel(Text(template), title=name, border_style="dim"))
+        console.print("[dim]Run it: sovereign skill " + name + " --prompt '…'[/]")
+        return 0
+    console.print(f"[dim]Running {name} via {model}…[/]")
+    try:
+        answer = complete(
+            settings.gateway_url,
+            model,
+            [{"role": "user", "content": render_skill(name, prompt)}],
+            max_tokens=tokens,
+        )
+    except SourceError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    console.print(Panel(Text(answer), title=name, border_style="cyan"))
+    return 0
+
+
+def _memory(settings: Settings, action: str, text: str | None, project: str | None) -> int:
+    cwd = Path(project).expanduser().resolve() if project else Path.cwd()
+    if action == "add":
+        if not text or not text.strip():
+            console.print("[red]Usage:[/] sovereign memory add 'note about this project'")
+            return 1
+        path = add_memory(text, cwd)
+        console.print(f"[green]Remembered[/] in {path}")
+        return 0
+    if action == "clear":
+        path = clear_memory(cwd)
+        console.print(f"[green]Cleared[/] {path}")
+        return 0
+    content = read_memory(cwd)
+    console.print(Panel(Text(content), title=f"Project memory · {cwd.name}", border_style="dim"))
+    return 0
+
+
+def _clone(settings: Settings, url: str, name: str | None) -> int:
+    if not url or not re.match(r"^(https?://|git@|ssh://)", url):
+        console.print("[red]Give a git URL[/] (https:// or git@).")
+        return 1
+    dest_root = Path.home() / "Documents" / "projects"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    target = dest_root / (name or url.rstrip("/").split("/")[-1].replace(".git", ""))
+    if target.exists():
+        console.print(f"[yellow]{target} already exists.[/]")
+        return 1
+    console.print(f"[dim]Cloning {url} into {target}…[/]")
+    result = subprocess.run(["git", "clone", url, str(target)], check=False)
+    if result.returncode != 0:
+        console.print("[red]git clone failed.[/]")
+        return 1
+    console.print(f"[green]Cloned[/] {target}")
+    console.print(f"[dim]Index it for search:[/] sovereign index {target}")
+    return 0
+
+
 def _install_clients() -> int:
     from .clients import write_codex_profile
 
@@ -1202,6 +1310,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="show disk usage across the local AI stack")
 
+    pull = sub.add_parser("pull", help="pull any Ollama model by tag")
+    pull.add_argument("model")
+
+    consult = sub.add_parser("consult", help="run one prompt through several models")
+    consult.add_argument("prompt")
+    consult.add_argument("--models", default=None, help="comma-separated aliases")
+    consult.add_argument("--tokens", type=int, default=400)
+
+    sub.add_parser("skills", help="list saved skill prompts")
+
+    skill = sub.add_parser("skill", help="show or run a saved skill prompt")
+    skill.add_argument("name", nargs="?", default=None)
+    skill.add_argument("--prompt", default=None)
+    skill.add_argument("--model", default="local-chat")
+    skill.add_argument("--tokens", type=int, default=800)
+
+    memory = sub.add_parser("memory", help="per-project memory injected into chat")
+    memory.add_argument("action", nargs="?", choices=("show", "add", "clear"), default="show")
+    memory.add_argument("text", nargs="?", default=None)
+    memory.add_argument("--project", default=None)
+
+    clone = sub.add_parser("clone", help="clone a GitHub repo into ~/Documents/projects")
+    clone.add_argument("url")
+    clone.add_argument("--name", default=None)
+
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
     launch.add_argument("client", choices=("qwen", "codex", "claude"))
     launch.add_argument("path", nargs="?", default=".")
@@ -1317,6 +1450,23 @@ def main(argv: list[str] | None = None) -> int:
         return _config(settings, get_key=args.get_key, set_value=args.set_value)
     if command == "stats":
         return _stats(settings)
+    if command == "pull":
+        return _pull(settings, args.model)
+    if command == "consult":
+        models = (
+            [name.strip() for name in args.models.split(",") if name.strip()]
+            if args.models
+            else ["local-chat", "local-reasoning"]
+        )
+        return _consult(settings, args.prompt, models, args.tokens)
+    if command == "skills":
+        return _skills(settings)
+    if command == "skill":
+        return _skill(settings, args.name, args.prompt, args.model, args.tokens)
+    if command == "memory":
+        return _memory(settings, args.action, args.text, args.project)
+    if command == "clone":
+        return _clone(settings, args.url, args.name)
     if command == "pull-recommended":
         return _pull_recommended(settings)
     if command == "install-login":

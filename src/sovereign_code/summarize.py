@@ -43,11 +43,12 @@ def read_text_source(
     return text
 
 
-def summarize_text(
+def complete(
     base_url: str,
     model: str,
-    text: str,
+    messages: list[dict[str, str]],
     max_tokens: int = 512,
+    temperature: float = 0.2,
     timeout: float = 180.0,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
@@ -61,11 +62,8 @@ def summarize_text(
                 headers={"Authorization": "Bearer local"},
                 json={
                     "model": model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": text},
-                    ],
-                    "temperature": 0.2,
+                    "messages": messages,
+                    "temperature": temperature,
                     "max_tokens": max_tokens,
                     "stream": False,
                 },
@@ -78,3 +76,24 @@ def summarize_text(
         return response.json()["choices"][0]["message"]["content"] or ""
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise SourceError("gateway returned a malformed completion") from exc
+
+
+def summarize_text(
+    base_url: str,
+    model: str,
+    text: str,
+    max_tokens: int = 512,
+    timeout: float = 180.0,
+    transport: httpx.BaseTransport | None = None,
+) -> str:
+    return complete(
+        base_url,
+        model,
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ],
+        max_tokens=max_tokens,
+        timeout=timeout,
+        transport=transport,
+    )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import subprocess
 import sys
 import time
@@ -17,6 +18,7 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Ma
 
 from ..config import Settings
 from ..clients import local_clients, plan_launch
+from ..memory import read_memory
 from ..models import ModelView
 from ..ollama import OllamaClient
 from ..router import Task, choose, mode_label, system_prompt
@@ -41,6 +43,8 @@ HELP_TEXT = """\
 - `/index [path]` — embed a directory for search
 - `/summarize <file|url>` — local-model summary
 - `/backup` — archive configs and chat data
+- `/skills`, `/skill <name>` — saved prompt templates
+- `/memory add <note>` — remember a project note (injected into chat)
 - `/free` — unload other models and free memory
 - `/clear` — new conversation
 - `/help` — this help
@@ -343,7 +347,11 @@ class SovereignApp(App[None]):
 
     async def _stream_reply(self, selection, text: str) -> None:
         assert self._assistant is not None
-        messages = [{"role": "system", "content": system_prompt(self.ai_task)}]
+        system = system_prompt(self.ai_task)
+        memory_text = self._project_memory()
+        if memory_text:
+            system += "\n\nProject memory (follow these notes):\n" + memory_text
+        messages = [{"role": "system", "content": system}]
         messages.extend(self.history[-20:])
         chunks: list[str] = []
         stats = ""
@@ -458,6 +466,10 @@ class SovereignApp(App[None]):
                 await self._run_cli("summarize", arg)
         elif command == "/backup":
             await self._run_cli("backup")
+        elif command == "/skills":
+            await self._run_cli("skills")
+        elif command == "/skill":
+            await self._run_cli("skill", *shlex.split(arg))
         elif command == "/free":
             if self.snapshot:
                 for view in self.snapshot.loaded:
@@ -493,6 +505,13 @@ class SovereignApp(App[None]):
         prompt.value = "/browse "
         prompt.cursor_position = len(prompt.value)
         prompt.focus()
+
+    def _project_memory(self) -> str:
+        cwd = Path(self.settings.workspace).expanduser() if self.settings.workspace else Path.cwd()
+        if not cwd.is_dir():
+            cwd = Path.cwd()
+        content = read_memory(cwd)
+        return "\n".join(content.strip().splitlines()[1:]).strip()
 
     async def _run_cli(self, *args: str) -> None:
         try:

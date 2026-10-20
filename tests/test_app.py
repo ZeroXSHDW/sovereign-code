@@ -135,3 +135,20 @@ async def test_config_coercion_helpers():
     assert _coerce_setting("hello", "") == "hello"
     assert _coerce_setting("", None) is None
     assert _coerce_setting("x", None) == "x"
+
+
+async def test_project_memory_notes(monkeypatch, tmp_path):
+    import sovereign_code.memory as memory_module
+
+    monkeypatch.setattr(memory_module, "DATA_DIR", tmp_path)
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    from sovereign_code.memory import add_memory
+
+    add_memory("always run ruff", cwd)
+    settings = Settings(workspace=str(cwd))
+    app = SovereignApp(settings=settings, demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+    assert "always run ruff" in app._project_memory()

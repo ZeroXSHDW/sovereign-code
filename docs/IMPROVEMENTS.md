@@ -100,6 +100,11 @@ Sovereign Code keeps the idea and changes the foundation.
   (`--get`, `--set`); `sovereign stats` reports per-component disk usage;
   `sovereign sessions --search` finds past chats; and `sovereign browse
   --screenshots` saves a PNG at each terminal state for review.
+- **Model and prompt management.** `sovereign pull <tag>` installs any Ollama
+  model; `sovereign consult` runs one prompt across several models; a Markdown
+  skills bank (code-review, write-tests, refactor, specify, security/legal/
+  financial review) runs with `sovereign skill`; per-project memory is injected
+  into chat; and `sovereign clone` bootstraps a GitHub repo.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -111,7 +116,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 86 pytest tests cover model merging, router context behaviour, config,
+- 89 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

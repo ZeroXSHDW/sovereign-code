@@ -128,6 +128,12 @@ sovereign search "query"   # find relevant chunks (--path DIR --top N)
 sovereign config           # view settings; --get KEY, --set KEY=VALUE
 sovereign stats            # disk usage across the stack
 sovereign sessions --search "term"   # search chat history
+sovereign pull <model>     # pull any Ollama model by tag
+sovereign consult "…"      # run one prompt across several models
+sovereign skills           # list saved prompt templates
+sovereign skill <name> --prompt "…"
+sovereign memory add "note" # per-project memory (show / clear)
+sovereign clone <url>      # clone a GitHub repo into ~/Documents/projects
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
@@ -170,6 +176,29 @@ when it needs you. In the dashboard, press `F8` (or `/browse <url> [task]`).
   `~/Documents/local-ai/data/browser/runs/`.
 
 Install: `pip install -e '.[browser]' && playwright install chromium`.
+
+## Skills, memory, and multi-model
+
+Saved prompt templates live in `~/Documents/local-ai/config/skills/` as Markdown
+files — `code-review`, `write-tests`, `refactor`, `explain`, `specify`,
+`security-review`, `financial-analysis`, and `legal-review`. `sovereign skills`
+lists them; `sovereign skill <name> --prompt "…"` runs one through the local
+model. Add your own by dropping a Markdown file with a `{{prompt}}` placeholder.
+
+```sh
+sovereign consult "what is the best way to X?" --models local-chat,local-reasoning
+sovereign skill code-review --prompt "$(cat src/app.py)"
+```
+
+`sovereign consult` runs one prompt through several models and prints each
+answer. `sovereign memory add "…"` stores a per-folder note that is injected
+into every dashboard chat, so project preferences persist. `sovereign clone
+<url>` bootstraps a GitHub repo under `~/Documents/projects/` (then
+`sovereign index` it for search).
+
+Honest limits: this is a 24 GB Mac. Models run one or two at a time (Ollama
+swaps automatically), MLX is already active for supported models, and "more
+speed" comes from model and context choice — not from any of these commands.
 
 ## Semantic code search
 

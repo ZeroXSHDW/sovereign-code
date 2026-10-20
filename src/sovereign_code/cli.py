@@ -36,6 +36,7 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
+from .browser.executor import chromium_path
 from .logs import TARGETS, log_path, tail_lines
 from .models import build_views, sort_views
 from .ollama import OllamaClient
@@ -427,6 +428,14 @@ def _doctor(snap: Snapshot) -> int:
         warn=True,
     )
     add(snap.gateway.up, "LiteLLM gateway", f"{len(snap.gateway.models)} models", "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway", warn=True)
+    browser_exe = chromium_path()
+    add(
+        browser_exe is not None,
+        "Browser engine",
+        str(browser_exe) if browser_exe else "not installed",
+        "pip install -e '.[browser]' && playwright install chromium",
+        warn=True,
+    )
     add(
         (LOCAL_AI_ROOT / "gateway" / "config.yaml").is_file(),
         "Local AI root",

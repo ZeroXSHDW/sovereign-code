@@ -90,6 +90,18 @@ OBSERVE_JS = """
 """
 
 
+def chromium_path() -> Path | None:
+    """Return Playwright's Chromium executable if it is installed, else None."""
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            candidate = Path(playwright.chromium.executable_path)
+        return candidate if candidate.exists() else None
+    except Exception:
+        return None
+
+
 class BrowserError(RuntimeError):
     """The page could not be observed or the action could not be executed."""
 

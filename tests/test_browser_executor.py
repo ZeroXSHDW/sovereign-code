@@ -95,3 +95,14 @@ def test_observe_fill_click_password_and_captcha(tmp_path: Path) -> None:
             assert captcha["captcha"] is True
         finally:
             session.close()
+
+
+def test_chromium_path_detects_installed_browser() -> None:
+    import importlib.util
+
+    if importlib.util.find_spec("playwright") is None:
+        pytest.skip("playwright not installed")
+    from sovereign_code.browser.executor import chromium_path
+
+    path = chromium_path()
+    assert path is not None and path.exists()

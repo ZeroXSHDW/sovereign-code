@@ -79,6 +79,29 @@ def probe_alias(
         )
 
 
+def check_embedding(
+    ollama_url: str,
+    model: str = "nomic-embed-text",
+    timeout: float = 60.0,
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[bool, str]:
+    """Confirm the embedding endpoint returns a real vector."""
+    base = ollama_url.rstrip("/")
+    if not base.startswith("http"):
+        base = f"http://{base}"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0), transport=transport) as client:
+            response = client.post(
+                f"{base}/api/embed", json={"model": model, "input": ["ok"]}
+            )
+        if response.status_code != 200:
+            return False, f"HTTP {response.status_code}"
+        dimension = len(response.json()["embeddings"][0])
+        return dimension > 0, f"{model} · {dimension}-dim"
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+        return False, exc.__class__.__name__
+
+
 def probe_aliases(
     base_url: str,
     aliases: tuple[str, ...] = CORE_ALIASES,

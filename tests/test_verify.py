@@ -64,3 +64,23 @@ def test_probe_aliases_keeps_order_and_covers_core_set() -> None:
     assert [result.alias for result in results] == ["local-agent", "local-claude"]
     assert all(result.ok for result in results)
     assert CORE_ALIASES == ("local-chat", "local-code", "local-agent", "local-claude")
+
+
+def test_check_embedding_ok() -> None:
+    from sovereign_code.verify import check_embedding
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"embeddings": [[0.1] * 768]})
+    )
+    ok, detail = check_embedding("http://gw", transport=transport)
+    assert ok is True
+    assert "768" in detail
+
+
+def test_check_embedding_http_error() -> None:
+    from sovereign_code.verify import check_embedding
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(500, text="down"))
+    ok, detail = check_embedding("http://gw", transport=transport)
+    assert ok is False
+    assert "500" in detail

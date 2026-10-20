@@ -134,6 +134,7 @@ sovereign skills           # list saved prompt templates
 sovereign skill <name> --prompt "…"
 sovereign memory add "note" # per-project memory (show / clear)
 sovereign clone <url>      # clone a GitHub repo into ~/Documents/projects
+sovereign pipeline "…"     # plan -> implement -> review across models
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
@@ -191,7 +192,21 @@ sovereign skill code-review --prompt "$(cat src/app.py)"
 ```
 
 `sovereign consult` runs one prompt through several models and prints each
-answer. `sovereign memory add "…"` stores a per-folder note that is injected
+answer.
+
+### Multi-model pipeline
+
+```sh
+sovereign pipeline "build a CLI that greets a name" --dir ~/projects/demo --yes
+sovereign pipeline "…" --plan-model local-reasoning --agent gemma4:12b --review-model local-agent
+```
+
+`sovereign pipeline` chains three models into one coding pass: a **planner**
+writes an implementation plan, **Qwen Code** (with the agent model) writes the
+files, and a **reviewer** critiques the result. `--yes` auto-approves the agent's
+tool calls for unattended runs; `--no-review` skips the final stage. This is the
+local version of end-to-end, multi-model coding — one or two models resident at
+a time, swapped automatically by Ollama. `sovereign memory add "…"` stores a per-folder note that is injected
 into every dashboard chat, so project preferences persist. `sovereign clone
 <url>` bootstraps a GitHub repo under `~/Documents/projects/` (then
 `sovereign index` it for search).

@@ -57,7 +57,9 @@ from .summarize import SourceError, complete, read_text_source, summarize_text
 from .models import build_views, sort_views
 from .ollama import OllamaClient
 from .router import Task, choose, mode_label
+from .pipeline import run_pipeline
 from .sessions import (
+    export_sessions,
     prune_sessions,
     scan_sessions,
     search_sessions,
@@ -65,7 +67,7 @@ from .sessions import (
 )
 from .status import Snapshot, collect
 from .system import command_exists, login_agent_installed, qwen_config_path, qwen_memory_path
-from .verify import CORE_ALIASES, EXPECTED_ALIASES, probe_aliases
+from .verify import CORE_ALIASES, EXPECTED_ALIASES, check_embedding, probe_aliases
 
 LABEL = "com.user.sovereign-code"
 console = Console()
@@ -162,7 +164,12 @@ def _models(snap: Snapshot) -> None:
     console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
 
 
-def _verify(snap: Snapshot, all_aliases: bool = False, timeout: float = 120.0) -> int:
+def _verify(
+    snap: Snapshot,
+    all_aliases: bool = False,
+    timeout: float = 120.0,
+    embedding: bool = False,
+) -> int:
     if not snap.gateway.up:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway")
         return 1
@@ -190,6 +197,11 @@ def _verify(snap: Snapshot, all_aliases: bool = False, timeout: float = 120.0) -
 
     passed = sum(1 for result in results if result.ok)
     failed = len(results) - passed + len(missing)
+    if embedding:
+        ok, detail = check_embedding(snap.settings.ollama_url)
+        mark = "[green]PASS[/]" if ok else "[red]FAIL[/]"
+        console.print(f"Embedding  {mark} {detail}")
+        failed += 0 if ok else 1
     style = "green" if failed == 0 else "red"
     console.print(f"[{style}]{passed}/{len(aliases)} aliases replied[/]")
     return 0 if failed == 0 else 1
@@ -338,7 +350,12 @@ def _sessions(
     dry_run: bool = False,
     limit: int = 20,
     search: str | None = None,
+    export: str | None = None,
 ) -> int:
+    if export:
+        count = export_sessions(Path(export))
+        console.print(f"[green]Exported {count} records[/] to {export}")
+        return 0
     if search:
         matches = search_sessions(search)
         if not matches:
@@ -1170,6 +1187,107 @@ def _clone(settings: Settings, url: str, name: str | None) -> int:
     return 0
 
 
+def _pipeline(
+    settings: Settings,
+    prompt: str,
+    directory: str,
+    plan_model: str,
+    agent: str,
+    review_model: str,
+    yes: bool,
+    no_review: bool,
+    tokens: int,
+) -> int:
+    import httpx
+
+    try:
+        httpx.get(settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0).raise_for_status()
+    except httpx.HTTPError:
+        console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
+        return 1
+    target = Path(directory).expanduser().resolve()
+    if not target.is_dir():
+        console.print(f"[red]Not a directory:[/] {target}")
+        return 1
+    if not command_exists("qwen"):
+        console.print("[red]Qwen Code CLI is not installed.[/]")
+        console.print("[dim]npm i -g @qwen-code/qwen-code (then sovereign install-clients)[/]")
+        return 1
+
+    def plan_fn(text: str) -> str:
+        return complete(
+            settings.gateway_url,
+            plan_model,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a staff engineer. Write a concise, ordered implementation "
+                        "plan: files to create or edit, key functions, and acceptance checks. "
+                        "Be specific and minimal."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            max_tokens=tokens,
+        )
+
+    def implement_fn(prompt_text: str, plan_text: str) -> tuple[bool, str]:
+        combined = (
+            f"{prompt_text}\n\nImplementation plan:\n{plan_text}\n\n"
+            "Implement it now: create or edit the files."
+        )
+        env = os.environ.copy()
+        env["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
+        command = [
+            "qwen",
+            "--model",
+            agent,
+            "--approval-mode",
+            "yolo" if yes else "default",
+            "-p",
+            combined,
+        ]
+        process = subprocess.run(
+            command, cwd=str(target), env=env, capture_output=True, text=True, check=False
+        )
+        output = (process.stdout or "") + (process.stderr or "")
+        return process.returncode == 0, output[-4000:]
+
+    def review_fn(plan_text: str, implementation: str) -> str:
+        return complete(
+            settings.gateway_url,
+            review_model,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict reviewer. Given the plan and the implementation "
+                        "log, list concrete problems, risks, and follow-ups. Be specific."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Plan:\n{plan_text}\n\nImplementation log:\n{implementation}",
+                },
+            ],
+            max_tokens=tokens,
+        )
+
+    console.print(
+        f"[bold]Pipeline[/] · plan={plan_model} · implement={agent} · review={review_model}"
+    )
+    try:
+        result = run_pipeline(prompt, plan_fn, implement_fn, None if no_review else review_fn)
+    except SourceError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    for stage in result.stages:
+        border = "green" if stage.ok else "red"
+        console.print(Panel(Text(stage.output), title=stage.name, border_style=border))
+    return 0 if result.succeeded else 1
+
+
 def _install_clients() -> int:
     from .clients import write_codex_profile
 
@@ -1237,6 +1355,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--fix", action="store_true", help="apply the safe fixes automatically")
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
+    verify.add_argument("--embedding", action="store_true", help="also check the embedding model")
     verify.add_argument(
         "--timeout", type=float, default=120.0, help="per-alias timeout in seconds"
     )
@@ -1303,6 +1422,17 @@ def build_parser() -> argparse.ArgumentParser:
     sessions.add_argument("--dry-run", action="store_true", help="show what --prune would delete")
     sessions.add_argument("--limit", type=int, default=20, help="rows to list")
     sessions.add_argument("--search", default=None, metavar="TEXT", help="search chat history")
+    sessions.add_argument("--export", default=None, metavar="PATH", help="export all sessions to JSONL")
+
+    pipeline = sub.add_parser("pipeline", help="plan -> implement -> review across models")
+    pipeline.add_argument("prompt")
+    pipeline.add_argument("--dir", default=".")
+    pipeline.add_argument("--plan-model", default="local-reasoning")
+    pipeline.add_argument("--agent", default="gemma4:12b")
+    pipeline.add_argument("--review-model", default="local-agent")
+    pipeline.add_argument("--yes", action="store_true", help="yolo-approve agent tool calls")
+    pipeline.add_argument("--no-review", action="store_true")
+    pipeline.add_argument("--tokens", type=int, default=700)
 
     config = sub.add_parser("config", help="view or edit sovereign config")
     config.add_argument("--set", dest="set_value", default=None, metavar="KEY=VALUE")
@@ -1394,7 +1524,12 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor_fix(settings, snap)
         return _doctor(snap)
     if command == "verify":
-        return _verify(_snapshot(settings), all_aliases=args.all, timeout=args.timeout)
+        return _verify(
+            _snapshot(settings),
+            all_aliases=args.all,
+            timeout=args.timeout,
+            embedding=args.embedding,
+        )
     if command == "gateway":
         if args.restart:
             return _gateway_restart(settings)
@@ -1445,6 +1580,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             limit=args.limit,
             search=args.search,
+            export=args.export,
         )
     if command == "config":
         return _config(settings, get_key=args.get_key, set_value=args.set_value)
@@ -1467,6 +1603,18 @@ def main(argv: list[str] | None = None) -> int:
         return _memory(settings, args.action, args.text, args.project)
     if command == "clone":
         return _clone(settings, args.url, args.name)
+    if command == "pipeline":
+        return _pipeline(
+            settings,
+            args.prompt,
+            args.dir,
+            args.plan_model,
+            args.agent,
+            args.review_model,
+            args.yes,
+            args.no_review,
+            args.tokens,
+        )
     if command == "pull-recommended":
         return _pull_recommended(settings)
     if command == "install-login":

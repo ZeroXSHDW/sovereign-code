@@ -78,3 +78,22 @@ def test_search_sessions(tmp_path: Path) -> None:
     assert matches[0]["role"] == "user"
     assert "gateway restart" in matches[0]["snippet"]
     assert search_sessions("nothing", directory=tmp_path) == []
+
+
+def test_export_sessions(tmp_path: Path) -> None:
+    from sovereign_code.sessions import export_sessions
+
+    path = tmp_path / "a.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "model": "m"})
+        + "\n"
+        + json.dumps({"type": "message", "role": "user", "content": "hi"})
+        + "\n",
+        encoding="utf-8",
+    )
+    dest = tmp_path / "out.jsonl"
+    count = export_sessions(dest, directory=tmp_path)
+    assert count == 2
+    lines = dest.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert all("_session" in json.loads(line) for line in lines)

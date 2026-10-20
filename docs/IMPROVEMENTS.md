@@ -105,6 +105,11 @@ Sovereign Code keeps the idea and changes the foundation.
   skills bank (code-review, write-tests, refactor, specify, security/legal/
   financial review) runs with `sovereign skill`; per-project memory is injected
   into chat; and `sovereign clone` bootstraps a GitHub repo.
+- **End-to-end multi-model pipeline.** `sovereign pipeline` chains a planner,
+  the Qwen Code agent, and a reviewer into one coding pass, so a prompt becomes
+  a plan, then real file changes, then a critique. `sovereign verify --embedding`
+  checks the embedding model, and `sovereign sessions --export` dumps history to
+  JSONL for portability.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -116,7 +121,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 89 pytest tests cover model merging, router context behaviour, config,
+- 94 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

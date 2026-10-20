@@ -91,6 +91,18 @@ def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
     return matches
 
 
+def export_sessions(dest: Path, directory: Path | None = None) -> int:
+    """Write every session record to a single JSONL file; returns the record count."""
+    records = 0
+    with dest.open("w", encoding="utf-8") as output:
+        for info in scan_sessions(directory):
+            for record in read_session(info.path):
+                record["_session"] = info.path.name
+                output.write(json.dumps(record, ensure_ascii=False) + "\n")
+                records += 1
+    return records
+
+
 def read_session(path: Path) -> list[dict]:
     records: list[dict] = []
     try:

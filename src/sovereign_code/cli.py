@@ -36,6 +36,7 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
+from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
 from .browser.executor import chromium_path
 from .logs import TARGETS, log_path, tail_lines
 from .models import build_views, sort_views
@@ -166,6 +167,46 @@ def _verify(snap: Snapshot, all_aliases: bool = False, timeout: float = 120.0) -
     style = "green" if failed == 0 else "red"
     console.print(f"[{style}]{passed}/{len(aliases)} aliases replied[/]")
     return 0 if failed == 0 else 1
+
+
+def _bench(
+    settings: Settings,
+    models: list[str],
+    max_tokens: int,
+    prompt: str,
+) -> int:
+    import httpx
+
+    base = settings.gateway_url.rstrip("/")
+    try:
+        httpx.get(f"{base}/v1/models", timeout=3.0).raise_for_status()
+    except httpx.HTTPError:
+        console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
+        return 1
+
+    table = Table(title=f"Local throughput · max {max_tokens} tokens", header_style="bold #b794f4")
+    table.add_column("Alias", style="bold")
+    table.add_column("Prompt", justify="right")
+    table.add_column("Output", justify="right")
+    table.add_column("Time", justify="right")
+    table.add_column("Speed", justify="right")
+    for alias in models:
+        console.print(f"[dim]Benchmarking {alias}…[/]")
+        result = bench_alias(base, alias, prompt, max_tokens=max_tokens)
+        if result.ok:
+            speed = f"[green]{result.tokens_per_second:.1f} t/s[/]"
+        else:
+            speed = f"[red]{result.detail}[/]"
+        table.add_row(
+            alias,
+            str(result.prompt_tokens),
+            str(result.completion_tokens),
+            f"{result.seconds:.1f}s",
+            speed,
+        )
+    console.print(table)
+    console.print("[dim]First call per alias may include model load time; rerun for steady-state.[/]")
+    return 0
 
 
 def _logs(target: str, lines: int = 40, follow: bool = False) -> int:
@@ -846,6 +887,11 @@ def build_parser() -> argparse.ArgumentParser:
     browse.add_argument("--yes", action="store_true", help="skip destructive-action confirmations")
     browse.add_argument("--dry-run", action="store_true", help="show the first planned action only")
 
+    bench = sub.add_parser("bench", help="measure generation speed for chosen aliases")
+    bench.add_argument("--models", default=None, help="comma-separated aliases")
+    bench.add_argument("--tokens", type=int, default=64, help="output tokens per alias")
+    bench.add_argument("--prompt", default=None, help="prompt to benchmark")
+
     logs = sub.add_parser("logs", help="show the last lines of a local log")
     logs.add_argument("target", nargs="?", default="gateway", choices=TARGETS)
     logs.add_argument("-n", "--lines", type=int, default=40)
@@ -935,6 +981,13 @@ def main(argv: list[str] | None = None) -> int:
         return _logs(args.target, lines=args.lines, follow=args.follow)
     if command == "browse":
         return _browse(args, settings)
+    if command == "bench":
+        models = (
+            [name.strip() for name in args.models.split(",") if name.strip()]
+            if args.models
+            else list(DEFAULT_MODELS)
+        )
+        return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
     if command == "sessions":
         return _sessions(
             days=args.days,

@@ -118,6 +118,7 @@ sovereign status           # one-shot status
 sovereign models           # installed + recommended, with roles
 sovereign doctor           # checks and concrete fixes
 sovereign verify           # tiny completion per core alias (--all for nine)
+sovereign bench            # tokens/sec for chosen aliases (--models a,b)
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]

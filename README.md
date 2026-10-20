@@ -165,6 +165,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.ailocalgateway.
 Check it with `sovereign gateway` (paths, aliases, supervisor state, restart
 command). Closing the hidden window does not stop the gateway.
 
+A second agent, `com.user.ailocalgateway.watchdog`, checks the gateway every five
+minutes and asks Terminal to restart the supervisor if both the gateway and the
+supervisor are gone. It runs only system binaries (`curl`, `open`), so launchd
+never needs Documents access. Decisions are logged to
+`/tmp/sovereign-gateway-watchdog.log`.
+
 ## Architecture
 
 ```text

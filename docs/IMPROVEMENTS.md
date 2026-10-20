@@ -63,6 +63,14 @@ Sovereign Code keeps the idea and changes the foundation.
   Terminal-supervised because macOS TCC blocks launchd from reading Documents.
 - **Recoverable migration.** The previous `~/.local/ai-stack` is archived under
   `~/Documents/local-ai/legacy/` rather than deleted.
+- **Self-healing gateway.** A TCC-safe watchdog checks the gateway every five
+  minutes and restarts the supervisor through Terminal if it disappeared. The
+  supervisor rotates its log at 5 MB and uses the port as a singleton lock.
+- **Configs are versioned.** `~/Documents/local-ai` is a small git repo covering
+  gateway config, supervisors, launch agents, and client wrappers; weights,
+  venvs, and chats are ignored.
+- **Backups are intentional.** Time Machine excludes the 34 GB model store,
+  legacy archive, and gateway venv, while keeping configs and sessions eligible.
 
 ## Testing
 

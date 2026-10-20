@@ -43,6 +43,10 @@ from .system import command_exists, login_agent_installed, qwen_config_path, qwe
 LABEL = "com.user.sovereign-code"
 console = Console()
 
+GATEWAY_WATCHDOG = (
+    Path.home() / "Library" / "LaunchAgents" / "com.user.ailocalgateway.watchdog.plist"
+)
+
 
 def _settings() -> Settings:
     ensure_layout()
@@ -182,6 +186,13 @@ def _doctor(snap: Snapshot) -> int:
         warn=True,
     )
     add(login_agent_installed(), "Login terminal", "launch agent installed" if login_agent_installed() else "not installed", "sovereign install-login", warn=True)
+    add(
+        GATEWAY_WATCHDOG.is_file(),
+        "Gateway watchdog",
+        "5-minute health check" if GATEWAY_WATCHDOG.is_file() else "not installed",
+        "install local-ai/launchd/com.user.ailocalgateway.watchdog.plist",
+        warn=True,
+    )
     add(snap.disk_free_gb >= 5, "Disk space", f"{snap.disk_free_gb:.0f} GB free", "free at least 5 GB", warn=True)
     add(snap.memory.free_gb >= 2, "Free memory", f"{snap.memory.free_gb:.1f} GB", "unload a model: ollama stop <tag>", warn=True)
 
@@ -348,7 +359,12 @@ def _gateway(snap: Snapshot) -> int:
     table.add_row(
         "[green]PASS[/]" if supervisor else "[yellow]WARN[/]",
         "Supervisor",
-        "run_gateway.sh running" if supervisor else "not running (login agent restarts it)",
+        "run_gateway.sh running" if supervisor else "not running (watchdog restarts it)",
+    )
+    table.add_row(
+        "[green]PASS[/]" if GATEWAY_WATCHDOG.is_file() else "[yellow]WARN[/]",
+        "Watchdog",
+        "every 5 minutes" if GATEWAY_WATCHDOG.is_file() else "not installed",
     )
     table.add_row("", "Config", str(gateway_dir / "config.yaml"))
     table.add_row("", "Log", str(gateway_dir / "gateway.log"))

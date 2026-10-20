@@ -86,7 +86,16 @@ both the plist and the loaded job.
 `open -gj -a Terminal start_gateway.command`, which detaches `run_gateway.sh`
 with `nohup` and exits. Terminal holds the user's Documents consent, and a
 detached child keeps that access after the window closes. The supervisor
-restarts LiteLLM on crash; no Full Disk Access grant is needed.
+restarts LiteLLM on crash, backs off 3 s, rotates the log at 5 MB, and treats
+the listening port as its singleton lock, so duplicate starts exit instead of
+racing. No Full Disk Access grant is needed.
+
+`com.user.ailocalgateway.watchdog` checks `127.0.0.1:4000` every five minutes.
+It is the only agent that could run entirely under launchd, because it invokes
+only `/bin/bash`, `/usr/bin/curl`, and `/usr/bin/open`; the `.command` it opens
+is still executed by Terminal. If the supervisor is gone, the watchdog recreates
+it; if LiteLLM alone died, the existing supervisor handles the restart. The
+gateway venv uses Homebrew Python 3.13 (LiteLLM 1.83.x supports 3.10–3.13).
 
 ## Storage layout
 

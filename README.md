@@ -123,6 +123,8 @@ sovereign verify           # tiny completion per core alias (--all for nine)
 sovereign bench            # tokens/sec for chosen aliases (--models a,b)
 sovereign backup           # tarball of configs + chat data
 sovereign summarize FILE   # or --url URL, via the local model
+sovereign index .          # embed a directory for semantic search
+sovereign search "query"   # find relevant chunks (--path DIR --top N)
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
 sovereign launch qwen|codex|claude [path]
@@ -164,6 +166,22 @@ when it needs you. In the dashboard, press `F8` (or `/browse <url> [task]`).
   `~/Documents/local-ai/data/browser/runs/`.
 
 Install: `pip install -e '.[browser]' && playwright install chromium`.
+
+## Semantic code search
+
+```sh
+sovereign index .                # embed the current directory
+sovereign search "gateway restart" --top 5
+sovereign search "query" --path ~/repo
+```
+
+`sovereign index` walks a directory (skipping `.git`, `node_modules`, venvs, and
+binaries), chunks each text file, and stores local embeddings from Ollama's
+`nomic-embed-text` (274 MB, pulled automatically via `ollama pull
+nomic-embed-text`). `sovereign search` ranks chunks by cosine similarity against
+the query. Everything stays on the machine; the index lives under
+`~/Documents/local-ai/data/index/` and is excluded from backups and Time Machine
+(it is cheap to rebuild).
 
 ## Login terminal
 

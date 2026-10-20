@@ -40,6 +40,14 @@ from .backup import create_backup
 from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
 from .browser.executor import chromium_path
 from .logs import TARGETS, log_path, tail_lines
+from .search import (
+    DEFAULT_EMBED,
+    EmbedError,
+    IndexStore,
+    build_index,
+    embed,
+    index_path_for,
+)
 from .summarize import SourceError, read_text_source, summarize_text
 from .models import build_views, sort_views
 from .ollama import OllamaClient
@@ -494,7 +502,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
 
 def _backup(settings: Settings) -> int:
     include = [LOCAL_AI_ROOT / "config" / "sovereign", LOCAL_AI_ROOT / "data"]
-    exclude = {LOCAL_AI_ROOT / "data": ("browser",)}
+    exclude = {LOCAL_AI_ROOT / "data": ("browser", "index")}
     extra = {
         LOCAL_AI_ROOT / "config" / "codex" / "local.config.toml": "config/codex/local.config.toml"
     }
@@ -514,6 +522,56 @@ def _backup(settings: Settings) -> int:
         "[dim]Contains configs and data/ (sessions, logs, audit); excludes models, "
         "venv, Codex caches, and the browser profile.[/]"
     )
+    return 0
+
+
+def _index(settings: Settings, path: str, model: str, limit: int | None) -> int:
+    root = Path(path or ".").expanduser().resolve()
+    if not root.is_dir():
+        console.print(f"[red]Not a directory:[/] {root}")
+        return 1
+    console.print(f"[dim]Indexing {root} with {model}…[/]")
+    try:
+        files, chunks, store = build_index(root, settings.ollama_url, model=model, limit=limit)
+    except EmbedError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    console.print(f"[green]Indexed[/] {files} files · {chunks} chunks")
+    console.print(f"[dim]Index: {store.db_path}[/]")
+    store.close()
+    return 0
+
+
+def _search(settings: Settings, query: str, path: str, model: str, top: int) -> int:
+    root = Path(path or ".").expanduser().resolve()
+    db = index_path_for(root)
+    if not db.is_file():
+        console.print(f"[red]No index for {root}.[/] Run: sovereign index {path or '.'}")
+        return 1
+    store = IndexStore(db)
+    try:
+        vector = embed(settings.ollama_url, model, [query])[0]
+        results = store.search(vector, top=top)
+    except EmbedError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    finally:
+        store.close()
+    if not results:
+        console.print("[dim]No matching chunks.[/]")
+        return 0
+    table = Table(title=f"Search · {query}", header_style="bold #b794f4")
+    table.add_column("Score", justify="right")
+    table.add_column("Location", style="bold")
+    table.add_column("Snippet", overflow="fold")
+    for result in results:
+        snippet = " ".join(result.text.split())[:160]
+        table.add_row(
+            f"{result.score:.2f}",
+            f"{result.path}:{result.line}",
+            snippet,
+        )
+    console.print(table)
     return 0
 
 
@@ -1000,6 +1058,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("backup", help="archive configs and chat data to a local tarball")
 
+    index = sub.add_parser("index", help="embed a directory for local semantic search")
+    index.add_argument("path", nargs="?", default=".")
+    index.add_argument("--model", default=DEFAULT_EMBED)
+    index.add_argument("--limit", type=int, default=None, help="max files to index")
+
+    search = sub.add_parser("search", help="semantic search over an indexed directory")
+    search.add_argument("query")
+    search.add_argument("--path", default=".")
+    search.add_argument("--model", default=DEFAULT_EMBED)
+    search.add_argument("--top", type=int, default=5)
+
     summary = sub.add_parser("summarize", help="summarize a local file or URL")
     summary.add_argument("path", nargs="?", default=None)
     summary.add_argument("--url", default=None)
@@ -1108,6 +1177,10 @@ def main(argv: list[str] | None = None) -> int:
         return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
     if command == "backup":
         return _backup(settings)
+    if command == "index":
+        return _index(settings, args.path, args.model, args.limit)
+    if command == "search":
+        return _search(settings, args.query, args.path, args.model, args.top)
     if command == "summarize":
         return _summarize(
             settings,

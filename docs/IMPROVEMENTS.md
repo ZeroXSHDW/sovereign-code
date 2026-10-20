@@ -88,6 +88,10 @@ Sovereign Code keeps the idea and changes the foundation.
   `session_retention_days` prunes old chats at dashboard startup.
 - **Local summarization.** `sovereign summarize FILE` (or `--url`) reads a source
   and returns a concise local-model summary without sending anything off-device.
+- **Semantic code search.** `sovereign index` embeds a directory with
+  `nomic-embed-text` and `sovereign search` ranks chunks by cosine similarity,
+  so you can ask "where is X handled?" and get file:line answers. The index is
+  local, rebuildable, and excluded from backups and Time Machine.
 - **Browser operator.** `sovereign browse` drives a visible Chromium through
   Playwright with one structured action per local-model step, confirmation gates
   for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
@@ -99,7 +103,8 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 69 pytest tests cover model merging, router context behaviour, config,
-  sessions/retention, logs, backup, summarization, browser policy/agent/executor,
-  memory, gateway probes, client launch planning, and headless TUI boot.
+- 77 pytest tests cover model merging, router context behaviour, config,
+  sessions/retention, logs, backup, summarization, semantic search, browser
+  policy/agent/executor, memory, gateway probes, client launch planning, and
+  headless TUI boot.
 - Textual `run_test` exercises the real widget tree without a network.

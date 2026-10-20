@@ -130,9 +130,35 @@ sovereign install-clients  # Codex profile + *-local wrappers
 sovereign chat --model qwen3.5:4b
 sovereign env              # exports for OpenAI-compatible local clients
 sovereign pull-recommended # qwen2.5-coder:14b
+sovereign browse URL --task "…" # local model drives a visible Chromium
 sovereign install-login --start-now
 sovereign uninstall-login
 ```
+
+## Browser operator
+
+```sh
+sovereign browse https://example.com --task "find the pricing table and summarize it"
+sovereign browse URL --allow-local --headless --max-steps 6
+sovereign browse URL --task "…" --dry-run   # show the first planned action only
+```
+
+The local model drives a visible, persistent Chromium profile through Playwright,
+reading the page and performing one structured action at a time (`navigate`,
+`click`, `fill`, `select`, `press`, `scroll`, `extract`), then hands back control
+when it needs you.
+
+- **No CAPTCHA solving, bot-check bypass, user-agent spoofing, or fingerprint
+  evasion.** The browser runs with its normal identity.
+- **Passwords, OTPs, and payment fields are never filled by the model** — it
+  hands off so you type them.
+- **Destructive actions** (buy, delete, submit, unsubscribe, …) ask first unless
+  you pass `--yes`.
+- **Local/private addresses** need `--allow-local`; `--allow-domain` restricts
+  navigation. Every step is recorded (fills are length-only) under
+  `~/Documents/local-ai/data/browser/runs/`.
+
+Install: `pip install -e '.[browser]' && playwright install chromium`.
 
 ## Login terminal
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+from rich.text import Text
 from rich.table import Table
 
 from . import __version__
@@ -250,6 +251,147 @@ def _sessions(
         f"prune with: sovereign sessions --prune[/]"
     )
     return 0
+
+
+def _browse(args, settings: Settings) -> int:
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        console.print("[red]Playwright is not installed.[/]")
+        console.print(
+            "[dim].venv/bin/pip install playwright && .venv/bin/playwright install chromium[/]"
+        )
+        return 1
+
+    from .browser.actions import BrowserPolicy, PolicyError, check_url, parse_action
+    from .browser.agent import AuditLog, BrowserAgent, ModelPlanner
+    from .browser.executor import BrowserSession, BrowserError
+
+    policy = BrowserPolicy(
+        allow_local=args.allow_local,
+        allowed_domains=tuple(args.allow_domain),
+    )
+    if not args.url:
+        console.print("[red]Give a starting URL:[/] sovereign browse https://example.com --task '…'")
+        return 1
+    raw_url = args.url if "://" in args.url else f"https://{args.url}"
+    try:
+        start_url = check_url(raw_url, policy)
+    except PolicyError as exc:
+        console.print(f"[red]Blocked URL:[/] {exc}")
+        return 1
+
+    profile = LOCAL_AI_ROOT / "data" / "browser" / "profile"
+    session = BrowserSession(
+        profile_dir=profile,
+        policy=policy,
+        headless=args.headless,
+        timeout_ms=15000,
+    )
+    try:
+        session.start(start_url)
+    except Exception as exc:
+        console.print(f"[red]Could not start Chromium:[/] {exc}")
+        session.close()
+        return 1
+
+    if not args.task:
+        console.print(
+            "[bold]Browser open.[/] Use it normally; press Enter here to close."
+        )
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+        finally:
+            session.close()
+        return 0
+
+    import httpx
+
+    try:
+        probe = httpx.get(f"{settings.gateway_url.rstrip('/')}/v1/models", timeout=3.0)
+        if probe.status_code != 200:
+            raise httpx.HTTPError("not ok")
+    except httpx.HTTPError:
+        console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
+        session.close()
+        return 1
+
+    planner = ModelPlanner(settings.gateway_url, model=args.model)
+    audit = None
+
+    def confirm(message: str) -> bool:
+        if args.yes:
+            console.print(f"[yellow]{message}[/] [dim]auto-approved by --yes[/]")
+            return True
+        try:
+            return input(f"{message} [y/N] ").strip().lower() in {"y", "yes"}
+        except EOFError:
+            return False
+
+    def pause(message: str) -> None:
+        console.print(f"[yellow]{message}[/]")
+        try:
+            input("Press Enter when ready…")
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    try:
+        if args.dry_run:
+            observation = session.observe()
+            console.print(
+                f"[bold]{observation.get('title') or '(untitled)'}[/] · "
+                f"{observation.get('url')} · {len(observation.get('elements', []))} elements"
+            )
+            if observation.get("captcha"):
+                console.print("[yellow]CAPTCHA or bot check detected; the agent would hand off.[/]")
+            raw = planner.plan(args.task, observation, [])
+            console.print(Panel(Text(raw), title="first planned action", border_style="cyan"))
+            try:
+                action = parse_action(raw)
+            except Exception as exc:
+                console.print(f"[red]Invalid action:[/] {exc}")
+                return 1
+            console.print(f"[green]Parsed:[/] {action.kind} {action.as_dict()}")
+            return 0
+
+        audit = AuditLog()
+        agent = BrowserAgent(
+            session=session,
+            planner=planner,
+            policy=policy,
+            max_steps=args.max_steps,
+            headless=args.headless,
+            confirm=confirm,
+            pause=pause,
+            audit=audit,
+        )
+        result = agent.run(args.task)
+    except (BrowserError, PolicyError) as exc:
+        console.print(f"[red]Browser error:[/] {exc}")
+        return 1
+    except KeyboardInterrupt:
+        console.print("[yellow]Stopped by user.[/]")
+        return 130
+    finally:
+        session.close()
+        if audit is not None:
+            audit.close()
+
+    style = "green" if result.stopped == "done" else "yellow"
+    console.print(
+        Panel(
+            Text(result.summary),
+            title=f"browse · {result.stopped} · {result.steps} steps",
+            border_style=style,
+        )
+    )
+    for index, text in enumerate(result.extracts, start=1):
+        console.print(Panel(Text(text[:2000]), title=f"extract {index}", border_style="dim"))
+    if audit is not None:
+        console.print(f"[dim]Audit: {audit.path}[/]")
+    return 0 if result.stopped in {"done", "handoff", "cancelled"} else 1
 
 
 def _doctor(snap: Snapshot) -> int:
@@ -682,6 +824,19 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
 
+    browse = sub.add_parser("browse", help="drive a visible browser with the local model")
+    browse.add_argument("url", nargs="?", default=None, help="starting URL")
+    browse.add_argument("--task", default=None, help="what to do on the page")
+    browse.add_argument("--model", default="local-agent", help="gateway alias for planning")
+    browse.add_argument("--max-steps", type=int, default=15)
+    browse.add_argument("--headless", action="store_true", help="run without a visible window")
+    browse.add_argument("--allow-local", action="store_true", help="allow localhost/private IPs")
+    browse.add_argument(
+        "--allow-domain", action="append", default=[], help="restrict navigation to a domain"
+    )
+    browse.add_argument("--yes", action="store_true", help="skip destructive-action confirmations")
+    browse.add_argument("--dry-run", action="store_true", help="show the first planned action only")
+
     logs = sub.add_parser("logs", help="show the last lines of a local log")
     logs.add_argument("target", nargs="?", default="gateway", choices=TARGETS)
     logs.add_argument("-n", "--lines", type=int, default=40)
@@ -769,6 +924,8 @@ def main(argv: list[str] | None = None) -> int:
         return _free(settings)
     if command == "logs":
         return _logs(args.target, lines=args.lines, follow=args.follow)
+    if command == "browse":
+        return _browse(args, settings)
     if command == "sessions":
         return _sessions(
             days=args.days,

@@ -81,6 +81,10 @@ Sovereign Code keeps the idea and changes the foundation.
   watchdog, or dashboard log; `sovereign sessions` lists chats and prunes by
   age while always keeping the newest N; `sovereign gateway --restart` performs
   a real stop/start and waits for health.
+- **Browser operator.** `sovereign browse` drives a visible Chromium through
+  Playwright with one structured action per local-model step, confirmation gates
+  for destructive actions, secret-field refusal, CAPTCHA handoff, a URL policy,
+  and a masked audit log. No stealth, spoofing, or CAPTCHA solving.
 - **The stack can prove itself.** `sovereign verify` sends one short completion
   through the four core aliases (or all nine with `--all`) and fails on HTTP
   errors, malformed bodies, or empty replies. The thinking alias gets a 512-token

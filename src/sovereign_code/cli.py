@@ -43,7 +43,7 @@ from .config import (
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import sort_views
-from .ollama import OllamaClient
+from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .router import Task, choose
 from .search import (
@@ -136,6 +136,89 @@ def _status(snap: Snapshot) -> None:
             f"[bold]Chat [/]  {snap.chat_selection.model.tag}  "
             f"[dim]({snap.chat_selection.context} ctx)[/]"
         )
+
+
+def _models_remote(snap: Snapshot, query: str | None = None) -> int:
+    from .models import REMOTE_CATALOG
+
+    installed = {view.tag for view in snap.installed}
+    rows = [
+        (tag, "[green]installed[/]" if tag in installed else "[dim]pull[/]", desc)
+        for tag, desc in sorted(REMOTE_CATALOG.items())
+        if not query or query.lower() in tag.lower()
+    ]
+    if not rows:
+        console.print(f"[dim]No models match '{query}'.[/]")
+        return 0
+    table = Table(title="Available models (Ollama library)", header_style="bold #b794f4")
+    table.add_column("Model", style="bold")
+    table.add_column("Status")
+    table.add_column("Notes")
+    for tag, status, description in rows:
+        table.add_row(tag, status, description)
+    console.print(table)
+    console.print("[dim]Download with: sovereign pull <tag> · run with: sovereign run <tag> '…'[/]")
+    return 0
+
+
+def _run(
+    settings: Settings,
+    model: str,
+    prompt: str | None,
+    context: int,
+    temperature: float,
+    system: str | None,
+    no_pull: bool,
+) -> int:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
+        console.print(f"[red]Invalid model tag:[/] {model}")
+        return 1
+    if not prompt:
+        console.print("[red]Give a prompt:[/] sovereign run <model> 'question'")
+        return 1
+    client = OllamaClient(settings.ollama_url)
+
+    async def installed() -> bool:
+        data = await client.tags()
+        names = [str(item.get("name", "")) for item in data.get("models", [])]
+        return any(name == model or name.startswith(model + ":") for name in names)
+
+    if not asyncio.run(installed()):
+        if no_pull:
+            console.print(f"[red]{model} is not installed.[/] Run: sovereign pull {model}")
+            return 1
+        console.print(f"[dim]{model} is not installed; pulling it first…[/]")
+        if _pull(settings, model, "run on demand") != 0:
+            return 1
+
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    console.print(f"[dim]Running {model}…[/]")
+    try:
+        answer = asyncio.run(
+            client.chat_once(model, messages, context=context, temperature=temperature)
+        )
+    except OllamaError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    console.print(Panel(Text(answer), title=model, border_style="cyan"))
+    return 0
+
+
+def _rm(settings: Settings, model: str) -> int:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
+        console.print(f"[red]Invalid model tag:[/] {model}")
+        return 1
+    console.print(f"[dim]Removing {model}…[/]")
+    result = subprocess.run(["ollama", "rm", model], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown error").strip()
+        console.print(f"[red]{detail}[/]")
+        return 1
+    console.print(f"[green]Removed {model}.[/]")
+    return 0
 
 
 def _models(snap: Snapshot) -> None:
@@ -940,7 +1023,6 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
-            TextColumn("{task.completed:.0f}/{task.total:.0f} units"),
             console=console,
         ) as progress:
             task = progress.add_task(f"pulling {tag}", total=None)
@@ -1416,7 +1498,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("dashboard", help="open the live terminal dashboard (default)")
     sub.add_parser("status", help="one-shot system status")
-    sub.add_parser("models", help="list installed and recommended models")
+    models = sub.add_parser("models", help="list installed and recommended models")
+    models.add_argument("--remote", action="store_true", help="list downloadable models")
+    models.add_argument("query", nargs="?", default=None, help="filter by name")
     doctor = sub.add_parser("doctor", help="check the local stack and print fixes")
     doctor.add_argument("--fix", action="store_true", help="apply the safe fixes automatically")
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
@@ -1509,6 +1593,17 @@ def build_parser() -> argparse.ArgumentParser:
     pull = sub.add_parser("pull", help="pull any Ollama model by tag")
     pull.add_argument("model")
 
+    rm = sub.add_parser("rm", help="remove an installed model")
+    rm.add_argument("model")
+
+    run = sub.add_parser("run", help="download (if needed) and run any model on a prompt")
+    run.add_argument("model")
+    run.add_argument("prompt", nargs="?", default=None)
+    run.add_argument("--context", type=int, default=16384)
+    run.add_argument("--temperature", type=float, default=0.25)
+    run.add_argument("--system", default=None)
+    run.add_argument("--no-pull", action="store_true", help="fail instead of auto-pulling")
+
     consult = sub.add_parser("consult", help="run one prompt through several models")
     consult.add_argument("prompt")
     consult.add_argument("--models", default=None, help="comma-separated aliases")
@@ -1582,7 +1677,10 @@ def main(argv: list[str] | None = None) -> int:
         _status(_snapshot(settings))
         return 0
     if command == "models":
-        _models(_snapshot(settings))
+        snap = _snapshot(settings)
+        if args.remote:
+            return _models_remote(snap, args.query)
+        _models(snap)
         return 0
     if command == "doctor":
         snap = _snapshot(settings)
@@ -1654,6 +1752,18 @@ def main(argv: list[str] | None = None) -> int:
         return _stats(settings)
     if command == "pull":
         return _pull(settings, args.model)
+    if command == "rm":
+        return _rm(settings, args.model)
+    if command == "run":
+        return _run(
+            settings,
+            args.model,
+            args.prompt,
+            args.context,
+            args.temperature,
+            args.system,
+            args.no_pull,
+        )
     if command == "consult":
         models = (
             [name.strip() for name in args.models.split(",") if name.strip()]

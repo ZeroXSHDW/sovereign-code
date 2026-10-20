@@ -145,6 +145,9 @@ sovereign config           # view settings; --get KEY, --set KEY=VALUE
 sovereign stats            # disk usage across the stack
 sovereign sessions --search "term"   # search chat history
 sovereign pull <model>     # pull any Ollama model by tag
+sovereign run <model> "…"  # download (if needed) and run any model on a prompt
+sovereign rm <model>       # remove an installed model
+sovereign models --remote  # list downloadable models (--remote coder)
 sovereign consult "…"      # run one prompt across several models
 sovereign skills           # list saved prompt templates
 sovereign skill <name> --prompt "…"
@@ -209,6 +212,11 @@ sovereign skill code-review --prompt "$(cat src/app.py)"
 
 `sovereign consult` runs one prompt through several models and prints each
 answer.
+
+`sovereign run <model> "…"` downloads the model on first use and runs a prompt
+through it directly (any Ollama tag, with `--context`, `--temperature`, and
+`--system`). `sovereign models --remote [query]` lists curated downloadable
+models, and `sovereign rm <model>` removes one you no longer need.
 
 ### Multi-model pipeline
 

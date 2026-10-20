@@ -266,3 +266,24 @@ def sort_views(views: Iterable[ModelView]) -> list[ModelView]:
 
 def preferred_tags(task: str) -> tuple[str, ...]:
     return TASK_PREFERENCE.get(task, TASK_PREFERENCE[GENERAL])
+
+
+REMOTE_CATALOG: dict[str, str] = {
+    "qwen2.5-coder:3b": "fast small coder; quick edits and iteration",
+    "qwen2.5-coder:32b": "stronger coder; too big for a comfortable fit on 24 GB",
+    "qwen3:8b": "current-generation general model with reasoning",
+    "qwen3:14b": "current-generation general model with reasoning",
+    "qwen3:32b": "large reasoning model; too big for 24 GB",
+    "llama3.2:1b": "smallest general model",
+    "llama3.2:3b": "tiny fast general model",
+    "gemma3:4b": "compact general model",
+    "gemma3:12b": "general model with strong reasoning",
+    "gemma3:27b": "large general model; too big for 24 GB",
+    "phi4:14b": "small reasoning model",
+    "deepseek-r1:14b": "reasoning model with visible chain-of-thought",
+    "mistral-small:24b": "mid-size general model; tight on 24 GB",
+    "mxbai-embed-large": "embedding model (1024-dim)",
+    "snowflake-arctic-embed": "small embedding model",
+    "llava:13b": "vision model",
+    "qwen2.5-vl:7b": "vision-language model",
+}

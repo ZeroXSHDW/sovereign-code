@@ -33,9 +33,9 @@
 ## Context fitting
 
 ```text
-estimated_kv_gb ≈ max(0.35, weights_gb × context/20480 × 0.22)
+estimated_kv_gb ≈ max(0.35, weights_gb × context/32768 × 0.22)
 total_gb        = weights_gb + estimated_kv_gb
-pick the largest context in (20480, 16384, 8192, 4096, 2048)
+pick the largest context in (32768, 24576, 20480, 16384, 8192, 4096, 2048)
 where total_gb ≤ free_gb × 0.85
 ```
 

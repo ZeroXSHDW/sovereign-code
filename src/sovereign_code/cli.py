@@ -3022,6 +3022,10 @@ def build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--start", action="store_true", help="start in the background")
     bridge.add_argument("--stop", action="store_true", help="stop the background bridge")
     bridge.add_argument("--status", action="store_true", help="show whether it is running")
+    sub.add_parser(
+        "mcp",
+        help="serve MCP over stdio (models, skills, memory, checks) for desktop clients",
+    )
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("backends", help="show which local inference servers are reachable")
@@ -3354,6 +3358,11 @@ def main(argv: list[str] | None = None) -> int:
             stop=args.stop,
             status=args.status,
         )
+    if command == "mcp":
+        from .mcp import serve
+
+        serve()
+        return 0
     if command == "env":
         _env(settings)
         return 0

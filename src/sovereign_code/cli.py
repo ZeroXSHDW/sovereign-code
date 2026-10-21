@@ -1188,6 +1188,54 @@ def _doctor(snap: Snapshot) -> int:
         f"diff {config_path.name} {reviewed_path.name}; another agent may have rewritten it",
         warn=True,
     )
+
+    # Every model a client is configured to use must still exist locally.
+    # Pruning (or another agent editing a config) can leave dangling references
+    # that only surface later as a failed launch.
+    from .tools import (
+        continue_models as _continue_models,
+    )
+    from .tools import (
+        gateway_models as _gateway_models,
+    )
+    from .tools import (
+        opencode_models as _opencode_models,
+    )
+    from .tools import (
+        qwen_models as _qwen_models,
+    )
+    from .tools import (
+        read_text as _read_text,
+    )
+
+    home = Path.home()
+    referenced: set[str] = set(
+        _gateway_models(_read_text(LOCAL_AI_ROOT / "gateway" / "config.yaml")).values()
+    )
+    referenced.update(
+        _opencode_models(_read_text(home / ".config" / "opencode" / "opencode.json"))
+    )
+    referenced.update(_qwen_models(_read_text(home / ".qwen" / "settings.json")))
+    referenced.update(_continue_models(_read_text(home / ".continue" / "config.yaml")))
+    installed_names: set[str] = set()
+    for view in snap.installed:
+        installed_names.update({view.tag, view.tag.removesuffix(":latest")})
+    dangling = sorted(
+        name
+        for name in referenced
+        if name not in installed_names
+        and name.removesuffix(":latest") not in installed_names
+        and f"{name}:latest" not in installed_names
+    )
+    add(
+        not dangling,
+        "Client models",
+        f"{len(referenced)} referenced · all installed"
+        if not dangling
+        else f"missing: {', '.join(dangling[:3])}",
+        "pull the model or point the client at an installed one",
+        warn=True,
+    )
     add(
         snap.gateway.up,
         "LiteLLM gateway",

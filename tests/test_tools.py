@@ -7,9 +7,12 @@ from pathlib import Path
 from sovereign_code.tools import (
     codex_logged_in,
     continue_default,
+    continue_models,
     gateway_models,
     opencode_default,
+    opencode_models,
     qwen_default,
+    qwen_models,
 )
 
 GATEWAY = """
@@ -62,3 +65,16 @@ def test_codex_login_detection(tmp_path: Path) -> None:
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
     assert codex_logged_in(tmp_path) is True
+
+
+def test_opencode_and_qwen_models_are_listed() -> None:
+    assert opencode_models('{"provider":{"ollama":{"models":{"a:1":{},"b:2":{}}}}}') == [
+        "a:1",
+        "b:2",
+    ]
+    assert qwen_models('{"modelProviders":{"openai":[{"id":"x"},{"id":"y"}]}}') == ["x", "y"]
+
+
+def test_continue_models_returns_every_entry() -> None:
+    text = "models:\n  - model: a:1\n  - model: b:2\ncontext:\n  - model: ignored\n"
+    assert continue_models(text) == ["a:1", "b:2"]

@@ -62,6 +62,43 @@ def continue_default(text: str) -> str:
     return ""
 
 
+def opencode_models(text: str) -> list[str]:
+    """Model ids declared in OpenCode's ollama provider."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    provider = (data.get("provider") or {}).get("ollama") or {}
+    return [str(name) for name in (provider.get("models") or {})]
+
+
+def qwen_models(text: str) -> list[str]:
+    """Model ids registered in Qwen Code's settings."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    entries = (data.get("modelProviders") or {}).get("openai") or []
+    return [str(entry.get("id")) for entry in entries if entry.get("id")]
+
+
+def continue_models(text: str) -> list[str]:
+    """Every `model:` listed under Continue's `models:` block."""
+    found: list[str] = []
+    in_models = False
+    for raw in text.splitlines():
+        # Handle both `    model: x` (provider entries) and `- model: x`.
+        line = raw.strip().lstrip("-").strip()
+        if line.startswith("models:"):
+            in_models = True
+            continue
+        if in_models and line.startswith("context:"):
+            break
+        if in_models and line.startswith("model:"):
+            found.append(line.split(":", 1)[1].strip().strip("\"'"))
+    return found
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")

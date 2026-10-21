@@ -36,6 +36,9 @@ All notable changes to Sovereign Code.
   can be checked rather than assumed.
 - `claude-cloud` wrapper: the counterpart to `codex-chatgpt`, using the Claude subscription with no
   local gateway overrides.
+- `doctor` gained a **Client models** check: every model referenced by the gateway, OpenCode, Qwen
+  Code and Continue must still be installed, which catches a pruning pass or another agent's edit
+  leaving a dangling reference (20 checks).
 - The catalog is curated to the strongest measured models; weaker/superseded ones (phi, mistral,
   gemma3:4b, qwen3:8b, llama3.1:8b, deepseek-coder:6.7b, qwen2.5:0.5b, qwen2.5-coder:3b) were
   pruned — 23.9 GB — and `prune --apply` now writes a restore list first.

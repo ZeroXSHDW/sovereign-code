@@ -618,7 +618,8 @@ MODEL_STACKS: dict[str, dict[str, object]] = {
         "models": CLOUD_PREFERENCE,
         "approx_gb": 0,
         "note": "Frontier models served by Ollama Cloud: no download, but prompts "
-        "leave this Mac. Run `sovereign cloud --enable` and `ollama signin` first.",
+        "leave this Mac. Run `sovereign cloud --enable` and `ollama signin`; the "
+        "frontier tags also need an Ollama Pro plan.",
     },
 }
 

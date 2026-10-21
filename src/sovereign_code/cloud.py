@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -138,14 +139,34 @@ def _launchctl_getenv(name: str) -> str:
     return result.stdout.strip()
 
 
-def env_cloud_disabled(getenv: Any = None) -> bool:
-    """True when OLLAMA_NO_CLOUD is set in the server's environment."""
-    getter = getenv or _launchctl_getenv
+_ENV_CACHE: tuple[float, bool] | None = None
+_ENV_CACHE_SECONDS = 10.0
+
+
+def _env_disabled(getter: Any) -> bool:
     try:
         value = getter("OLLAMA_NO_CLOUD")
     except Exception:
         return False
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_cloud_disabled(getenv: Any = None) -> bool:
+    """True when OLLAMA_NO_CLOUD is set in the server's environment.
+
+    The dashboard calls this every few seconds; `launchctl getenv` is a process
+    spawn, so cache the launchd answer briefly. An injected getter (tests) is
+    always evaluated directly.
+    """
+    global _ENV_CACHE
+    if getenv is not None:
+        return _env_disabled(getenv)
+    now = time.monotonic()
+    if _ENV_CACHE is not None and now - _ENV_CACHE[0] < _ENV_CACHE_SECONDS:
+        return _ENV_CACHE[1]
+    value = _env_disabled(_launchctl_getenv)
+    _ENV_CACHE = (now, value)
+    return value
 
 
 def cloud_enabled(server_path: Path | None = None, getenv: Any = None) -> bool:
@@ -214,6 +235,8 @@ def _rewrite_launch_agent(path: Path, enabled: bool) -> bool:
 
 
 def _set_launchctl_env(enabled: bool) -> None:
+    global _ENV_CACHE
+    _ENV_CACHE = None
     value = "0" if enabled else "1"
     try:
         subprocess.run(

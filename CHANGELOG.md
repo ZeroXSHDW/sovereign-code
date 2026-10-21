@@ -50,6 +50,9 @@ All notable changes to Sovereign Code.
   implementer for bounded repair rounds (`--fix`, `--checks`, `--no-verify`, `--agent-timeout`).
   The reviewer sees the real `git diff` and the check output, and every run is archived under
   `~/Documents/local-ai/data/runs/<timestamp>/` with a summary and an explicit verdict.
+- If a local agent hits `--agent-timeout` *after* writing files, the run continues to
+  verification instead of discarding the work — Qwen Code frequently edits correctly and then
+  fails to exit.
 - `pipeline` fails fast when the agent changed nothing (`No files were changed by the implementer`)
   instead of running checks against an empty tree, and clears resident models between stages so a
   19 GB planner and an 18 GB coder never fight over the wired budget.

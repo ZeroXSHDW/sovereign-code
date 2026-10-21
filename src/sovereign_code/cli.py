@@ -2471,6 +2471,17 @@ def _pipeline(
         except ValueError as exc:
             return False, str(exc)
         ok, output = run_headless(plan, timeout=agent_timeout)
+        if not ok and "timed out" in output:
+            # Local agent CLIs sometimes finish the edits and then hang. If the
+            # tree actually changed, let the checks decide instead of throwing
+            # the work away.
+            changes = _project_changes(target)
+            if changes:
+                ok = True
+                output += (
+                    "\n\nAgent hit its time limit after making changes; "
+                    "handing the result to verification."
+                )
         return ok, output
 
     def review_fn(plan_text: str, implementation: str) -> str:

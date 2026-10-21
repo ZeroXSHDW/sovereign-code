@@ -67,3 +67,10 @@ def test_sort_puts_loaded_first():
     views = build_views(tags("phi:latest", "qwen3.5:4b"), ps("qwen3.5:4b"))
     ordered = sort_views(views.values())
     assert ordered[0].tag == "qwen3.5:4b"
+
+
+def test_new_models_in_catalog():
+    assert CATALOG["deepseek-r1:8b"].role == "reason"
+    assert CATALOG["deepseek-r1:8b"].thinking is True
+    assert CATALOG["qwen3:8b"].role == "reason"
+    assert CATALOG["gemma3:4b"].role == "fast"

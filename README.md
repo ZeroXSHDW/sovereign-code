@@ -98,6 +98,9 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 | `qwen3.5:4b` | chat / vision / tools | 4.0 GB; 65k with `think:false` |
 | `gemma4:12b` | agent + deep reasoning / vision | 7.7 GB; 32k with `think:false`; verified tool calls |
 | `llama3.1:8b` | reasoning fallback | 4.9 GB; 65k |
+| `deepseek-r1:8b` | reasoning (chain-of-thought) | 5.2 GB; visible reasoning via `local-reasoning-deep` |
+| `qwen3:8b` | general + reasoning | 5.2 GB; current-gen, via `local-chat-qwen3` |
+| `gemma3:4b` | fast | 3.4 GB; compact, via `local-fast` |
 
 ### Downloadable (any tag works with `sovereign pull` / `sovereign run`)
 
@@ -175,7 +178,8 @@ resident 12B. If the 14B coder is missing it falls back to 7B and says so;
 `qwen-local`, `codex-local`, and `claude-local` (from `sovereign install-clients`)
 and the `sovereign env` exports route those clients through the LiteLLM gateway
 aliases (`local-chat`, `local-code`, `local-agent`, `local-claude`,
-`local-reasoning`, …). Those aliases are mapped to Ollama models in
+`local-reasoning`, `local-reasoning-deep`, `local-chat-qwen3`, `local-fast`,
+`local-vision`, …). Those aliases are mapped to Ollama models in
 `~/Documents/local-ai/gateway/config.yaml`. Use these commands to make sure the
 aliases actually point at models you have downloaded:
 

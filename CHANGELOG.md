@@ -10,6 +10,9 @@ All notable changes to Sovereign Code.
   larger than the GPU budget makes Ollama **hang** instead of erroring.
 - `status` shows the GPU-wired budget and the engine serving each loaded model (`mlx` / `llamacpp`).
 - `sovereign models` de-aliases `foo` and `foo:latest` so no model is listed twice.
+- `sovereign launch` frees GPU memory automatically: when the chosen model needs nearly the whole
+  wired budget, resident models are unloaded first instead of letting Ollama hang.
+- `sovereign launch --dry-run` shows the model, planned eviction and argv without launching.
 
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM

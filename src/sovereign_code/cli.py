@@ -68,6 +68,7 @@ from .summarize import SourceError, complete, read_text_source, summarize_text
 from .system import (
     command_exists,
     login_agent_installed,
+    models_to_evict,
     ollama_runner_models,
     qwen_memory_path,
     swap_usage_gb,
@@ -1446,7 +1447,7 @@ def _clients(snap: Snapshot) -> None:
         )
 
 
-def _launch(client: str, path: str, yolo: bool = False) -> int:
+def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -> int:
     target = Path(path).expanduser().resolve()
     if not target.is_dir():
         console.print(f"[red]Not a directory:[/] {target}")
@@ -1466,6 +1467,33 @@ def _launch(client: str, path: str, yolo: bool = False) -> int:
         max_context=snap.settings.max_context,
     )
     agent_model = selection.tag or "gemma4:12b"
+
+    # A model that needs the whole GPU budget must not start beside a resident
+    # one: Ollama would hang instead of erroring. Unload the others first.
+    agent_view = snap.views.get(agent_model)
+    if agent_view is not None:
+        evict = models_to_evict(
+            max(agent_view.size_gb, agent_view.spec.size_gb),
+            [(view.tag, view.size_gb) for view in snap.loaded if view.tag != agent_model],
+            wired_limit_gb(snap.memory.total_gb),
+        )
+        if evict:
+            console.print(
+                f"[dim]{'Would free' if dry_run else 'Freeing'} GPU memory for "
+                f"{agent_model}: unloading {', '.join(evict)}[/]"
+            )
+            if not dry_run:
+
+                async def _evict() -> None:
+                    ollama = OllamaClient(snap.settings.ollama_url)
+                    for tag in evict:
+                        try:
+                            await ollama.unload(tag)
+                        except OllamaError:
+                            pass
+
+                asyncio.run(_evict())
+
     try:
         plan = plan_launch(client, target, snap.settings, agent_model, yolo=yolo)
     except ValueError as exc:
@@ -1480,6 +1508,10 @@ def _launch(client: str, path: str, yolo: bool = False) -> int:
         console.print(
             "[yellow]YOLO mode: every local tool call is auto-approved for this session.[/]"
         )
+    if dry_run:
+        console.print("[dim]Dry run: not launching.[/]")
+        console.print(f"[dim]  argv: {' '.join(plan.argv)}[/]")
+        return 0
     os.chdir(target)
     try:
         os.execvpe(plan.argv[0], plan.argv, plan.env)
@@ -1937,6 +1969,11 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("client", choices=("qwen", "codex", "claude", "opencode"))
     launch.add_argument("path", nargs="?", default=".")
     launch.add_argument("--yolo", action="store_true", help="auto-approve Qwen Code tool calls")
+    launch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the model, eviction and command without launching",
+    )
     sub.add_parser("pull-recommended", help="pull qwen2.5-coder:14b")
     sub.add_parser("init", help="create config/data directories and default config")
 
@@ -2014,7 +2051,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "install-clients":
         return _install_clients()
     if command == "launch":
-        return _launch(args.client, args.path, yolo=args.yolo)
+        return _launch(args.client, args.path, yolo=args.yolo, dry_run=args.dry_run)
     if command == "free":
         return _free(settings)
     if command == "logs":

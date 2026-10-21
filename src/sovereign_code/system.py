@@ -74,6 +74,23 @@ def disk_free_gb(path: Path | None = None) -> float:
         return 0.0
 
 
+def models_to_evict(
+    target_gb: float,
+    residents: list[tuple[str, float]],
+    wired_gb: float,
+    reserve_gb: float = 2.0,
+) -> list[str]:
+    """Residents to unload before loading a `target_gb` model.
+
+    Ollama does not return an error when a load cannot fit the GPU budget — it
+    waits, and because parallel requests are off that blocks every later caller.
+    When the target needs nearly the whole budget, make room up front instead.
+    """
+    if target_gb <= wired_gb - reserve_gb:
+        return []
+    return [name for name, size in residents if size > 0]
+
+
 def wired_limit_gb(total_gb: float) -> float:
     """Apple-silicon GPU-wired memory ceiling.
 

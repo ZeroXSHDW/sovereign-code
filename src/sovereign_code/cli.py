@@ -1928,7 +1928,7 @@ def _bridge(
         state = "[green]running[/]" if ok else "[red]failed to start[/]"
         console.print(f"Claude bridge  {state}  [dim]http://{host}:{port}[/]")
         if not ok:
-            console.print(f"[dim]Check:[/] sovereign logs bridge -n 60")
+            console.print("[dim]Check:[/] sovereign logs bridge -n 60")
         return 0 if ok else 1
     console.print(
         f"[bold]Claude bridge[/] · http://{host}:{port} → {gateway} "

@@ -145,7 +145,7 @@ def local_clients(resolved: dict[str, tuple[str, str]] | None = None) -> list[Cl
             name="OpenCode",
             command="opencode",
             capability="agent",
-            model=f"ollama/{pick('opencode', AGENT_MODEL)}",
+            model=f"local/{pick('opencode', AGENT_MODEL)}",
             detail="Local agentic coder; fully configured for fast Ollama models.",
         ),
         ClientInfo(
@@ -161,7 +161,7 @@ def local_clients(resolved: dict[str, tuple[str, str]] | None = None) -> list[Cl
             name="Claude Code",
             command="claude",
             capability="agent",
-            model="local-agent (via sovereign bridge)",
+            model=f"{pick('claude', CLAUDE_ALIAS)} (via sovereign bridge)",
             detail="Anthropic bridge turns streamed tool calls into real edits.",
         ),
         ClientInfo(

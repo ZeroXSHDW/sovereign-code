@@ -51,11 +51,13 @@ def test_qwen_unattended_approves_everything(target):
     assert plan.argv[plan.argv.index("--approval-mode") + 1] == "yolo"
 
 
-def test_codex_uses_the_local_profile(target):
+def test_codex_uses_native_oss_mode(target):
+    # Codex's Responses translation through LiteLLM streams tool calls as text,
+    # so the local path uses its built-in OSS provider against Ollama instead.
     plan = _plan("codex", target=target)
     assert plan.argv[:2] == ["codex", "exec"]
-    assert "--profile" in plan.argv
-    assert plan.argv[plan.argv.index("--profile") + 1] == "local"
+    assert "--oss" in plan.argv
+    assert plan.argv[plan.argv.index("--local-provider") + 1] == "ollama"
     assert "--skip-git-repo-check" in plan.argv
 
 
@@ -78,11 +80,11 @@ def test_claude_local_mode_pins_the_model(target):
     assert plan.argv[plan.argv.index("--model") + 1]
 
 
-def test_opencode_local_mode_uses_the_ollama_provider(target):
+def test_opencode_local_mode_uses_the_local_provider(target):
     plan = _plan("opencode", target=target)
     assert plan.argv[0] == "opencode"
     assert plan.argv[1] == "run"
-    assert plan.argv[plan.argv.index("-m") + 1] == "ollama/qwen3.5:4b"
+    assert plan.argv[plan.argv.index("-m") + 1] == "local/qwen3.5:4b"
 
 
 def test_opencode_cloud_mode_does_not_pin_a_model(target):

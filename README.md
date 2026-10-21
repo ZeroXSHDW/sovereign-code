@@ -140,8 +140,11 @@ browse the curated catalog.
 > (`qwen3.8-flash-next:125b-a6b-nvfp4`, or `:125b-mlx`), the GGUF quants start at
 > 120 GB, and OCI requires `H100_X8`/`H200_X4` to serve it. On 24 GB of unified
 > memory it can only page off the SSD, so it would be the slowest option here,
-> not the fastest. `sovereign model-info qwen3.8-flash-next` will report the
-> size before you pull it.
+> not the fastest. It is deliberately absent from `REMOTE_CATALOG`, so
+> `sovereign models --remote` will not offer it — check
+> [ollama.com/library/qwen3.8-flash-next](https://ollama.com/library/qwen3.8-flash-next)
+> for sizes, because a bare `ollama pull qwen3.8-flash-next` starts a ≥105 GB
+> download.
 
 ### Frontier cloud models (opt-in — prompts leave the Mac)
 

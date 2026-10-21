@@ -85,6 +85,16 @@ All notable changes to Sovereign Code.
   gemma3:4b, qwen3:8b, llama3.1:8b, deepseek-coder:6.7b, qwen2.5:0.5b, qwen2.5-coder:3b) were
   pruned — 23.9 GB — and `prune --apply` now writes a restore list first.
 
+### Changed
+- **Qwen 3.8 27B is now the primary local model** for code, agent, and reason. It leads
+  `TASK_PREFERENCE` for `CODING`, `AGENT`, and `REASON`, and joins `VISION` and `GENERAL` as the
+  high-quality fallback. `CHAT` and `FAST` deliberately stay on the 4–9 GB models: 18 GB of
+  weights on 24 GB makes every extra load a swap, and both paths exist to be quick.
+- Qwen3.8-Flash-Next is documented as out of reach instead of being a silent dead end: it is
+  125B-A6B with a 105 GB minimum artifact and needs `H100_X8`/`H200_X4` to serve, so it is
+  deliberately absent from both `CATALOG` and `REMOTE_CATALOG`. The 27B is the largest Qwen 3.8
+  that runs here.
+
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM
   estimate; the router keeps a 16k working floor (verified with a 19 GB coder at 16k and 32k).

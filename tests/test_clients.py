@@ -77,13 +77,13 @@ def test_pin_opencode_model_writes_the_config_content(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "sovereign_code.tools.read_text",
         lambda _path: json.dumps(
-            {"provider": {"ollama": {"models": {"qwen3-coder:30b": {"name": "Qwen"}}}}}
+            {"provider": {"local": {"models": {"qwen3-coder:30b": {"name": "Qwen"}}}}}
         ),
     )
     env: dict[str, str] = {}
     assert _pin_opencode_model(env, "qwen3-coder:30b") is True
     payload = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert payload["model"] == "ollama/qwen3-coder:30b"
+    assert payload["model"] == "local/qwen3-coder:30b"
 
 
 def test_pin_opencode_model_refuses_an_unlisted_model(monkeypatch, tmp_path):
@@ -109,9 +109,12 @@ def test_pin_opencode_model_works_without_a_user_config(monkeypatch, tmp_path):
 
 
 def test_plan_launch_sets_the_local_environment(project):
+    # Codex now uses its native OSS provider against Ollama, so no gateway key
+    # is injected for it.
     plan = plan_launch("codex", project, Settings(), "qwen3-coder:30b")
-    assert plan.env["SOVEREIGN_API_KEY"] == "local"
     assert plan.argv[0] == "codex"
+    assert "--oss" in plan.argv
+    assert plan.argv[plan.argv.index("-m") + 1] == "qwen3-coder:30b"
 
 
 def test_plan_launch_rejects_a_missing_directory(tmp_path):

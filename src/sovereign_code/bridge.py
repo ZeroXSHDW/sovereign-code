@@ -398,7 +398,7 @@ class _Handler(BaseHTTPRequestHandler):
         data = json.loads(raw or b"{}")
         return data if isinstance(data, dict) else {}
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path in ("/health", "/"):
             self._json(200, {"ok": True, "gateway": self.gateway_url})
@@ -417,7 +417,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(404, {"type": "error", "error": {"type": "not_found_error"}})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         path = urlsplit(self.path).path
         try:
             payload = self._read()
@@ -519,7 +519,7 @@ def ensure_running(
     ]
     try:
         with log.open("ab") as handle:
-            process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            process = subprocess.Popen(
                 cmd,
                 stdout=handle,
                 stderr=handle,

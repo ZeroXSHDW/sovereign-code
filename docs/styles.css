@@ -1,0 +1,105 @@
+:root {
+  --bg: #0b0714;
+  --panel: #151022;
+  --purple: #b794f4;
+  --violet: #c4b5fd;
+  --ice: #ece6ff;
+  --cyan: #67e8f9;
+  --muted: #8b82a8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 800px at 50% -10%, #1a1233 0%, var(--bg) 60%);
+  color: var(--ice);
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  line-height: 1.6;
+}
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22px 5vw;
+  border-bottom: 1px solid rgba(183, 148, 244, 0.14);
+}
+.brand { color: var(--purple); letter-spacing: 1px; font-weight: 700; }
+.brand em { color: var(--violet); font-style: normal; }
+.nav-link, footer a, .fine a { color: var(--violet); text-decoration: none; }
+.nav-link:hover, footer a:hover, .fine a:hover { text-decoration: underline; }
+
+.hero { text-align: center; padding: 72px 5vw 40px; }
+.hero h1 {
+  font-size: clamp(28px, 5vw, 52px);
+  line-height: 1.1;
+  margin: 0 0 20px;
+  letter-spacing: -0.5px;
+}
+.accent { color: var(--purple); text-shadow: 0 0 24px rgba(183, 148, 244, 0.5); }
+.sub { max-width: 760px; margin: 0 auto 30px; color: var(--muted); font-size: 17px; }
+
+.cta { margin: 6px 0; }
+.buy {
+  display: inline-block;
+  padding: 15px 38px;
+  background: var(--purple);
+  color: #0b0714;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-decoration: none;
+  border-radius: 6px;
+  box-shadow: 0 0 30px rgba(183, 148, 244, 0.35);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.buy:hover { transform: translateY(-2px); box-shadow: 0 0 44px rgba(183, 148, 244, 0.55); }
+.cta-note { display: block; margin-top: 14px; color: var(--muted); font-size: 13px; }
+
+.preview { text-align: center; padding: 8px 5vw 48px; }
+.preview img {
+  width: min(760px, 100%);
+  border: 1px solid rgba(183, 148, 244, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 0 60px rgba(183, 148, 244, 0.14);
+}
+.caption { color: var(--muted); font-size: 13px; margin-top: 12px; }
+
+.features { padding: 40px 5vw 56px; max-width: 1000px; margin: 0 auto; }
+.features h2, .install h2, .buy-band h2 { color: var(--purple); text-align: center; letter-spacing: 1px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; margin-top: 26px; }
+.card {
+  background: var(--panel);
+  border: 1px solid rgba(183, 148, 244, 0.16);
+  border-radius: 8px;
+  padding: 20px 22px;
+}
+.card h3 { color: var(--violet); margin: 0 0 10px; font-size: 15px; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; }
+.card code { color: var(--ice); }
+
+.install { padding: 40px 5vw 56px; max-width: 760px; margin: 0 auto; text-align: center; }
+.install pre {
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid rgba(183, 148, 244, 0.2);
+  border-radius: 8px;
+  padding: 18px 22px;
+  overflow-x: auto;
+  margin: 26px 0 14px;
+}
+.install code { color: var(--cyan); font-size: 14px; }
+
+.buy-band { text-align: center; padding: 56px 5vw; border-top: 1px solid rgba(183, 148, 244, 0.14); }
+.buy-band p { color: var(--muted); }
+.fine { font-size: 13px; margin-top: 18px; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22px 5vw;
+  border-top: 1px solid rgba(183, 148, 244, 0.14);
+  color: var(--muted);
+  font-size: 13px;
+}

@@ -38,6 +38,8 @@ def build_headless(
     settings: Settings,
     agent_model: str,
     unattended: bool = False,
+    wall_time: int | None = None,
+    max_tool_calls: int | None = 12,
 ) -> HeadlessPlan:
     """Build a one-shot run. ``unattended`` auto-approves tool calls (opt-in)."""
     if client not in CLIENTS:
@@ -58,21 +60,35 @@ def build_headless(
         argv = [
             "qwen", "--model", agent_model,
             "--approval-mode", "yolo" if unattended else "auto-edit",
-            prompt,
         ]  # fmt: skip
+        # Let the agent stop itself cleanly instead of being killed: a runaway
+        # loop otherwise looks identical to a hung process. The prompt stays
+        # last because it is positional.
+        if wall_time:
+            argv += ["--max-wall-time", f"{int(wall_time)}s"]
+        if max_tool_calls is not None:
+            argv += ["--max-tool-calls", str(int(max_tool_calls))]
+        argv.append(prompt)
     elif client == "codex":
         argv = ["codex", "exec", "-C", str(target), "--sandbox", "workspace-write"]
         if local:
-            argv += ["--profile", "local"]
+            # Codex's Responses translation through LiteLLM streams tool calls
+            # as text. Its OSS path talks to Ollama directly and executes them.
+            argv += ["--oss", "--local-provider", "ollama", "-m", agent_model]
         argv += ["--skip-git-repo-check", prompt]
     elif client == "claude":
+        if local:
+            from .bridge import ensure_running
+
+            if not ensure_running(settings.gateway_url):
+                raise ValueError("the Claude bridge did not start")
         argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits"]
         if local:
-            argv += ["--model", env.get("ANTHROPIC_MODEL", "local-claude")]
+            argv += ["--model", env.get("ANTHROPIC_MODEL", "local-agent")]
     else:  # opencode
         argv = ["opencode", "run"]
         if local:
-            argv += ["-m", f"ollama/{agent_model}"]
+            argv += ["-m", f"local/{agent_model}"]
         if unattended:
             argv.append("--auto")
         argv.append(prompt)
@@ -100,6 +116,8 @@ def run_headless(plan: HeadlessPlan, timeout: float | None = 3600.0) -> tuple[bo
         limit = f"{timeout:.0f}s" if timeout else "no limit"
         return False, f"{plan.client} timed out after {limit}"
     output = (process.stdout or "") + (process.stderr or "")
+    if process.returncode != 0:
+        output += f"\n[exit {process.returncode}]"
     return process.returncode == 0, output[-6000:]
 
 

@@ -152,17 +152,25 @@ def local_clients(resolved: dict[str, tuple[str, str]] | None = None) -> list[Cl
             key="codex",
             name="ChatGPT / Codex",
             command="codex",
-            capability="chat",
-            model=f"{CODEX_ALIAS} ({pick('codex', CODE_MODEL)} via gateway)",
-            detail="Local profile is ready; use Qwen Code for reliable local edits.",
+            capability="agent",
+            model=pick("codex", CODE_MODEL),
+            detail="Codex --oss mode: verifies tool calls against Ollama and edits files.",
         ),
         ClientInfo(
             key="claude",
             name="Claude Code",
             command="claude",
-            capability="chat",
-            model=f"{CLAUDE_ALIAS} ({pick('claude', 'qwen3.5:4b')} via gateway)",
-            detail="Launcher points it at loopback; use Qwen Code for local edits.",
+            capability="agent",
+            model="local-agent (via sovereign bridge)",
+            detail="Anthropic bridge turns streamed tool calls into real edits.",
+        ),
+        ClientInfo(
+            key="codium",
+            name="VS Codium / Continue",
+            command="codium",
+            capability="editor",
+            model="Continue → local-agent (gateway)",
+            detail="Opens the project with the Continue extension and local models.",
         ),
     ]
 
@@ -192,42 +200,53 @@ def plan_launch(
         return LaunchPlan(argv, target, env, agent_model)
 
     if client == "codex":
-        if not codex_profile_path().is_file():
-            raise ValueError(f"missing {codex_profile_path()}; run sovereign install-clients")
-        env["SOVEREIGN_API_KEY"] = "local"
-        env["CODEX_HOME"] = str(codex_home_path())
-        argv = ["codex", "--profile", "local", "-C", str(target)]
+        # Codex 0.163 removed `wire_api = "chat"` and its Responses translation
+        # through LiteLLM streams tool calls as text. Its built-in OSS path
+        # speaks to Ollama directly and executes tools correctly.
+        argv = [
+            "codex",
+            "--oss",
+            "--local-provider",
+            "ollama",
+            "-m",
+            agent_model,
+            "-C",
+            str(target),
+        ]
         return LaunchPlan(
             argv,
             target,
             env,
-            CODEX_ALIAS,
-            "Codex local chat; use Qwen Code for reliable local file edits.",
+            agent_model,
+            "Codex OSS mode; edits are real tool calls against Ollama.",
         )
 
     if client == "claude":
         env.update(
             {
-                "ANTHROPIC_BASE_URL": settings.gateway_url,
+                # The bridge is non-streaming internally; Claude Code still
+                # receives a normal Anthropic SSE stream with tool_use blocks.
+                "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
                 "ANTHROPIC_AUTH_TOKEN": "local",
                 "ANTHROPIC_API_KEY": "local",
-                "ANTHROPIC_MODEL": CLAUDE_ALIAS,
+                "ANTHROPIC_MODEL": "local-agent",
                 "ANTHROPIC_SMALL_FAST_MODEL": "local-chat",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": CLAUDE_ALIAS,
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": CLAUDE_ALIAS,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "local-agent",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "local-agent",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "local-chat",
-                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                "API_TIMEOUT_MS": "600000",
                 "DISABLE_TELEMETRY": "1",
             }
         )
-        argv = ["claude", "--model", CLAUDE_ALIAS]
+        argv = ["claude", "--model", "local-agent"]
         return LaunchPlan(
             argv,
             target,
             env,
-            CLAUDE_ALIAS,
-            "Claude local chat; use Qwen Code for reliable local file edits.",
+            "local-agent",
+            "Claude Code through the sovereign Anthropic bridge.",
         )
 
     if client == "opencode":
@@ -244,7 +263,16 @@ def plan_launch(
                 "OpenCode local coding agent; it uses the model from your OpenCode "
                 f"config because '{agent_model}' is not in that config's model list"
             )
-        return LaunchPlan(argv, target, env, f"ollama/{agent_model}", note)
+        return LaunchPlan(argv, target, env, f"local/{agent_model}", note)
+
+    if client == "codium":
+        return LaunchPlan(
+            ["codium", str(target)],
+            target,
+            env,
+            "Continue → local-agent",
+            "VS Codium with Continue; model routing is in ~/.continue/config.yaml.",
+        )
 
     raise ValueError(f"unsupported client: {client}")
 
@@ -262,7 +290,7 @@ def _pin_opencode_model(env: dict[str, str], agent_model: str) -> bool:
     available = opencode_models(read_text(config))
     if available and agent_model not in available:
         return False
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"model": f"ollama/{agent_model}"})
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"model": f"local/{agent_model}"})
     return True
 
 

@@ -35,12 +35,21 @@ from .clients import (
     wrapper_path,
 )
 from .cloud import (
+    ALIAS_TARGETS,
+    PROVIDERS,
+    ProviderError,
     apply_cloud,
     cloud_enabled,
     install_gateway_aliases,
+    is_cloud_tag,
     probe_cloud,
+    provider_chat,
+    provider_key,
+    provider_status,
     read_cloud_status,
     requested_models,
+    route_for,
+    set_provider_key,
 )
 from .config import (
     LOCAL_AI_ROOT,
@@ -225,7 +234,7 @@ def _run(
     keep_alive: str,
     think: bool | None,
 ) -> int:
-    model = CLOUD_TAG_ALIASES.get(model, model)
+    model = ALIAS_TARGETS.get(model, CLOUD_TAG_ALIASES.get(model, model))
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
         return 1
@@ -239,7 +248,16 @@ def _run(
         names = [str(item.get("name", "")) for item in data.get("models", [])]
         return any(name == model or name.startswith(model + ":") for name in names)
 
-    if not asyncio.run(installed()):
+    # A model that is already local always wins. A `:cloud` tag is never local
+    # weights, so a configured provider route may serve it even when Ollama has
+    # it registered.
+    was_installed = asyncio.run(installed())
+    if was_installed and not is_cloud_tag(model):
+        route = ("ollama", "", "", "")
+    else:
+        route = route_for(model)
+
+    if not was_installed and route[0] == "ollama":
         if no_pull:
             console.print(f"[red]{model} is not installed.[/] Run: sovereign pull {model}")
             return 1
@@ -251,6 +269,25 @@ def _run(
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
+
+    if route[0] != "ollama":
+        # `run` talks to the provider directly, so it works immediately after
+        # --set-key without re-installing gateway aliases.
+        console.print(f"[dim]Running {model} via {route[0]} · {route[1]}…[/]\n")
+        try:
+            answer = provider_chat(
+                route,
+                messages,
+                max_tokens=max(512, min(context, 8192)),
+                temperature=temperature,
+            )
+        except ProviderError as exc:
+            console.print(f"[red]{exc}[/]")
+            return 1
+        console.print(Text(answer))
+        console.print()
+        return 0
+
     console.print(
         f"[dim]Running {model} (ctx={context}, temp={temperature}, keep_alive={keep_alive})…[/]\n"
     )
@@ -1361,6 +1398,28 @@ def _doctor(snap: Snapshot) -> int:
             "restart Ollama: sovereign tune (or quit and reopen the app)",
             warn=True,
         )
+    from .cloud import available_providers, cloud_env_path
+
+    providers = available_providers()
+    add(
+        True,
+        "Cloud providers",
+        f"{', '.join(providers)} configured"
+        if providers
+        else "none (local-only; Ollama Cloud optional)",
+        "sovereign cloud --set-key openrouter",
+        warn=False,
+    )
+    key_file = cloud_env_path()
+    if key_file.is_file():
+        mode = key_file.stat().st_mode & 0o777
+        add(
+            mode & 0o077 == 0,
+            "Cloud key file",
+            f"{key_file} · {mode:o}",
+            f"chmod 600 {key_file}",
+            warn=True,
+        )
     add(
         (LOCAL_AI_ROOT / "gateway" / "config.yaml").is_file(),
         "Local AI root",
@@ -1580,11 +1639,33 @@ def _cloud(
     pull: bool = False,
     probe: bool = False,
     timeout: float = 12.0,
+    set_key: str | None = None,
+    key: str | None = None,
+    prefer: str = "auto",
 ) -> int:
-    """Show, enable, and wire Ollama Cloud's frontier models."""
+    """Show, enable, and wire the frontier models over Ollama Cloud or a provider."""
     if enable and disable:
         console.print("[red]Choose --enable or --disable, not both.[/]")
         return 1
+    if set_key:
+        provider = PROVIDERS.get(set_key)
+        if provider is None:
+            console.print(f"[red]Unknown provider:[/] {set_key}. Try: {', '.join(PROVIDERS)}")
+            return 1
+        value = key
+        if not value:
+            import getpass
+
+            value = getpass.getpass(f"{provider.name} API key (hidden): ")
+        try:
+            path = set_provider_key(provider.key, value)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            return 1
+        console.print(f"[green]Saved {provider.name} key[/] to {path} [dim](mode 600)[/]")
+        console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
+        console.print("[dim]Then route the aliases through it:[/] sovereign cloud --install-aliases")
+        probe = True
     if enable:
         console.print("[bold]Enabling Ollama Cloud[/] (persists across restarts)")
         for action in apply_cloud(True):
@@ -1601,8 +1682,16 @@ def _cloud(
             console.print(f"  [green]·[/] {action}")
         console.print("[dim]Local models are unaffected.[/]")
 
+    if install_aliases and prefer in PROVIDERS:
+        provider = PROVIDERS[prefer]
+        if not provider_key(provider):
+            console.print(
+                f"[red]No {provider.name} key.[/] Run: "
+                f"sovereign cloud --set-key {provider.key}"
+            )
+            return 1
     if install_aliases:
-        paths = install_gateway_aliases()
+        paths = install_gateway_aliases(prefer=prefer)
         if not paths:
             console.print(
                 f"[yellow]No gateway config found under[/] {LOCAL_AI_ROOT / 'gateway'}"
@@ -1617,11 +1706,29 @@ def _cloud(
     console.print(f"\n[bold]Ollama Cloud[/]  [{style}]{status.detail}[/]")
     if not status.enabled:
         console.print("[dim]Enable with:[/] sovereign cloud --enable")
+
+    ptable = Table(title="Provider keys (cloud.env / environment)", header_style="bold #b794f4")
+    ptable.add_column("Provider", style="bold")
+    ptable.add_column("Status")
+    ptable.add_column("Detail")
+    for _key, name, state, detail in provider_status():
+        pstyle = "green" if state == "key set" else "dim"
+        ptable.add_row(name, f"[{pstyle}]{state}[/]", detail)
+    console.print(ptable)
     console.print(
-        "[dim]Cloud aliases:[/] cloud-kimi-k3 · cloud-kimi-k2.6 · "
-        "cloud-deepseek-v4.1-flash · cloud-deepseek-v4-pro · cloud-glm-5.3 · "
-        "cloud-glm-5.3-flash · cloud-glm-5.2 · local-qwen3.8"
+        "[dim]Add a key:[/] sovereign cloud --set-key openrouter "
+        "[dim](one key covers all eight; direct provider keys also work)[/]"
     )
+    rtable = Table(title="Alias routes", header_style="bold #b794f4")
+    rtable.add_column("Alias", style="bold", no_wrap=True)
+    rtable.add_column("Route", no_wrap=True)
+    rtable.add_column("Target")
+    for alias, tag in ALIAS_TARGETS.items():
+        route, provider_model, _base, _env = route_for(tag, alias, prefer=prefer)
+        target = provider_model or tag
+        style = "cyan" if route == "ollama" else "green"
+        rtable.add_row(alias, f"[{style}]{route}[/]", target)
+    console.print(rtable)
     console.print("[dim]Install them into the gateway:[/] sovereign cloud --install-aliases")
 
     snap = _snapshot(settings)
@@ -1639,7 +1746,7 @@ def _cloud(
         view = snap.views.get(tag)
         if spec and spec.cloud:
             state = "registered" if view and view.installed else "not pulled"
-            state_style = "green" if state == "ready" else "yellow"
+            state_style = "green" if state == "registered" else "yellow"
         else:
             state = "local · installed" if view and view.installed else "local · missing"
             state_style = "green" if view and view.installed else "yellow"
@@ -1791,6 +1898,44 @@ def _gateway_restart(settings: Settings) -> int:
 
     console.print("[red]Gateway did not come back.[/] Check: sovereign logs gateway -n 80")
     return 1
+
+
+def _bridge(
+    host: str,
+    port: int,
+    gateway: str,
+    model: str,
+    start: bool,
+    stop: bool,
+    status: bool,
+) -> int:
+    """Run or manage the Anthropic bridge used by Claude Code."""
+    from . import bridge as bridge_mod
+
+    if stop:
+        stopped = bridge_mod.stop()
+        console.print("[green]Bridge stopped.[/]" if stopped else "[dim]Bridge was not running.[/]")
+        return 0 if stopped else 1
+    if status:
+        running = bridge_mod.port_open(port=port)
+        state = "[green]running[/]" if running else "[dim]stopped[/]"
+        console.print(f"Claude bridge  {state}  [dim]http://{host}:{port}/v1/messages[/]")
+        console.print(f"[dim]Gateway: {gateway} · default alias: {model}[/]")
+        console.print(f"[dim]Log: {bridge_mod.log_path()}[/]")
+        return 0 if running else 1
+    if start:
+        ok = bridge_mod.ensure_running(gateway, port)
+        state = "[green]running[/]" if ok else "[red]failed to start[/]"
+        console.print(f"Claude bridge  {state}  [dim]http://{host}:{port}[/]")
+        if not ok:
+            console.print(f"[dim]Check:[/] sovereign logs bridge -n 60")
+        return 0 if ok else 1
+    console.print(
+        f"[bold]Claude bridge[/] · http://{host}:{port} → {gateway} "
+        f"[dim](Ctrl+C to stop)[/]"
+    )
+    bridge_mod.serve(host, port, gateway, model)
+    return 0
 
 
 def _clients(snap: Snapshot) -> None:
@@ -2046,7 +2191,13 @@ def _warm(settings: Settings, model: str | None, task: str) -> int:
     return 0
 
 
-def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -> int:
+def _launch(
+    client: str,
+    path: str,
+    yolo: bool = False,
+    dry_run: bool = False,
+    model: str | None = None,
+) -> int:
     target = Path(path).expanduser().resolve()
     if not target.is_dir():
         console.print(f"[red]Not a directory:[/] {target}")
@@ -2065,9 +2216,16 @@ def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -
         snap.potential_free_gb,
         max_context=snap.settings.max_context,
     )
-    agent_model = selection.tag or "gemma4:12b"
+    agent_model = model or selection.tag or "gemma4:12b"
 
-    _make_room(snap, agent_model, dry_run)
+    if client == "claude" and not dry_run:
+        from .bridge import ensure_running
+
+        if not ensure_running(snap.settings.gateway_url):
+            console.print("[red]Claude bridge did not start.[/] See: sovereign logs bridge")
+            return 1
+    else:
+        _make_room(snap, agent_model, dry_run)
 
     try:
         plan = plan_launch(client, target, snap.settings, agent_model, yolo=yolo)
@@ -2369,7 +2527,8 @@ def _pipeline(
     timeout: float = 900.0,
     review_tokens: int = 1600,
     agent_client: str = "qwen",
-    agent_timeout: float = 3600.0,
+    agent_timeout: float = 900.0,
+    dry_run: bool = False,
 ) -> int:
     import httpx
 
@@ -2414,7 +2573,8 @@ def _pipeline(
 
         asyncio.run(_clear())
 
-    clear_gpu("planning")
+    if not dry_run:
+        clear_gpu("planning")
 
     # Verification is what makes the result trustworthy: the project's own
     # tests decide, not the models.
@@ -2458,6 +2618,18 @@ def _pipeline(
         if context:
             combined = context + "\n\n" + combined
         clear_gpu("implementation")
+
+        # Load the coder before the agent starts. An 18 GB cold load inside the
+        # agent's first provider call looks like a provider failure and makes
+        # Qwen retry instead of work.
+        async def _preload() -> None:
+            client = OllamaClient(settings.ollama_url)
+            try:
+                await client.preload(agent, 16384)
+            except OllamaError:
+                pass
+
+        asyncio.run(_preload())
         try:
             plan = build_headless(
                 agent_client,
@@ -2467,11 +2639,14 @@ def _pipeline(
                 settings,
                 agent,
                 unattended=yes,
+                wall_time=max(30, int(agent_timeout) - 20),
+                max_tool_calls=12,
             )
         except ValueError as exc:
             return False, str(exc)
         ok, output = run_headless(plan, timeout=agent_timeout)
-        if not ok and "timed out" in output:
+        stopped_early = "timed out" in output or "[exit 55]" in output
+        if not ok and stopped_early:
             # Local agent CLIs sometimes finish the edits and then hang. If the
             # tree actually changed, let the checks decide instead of throwing
             # the work away.
@@ -2526,7 +2701,34 @@ def _pipeline(
     def fix_fn(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
         return implement_fn(prompt_text, plan_text, failure)
 
+    timings: dict[str, float] = {}
+
+    def timed(label: str, fn):
+        """Record wall time per stage so the summary explains where it went."""
+
+        def wrapper(*args, **kwargs):
+            started = time.monotonic()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                elapsed = time.monotonic() - started
+                timings[label] = round(timings.get(label, 0.0) + elapsed, 1)
+
+        return wrapper
+
     shown = ", ".join(check_commands) if check_commands else "none"
+    if dry_run:
+        console.print(
+            f"[bold]Dry run[/] · dir={target} · plan={plan_model} · "
+            f"implement={agent_client}({agent}) · review={review_model}"
+        )
+        console.print(f"checks: {shown}")
+        console.print(
+            f"fix rounds: {max_fixes} · agent timeout: {agent_timeout:.0f}s · "
+            f"check timeout: {timeout:.0f}s"
+        )
+        console.print("[dim]Nothing was run.[/]")
+        return 0
     console.print(
         f"[bold]Pipeline[/] · plan={plan_model} · implement={agent_client}({agent}) · "
         f"review={review_model} · checks={shown}"
@@ -2534,11 +2736,11 @@ def _pipeline(
     try:
         result = run_pipeline(
             prompt,
-            plan_fn,
-            implement_fn,
-            None if no_review else review_fn,
-            verify=None if not check_commands else verify_fn,
-            fix=fix_fn if max_fixes > 0 else None,
+            timed("plan", plan_fn),
+            timed("implement", implement_fn),
+            None if no_review else timed("review", review_fn),
+            verify=None if not check_commands else timed("verify", verify_fn),
+            fix=timed("fix", fix_fn) if max_fixes > 0 else None,
             max_fixes=max(0, max_fixes),
         )
     except SourceError as exc:
@@ -2569,6 +2771,7 @@ def _pipeline(
         f"verification: {verified}",
         f"outcome: {'complete' if result.succeeded else 'incomplete'}",
         f"stages: {', '.join(stage.name for stage in result.stages)}",
+        "timings: " + " · ".join(f"{name} {secs:.1f}s" for name, secs in timings.items()),
     ]
     (run_dir / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
 
@@ -2675,6 +2878,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cloud.add_argument("--probe", action="store_true", help="check login/readiness with one model")
     cloud.add_argument("--timeout", type=float, default=12.0, help="probe timeout in seconds")
+    cloud.add_argument(
+        "--set-key",
+        choices=sorted(PROVIDERS),
+        default=None,
+        metavar="PROVIDER",
+        help="store an OpenRouter/DeepSeek/Z.ai/Moonshot/Alibaba key in cloud.env",
+    )
+    cloud.add_argument(
+        "--key",
+        default=None,
+        help="API key value (omit it to be prompted without shell history)",
+    )
+    cloud.add_argument(
+        "--route",
+        choices=("auto", "ollama", *PROVIDERS),
+        default="auto",
+        help="route written by --install-aliases (default: first configured key, else Ollama)",
+    )
     tune = sub.add_parser("tune", help="apply/verify Ollama context, flash attention and q8 KV")
     tune.add_argument("--context", type=int, default=DEFAULT_CONTEXT)
     tune.add_argument("--dry-run", action="store_true", help="show changes without applying")
@@ -2688,6 +2909,16 @@ def build_parser() -> argparse.ArgumentParser:
     gateway.add_argument(
         "--restart", action="store_true", help="restart the supervisor and wait for health"
     )
+    bridge = sub.add_parser(
+        "bridge", help="Anthropic Messages bridge so Claude Code can execute local tools"
+    )
+    bridge.add_argument("--host", default="127.0.0.1")
+    bridge.add_argument("--port", type=int, default=4001)
+    bridge.add_argument("--gateway", default="http://127.0.0.1:4000")
+    bridge.add_argument("--model", default="local-agent", help="default gateway alias")
+    bridge.add_argument("--start", action="store_true", help="start in the background")
+    bridge.add_argument("--stop", action="store_true", help="stop the background bridge")
+    bridge.add_argument("--status", action="store_true", help="show whether it is running")
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("backends", help="show which local inference servers are reachable")
@@ -2783,6 +3014,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline.add_argument("--timeout", type=float, default=900.0, help="per-check timeout")
     pipeline.add_argument(
+        "--dry-run", action="store_true", help="show the resolved models and checks only"
+    )
+    pipeline.add_argument(
         "--review-tokens",
         type=int,
         default=1600,
@@ -2797,7 +3031,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--agent-timeout",
         type=float,
-        default=3600.0,
+        default=900.0,
         help="timeout for one agent run, in seconds",
     )
 
@@ -2888,9 +3122,14 @@ def build_parser() -> argparse.ArgumentParser:
     clone.add_argument("--name", default=None)
 
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
-    launch.add_argument("client", choices=("qwen", "codex", "claude", "opencode"))
+    launch.add_argument("client", choices=("qwen", "codex", "claude", "opencode", "codium"))
     launch.add_argument("path", nargs="?", default=".")
     launch.add_argument("--yolo", action="store_true", help="auto-approve Qwen Code tool calls")
+    launch.add_argument(
+        "--model",
+        default=None,
+        help="Ollama tag or gateway alias (default: the router's best agent model)",
+    )
     launch.add_argument(
         "--dry-run",
         action="store_true",
@@ -2957,6 +3196,9 @@ def main(argv: list[str] | None = None) -> int:
             pull=args.pull,
             probe=args.probe,
             timeout=args.timeout,
+            set_key=args.set_key,
+            key=args.key,
+            prefer=args.route,
         )
     if command == "tune":
         return _tune(args.context, dry_run=args.dry_run)
@@ -2976,6 +3218,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.restart:
             return _gateway_restart(settings)
         return _gateway(_snapshot(settings))
+    if command == "bridge":
+        return _bridge(
+            args.host,
+            args.port,
+            args.gateway,
+            args.model,
+            start=args.start,
+            stop=args.stop,
+            status=args.status,
+        )
     if command == "env":
         _env(settings)
         return 0
@@ -2987,7 +3239,13 @@ def main(argv: list[str] | None = None) -> int:
     if command == "install-clients":
         return _install_clients()
     if command == "launch":
-        return _launch(args.client, args.path, yolo=args.yolo, dry_run=args.dry_run)
+        return _launch(
+            args.client,
+            args.path,
+            yolo=args.yolo,
+            dry_run=args.dry_run,
+            model=args.model,
+        )
     if command == "best":
         return _best(_snapshot(settings))
     if command == "watchdog":
@@ -3100,6 +3358,7 @@ def main(argv: list[str] | None = None) -> int:
             review_tokens=args.review_tokens,
             agent_client=args.agent_client,
             agent_timeout=args.agent_timeout,
+            dry_run=args.dry_run,
         )
     if command == "pull-recommended":
         return _pull_recommended(settings)

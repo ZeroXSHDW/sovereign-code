@@ -121,14 +121,21 @@ CATALOG: dict[str, ModelSpec] = {
         cloud=True,
     ),
     # --- Current-gen local Qwen ------------------------------------------------
+    # The big sibling, Qwen3.8-Flash-Next (125B-A6B, 256k ctx), is deliberately
+    # NOT here: its smallest published artifact is 105 GB (nvfp4), which is more
+    # than 4x this Mac's 24 GB of unified memory, and OCI pins it to
+    # H100_X8/H200_X4. It cannot be pulled or served locally; do not add it.
     "qwen3.8:27b": ModelSpec(
         tag="qwen3.8:27b",
         role=CODING,
         params_b=27.0,
         size_gb=18.0,
+        # 262k is the model family's native window. On 24 GB the router's own
+        # ceiling applies (settings.max_context, 32k by default) because the KV
+        # cache, not the weights, is what overflows first at this size.
         max_context=262_144,
         strengths=("code", "agent", "vision", "tools", "thinking"),
-        summary="Qwen 3.8 27B: current-gen coding/agents; 18 GB download, 256k ctx.",
+        summary="Qwen 3.8 27B: current-gen coder/agent + native vision; 18 GB, 256k ctx.",
     ),
     "deepseek-coder:6.7b": ModelSpec(
         tag="deepseek-coder:6.7b",
@@ -275,9 +282,14 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     # Curated to the strongest models measured on this M5 Pro / 24 GB
     # (2026-10-21), strongest first. Weaker/superseded models are pruned so a
     # task never silently falls back to something like phi or gemma3:4b.
+    #
+    # qwen3.8:27b leads code, agent and reason: it is the best current-gen model
+    # that actually runs here. It is 18 GB of weights on 24 GB, so the router
+    # pins it to a small window and it swaps against anything else resident —
+    # that is why chat and fast stay on the 4-9 GB models.
     CODING: (
-        "qwen3-coder:30b",
         "qwen3.8:27b",
+        "qwen3-coder:30b",
         "gpt-oss:20b",
         "qwen2.5-coder:14b",
         "glm-4.7-flash",
@@ -291,8 +303,8 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
         "gpt-oss:20b",
     ),
     REASON: (
-        "glm-4.7-flash",
         "qwen3.8:27b",
+        "glm-4.7-flash",
         "deepseek-r1:8b",
         "gpt-oss:20b",
         "gemma4:12b",
@@ -301,6 +313,9 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     VISION: (
         "qwen3.5:9b",
         "gemma4:12b",
+        # Native vision-language, best accuracy per image; last because an 18 GB
+        # load is a poor trade for a single screenshot.
+        "qwen3.8:27b",
     ),
     FAST: (
         "qwen3.5:4b",
@@ -312,11 +327,12 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
         "qwen3.5:4b",
         "gemma4:12b",
         "glm-4.7-flash",
+        "qwen3.8:27b",
     ),
     # Agentic coding needs reliable tool calls, not just code knowledge.
     AGENT: (
-        "qwen3-coder:30b",
         "qwen3.8:27b",
+        "qwen3-coder:30b",
         "gpt-oss:20b",
         "gemma4:12b",
         "qwen2.5-coder:14b",
@@ -344,7 +360,8 @@ CLOUD_TAGS: tuple[str, ...] = tuple(
 # What the eight requested model names map to. Kept here (not only in the CLI)
 # so the mapping is testable and `sovereign cloud` can show exactly where each
 # familiar name goes. "DeepSeek V4 Flash" is the retired `deepseek-v4-flash`
-# tag; the current Flash is V4.1, which is what the alias points at.
+# Ollama tag; providers still serve the exact model, and the alias uses it
+# when a provider key exists, falling back to V4.1 over Ollama.
 REQUESTED_CLOUD_MODELS: tuple[tuple[str, str, str], ...] = (
     ("Kimi K3", "kimi-k3:cloud", "1M ctx · multimodal agent · Moonshot"),
     (
@@ -360,7 +377,7 @@ REQUESTED_CLOUD_MODELS: tuple[tuple[str, str, str], ...] = (
     (
         "DeepSeek V4 Flash",
         "deepseek-v4.1-flash:cloud",
-        "the V4 Flash tag retired 2026-08-27; V4.1 Flash supersedes it",
+        "exact V4 Flash via a provider key; V4.1 Flash over Ollama (tag retired 2026-08-27)",
     ),
     ("GLM 5.3 FL", "glm-5.3-flash:cloud", "1M ctx · 320B MoE / 18B active · Z.ai"),
     ("GLM 5.2", "glm-5.2:cloud", "~976k ctx · long-horizon flagship · Z.ai"),
@@ -532,7 +549,7 @@ def recommended_tag() -> str:
 REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     # fast agentic MoE models (best speed/capability on 24 GB)
     "glm4": ("GLM-4 9B; fast multilingual coding, agentic tool use & reasoning", 5.5),
-    "qwen3.8:27b": ("current-gen Qwen coder/agent; 18 GB, 256k ctx", 18.0),
+    "qwen3.8:27b": ("primary local coder/agent, native vision; 18 GB, 256k ctx", 18.0),
     "qwen3-coder:30b": ("best agentic coder; 30B MoE, ~3B active — fast", 19.0),
     "glm-4.7-flash": ("GLM Flash; agentic tool use + reasoning, 198k ctx", 19.0),
     "gpt-oss:20b": ("fastest reliable tool-caller; low memory", 14.0),

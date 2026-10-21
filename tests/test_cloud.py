@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from sovereign_code import cloud
 from sovereign_code.models import (
     CATALOG,
@@ -148,3 +150,91 @@ def test_gateway_aliases_have_sane_contexts() -> None:
     assert rows["local-qwen3.8"].context == cloud.LOCAL_ALIAS_CONTEXT
     assert rows["local-qwen3.8"].cloud is False
     assert rows["cloud-deepseek-v4-flash"].tag == "deepseek-v4.1-flash:cloud"
+
+
+def test_provider_route_prefers_direct_then_openrouter() -> None:
+    env = {"OPENROUTER_API_KEY": "or-test"}
+    route = cloud.route_for("kimi-k3:cloud", env=env)
+    assert route[0] == "openrouter"
+    assert route[1] == "moonshotai/kimi-k3"
+    assert route[3] == "OPENROUTER_API_KEY"
+
+    # A direct provider key beats the aggregator for models it carries.
+    both = {"OPENROUTER_API_KEY": "or-test", "DEEPSEEK_API_KEY": "ds-test"}
+    route = cloud.route_for("deepseek-v4-pro:cloud", env=both)
+    assert route[0] == "deepseek"
+    assert route[1] == "deepseek-v4-pro"
+    assert route[3] == "DEEPSEEK_API_KEY"
+
+
+def test_local_alias_never_routes_to_a_provider() -> None:
+    env = {"OPENROUTER_API_KEY": "or-test"}
+    assert cloud.route_for("qwen3.8:27b", "local-qwen3.8", env=env)[0] == "ollama"
+    # The cloud-prefixed alias may use the provider.
+    assert cloud.route_for("qwen3.8:27b", "cloud-qwen3.8", env=env)[0] == "openrouter"
+
+
+def test_provider_gateway_block_uses_key_and_no_ollama_ctx() -> None:
+    env = {"OPENROUTER_API_KEY": "or-test"}
+    block = cloud.gateway_block(env=env)
+    assert "openai/moonshotai/kimi-k3" in block
+    assert "api_key: os.environ/OPENROUTER_API_KEY" in block
+    assert "api_base: https://openrouter.ai/api/v1" in block
+    assert "ollama/kimi-k3:cloud" not in block
+    # The explicit local alias must stay local even with a key present.
+    assert "ollama/qwen3.8:27b" in block
+
+
+def test_set_provider_key_is_private_and_preserves_other_lines(tmp_path) -> None:
+    path = tmp_path / "cloud.env"
+    path.write_text("# gateway keys\nOPENAI_API_KEY=keep-me\n", encoding="utf-8")
+    cloud.set_provider_key("openrouter", "sk-or-secret", path)
+    body = path.read_text()
+    assert 'OPENROUTER_API_KEY="sk-or-secret"' in body
+    assert "OPENAI_API_KEY=keep-me" in body
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert cloud.read_cloud_env(path)["OPENROUTER_API_KEY"] == "sk-or-secret"
+
+    # Re-setting replaces instead of appending a duplicate.
+    cloud.set_provider_key("openrouter", "sk-or-new", path)
+    assert path.read_text().count("OPENROUTER_API_KEY=") == 1
+    assert "sk-or-new" in path.read_text()
+
+
+def test_provider_chat_without_key_is_actionable(monkeypatch, tmp_path) -> None:
+    for name in ("OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "ZAI_API_KEY", "ZHIPUAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(cloud, "cloud_env_path", lambda: tmp_path / "none.env")
+    route = (
+        "openrouter",
+        "moonshotai/kimi-k3",
+        "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY",
+    )
+    with pytest.raises(cloud.ProviderError) as exc:
+        cloud.provider_chat(route, [{"role": "user", "content": "hi"}])
+    assert "OPENROUTER_API_KEY" in str(exc.value)
+    assert "--set-key openrouter" in str(exc.value)
+
+
+def test_provider_status_masks_keys() -> None:
+    env = {"OPENROUTER_API_KEY": "sk-or-1234567890"}
+    rows = {row[0]: row for row in cloud.provider_status(env)}
+    assert rows["openrouter"][2] == "key set"
+    assert "1234567890" not in rows["openrouter"][3]
+    assert rows["deepseek"][2] == "no key"
+
+
+def test_shell_profile_rewrite(tmp_path) -> None:
+    path = tmp_path / "profile.env"
+    path.write_text(
+        '# --- Ollama: loopback only, cloud disabled ---\nexport OLLAMA_NO_CLOUD="1"\n',
+        encoding="utf-8",
+    )
+    assert cloud._rewrite_shell_profile(path, True) is True
+    body = path.read_text()
+    assert 'export OLLAMA_NO_CLOUD="0"' in body
+    assert "cloud opt-in" in body
+    assert cloud._rewrite_shell_profile(path, True) is False  # idempotent
+    assert cloud._rewrite_shell_profile(path, False) is True
+    assert 'export OLLAMA_NO_CLOUD="1"' in path.read_text()

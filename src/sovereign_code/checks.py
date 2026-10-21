@@ -24,6 +24,15 @@ class CheckResult:
         return "checks passed" if self.ok else "checks failed"
 
 
+def python_command(directory: Path) -> str:
+    """Prefer the project's venv: the system python usually has no pytest."""
+    for candidate in (".venv/bin/python", "venv/bin/python", ".env/bin/python"):
+        path = directory / candidate
+        if path.is_file():
+            return str(path)
+    return "python"
+
+
 def detect_checks(directory: Path) -> list[str]:
     """Best guess at the project's test command, or [] when unknown."""
     makefile = directory / "Makefile"
@@ -41,7 +50,7 @@ def detect_checks(directory: Path) -> list[str]:
         or (directory / "setup.py").is_file()
         or (directory / "tests").is_dir()
     ):
-        return ["python -m pytest -q"]
+        return [f"{python_command(directory)} -m pytest -q"]
 
     package = directory / "package.json"
     if package.is_file():

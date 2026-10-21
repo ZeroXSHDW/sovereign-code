@@ -81,13 +81,23 @@ def continue_default(text: str) -> str:
 
 
 def opencode_models(text: str) -> list[str]:
-    """Model ids declared in OpenCode's ollama provider."""
+    """Model ids declared by any OpenCode provider.
+
+    The old parser only read the built-in `ollama` provider; OpenCode's native
+    Ollama integration streams tool calls as text, so the working config uses a
+    custom OpenAI-compatible provider named `local`. Reading every provider also
+    keeps cloud/provider blocks visible to `doctor` and `prune`.
+    """
     try:
         data = json.loads(text)
     except ValueError:
         return []
-    provider = (data.get("provider") or {}).get("ollama") or {}
-    return [str(name) for name in (provider.get("models") or {})]
+    found: list[str] = []
+    for provider in (data.get("provider") or {}).values():
+        if not isinstance(provider, dict):
+            continue
+        found.extend(str(name) for name in (provider.get("models") or {}))
+    return found
 
 
 def qwen_models(text: str) -> list[str]:

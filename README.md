@@ -95,7 +95,8 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 
 | Model | Role | Notes |
 | --- | --- | --- |
-| `qwen2.5-coder:14b` | best coder | 9.0 GB; preferred for code; verified at **32k** with q8 KV |
+| `qwen3.8:27b` | **primary** for code / agent / reason | 18 GB (after `sovereign pull`); native vision; 256k native, **32k** practical on 24 GB |
+| `qwen2.5-coder:14b` | best coder that fits comfortably | 9.0 GB; recommended download for a fresh install; verified at **32k** with q8 KV |
 | `qwen2.5-coder:7b` | coder fallback | 4.7 GB; 32k works but tool calls through agent clients are unreliable |
 | `qwen3.5:4b` | chat / vision / tools | 4.0 GB; 65k with `think:false` |
 | `gemma4:12b` | agent + deep reasoning / vision | 7.7 GB; 32k with `think:false`; verified tool calls |
@@ -131,25 +132,35 @@ browse the curated catalog.
 | `gemma3:12b` | ~7.7 GB | general model with strong reasoning |
 | `phi4:14b` | ~9 GB | small reasoning model |
 | `codestral:22b` | ~13 GB | Mistral coding model; tight on 24 GB |
-| `qwen3.8:27b` | ~18 GB | current-gen Qwen coder/agent; 256k ctx; tight on 24 GB |
+| `qwen3.8:27b` | ~18 GB | **primary** local coder/agent, native vision; 256k native ctx, tight on 24 GB |
 | `nomic-embed-text` | ~0.3 GB | embeddings for semantic search |
+
+> **Qwen3.8-Flash-Next is not on this list, on purpose.** It is the 125B-A6B
+> datacenter sibling of the 27B: the *smallest* published artifact is 105 GB
+> (`qwen3.8-flash-next:125b-a6b-nvfp4`, or `:125b-mlx`), the GGUF quants start at
+> 120 GB, and OCI requires `H100_X8`/`H200_X4` to serve it. On 24 GB of unified
+> memory it can only page off the SSD, so it would be the slowest option here,
+> not the fastest. `sovereign model-info qwen3.8-flash-next` will report the
+> size before you pull it.
 
 ### Frontier cloud models (opt-in — prompts leave the Mac)
 
-These are served by **Ollama Cloud**, not downloaded. `sovereign cloud` shows the
-mapping and readiness; `sovereign cloud --enable` flips the two switches that
-disable cloud (`~/.ollama/server.json` and `OLLAMA_NO_CLOUD`), updates the login
-agent, and restarts Ollama.
+These are served by **Ollama Cloud** or a **provider key** (OpenRouter, DeepSeek,
+Z.ai, Moonshot, Alibaba), not downloaded. `sovereign cloud` shows the mapping,
+the route each alias will use, and readiness. `sovereign cloud --enable` flips
+the two switches that disable Ollama Cloud (`~/.ollama/server.json` and
+`OLLAMA_NO_CLOUD`), updates the login agent and the sourced shell profile, and
+restarts Ollama.
 
 | Requested | Ollama tag | Context | What it is |
 | --- | --- | --- | --- |
 | Kimi K3 | `kimi-k3:cloud` | 1M | Moonshot, native multimodal agent, 2.8T |
 | DeepSeek Flash V4.1 | `deepseek-v4.1-flash:cloud` | 1M | DeepSeek's current fast coding model |
 | DeepSeek Flash V4 Pro | `deepseek-v4-pro:cloud` | 1M | 1.6T MoE, frontier reasoning |
-| DeepSeek V4 Flash | `deepseek-v4.1-flash:cloud` | 1M | the old `deepseek-v4-flash` tag was retired 2026-08-27; V4.1 supersedes it |
+| DeepSeek V4 Flash | `deepseek-v4.1-flash:cloud` | 1M | exact V4 Flash with a provider key; V4.1 Flash over Ollama (tag retired 2026-08-27) |
 | GLM 5.3 FL | `glm-5.3-flash:cloud` | 1M | Z.ai 320B MoE / 18B active, multimodal |
 | GLM 5.2 | `glm-5.2:cloud` | ~976k | Z.ai previous flagship |
-| QWEN 3.8 | `qwen3.8:27b` | 256k | **local** 18 GB download; not cloud |
+| QWEN 3.8 | `qwen3.8:27b` | 256k | **local** 18 GB download; not cloud; primary for code/agent/reason |
 | Kimi K2.6 | `kimi-k2.6:cloud` | 256k | Moonshot multimodal agent |
 
 ```sh
@@ -165,8 +176,9 @@ sovereign pull qwen3.8:27b          # the one local model in the list (~18 GB)
 Gateway aliases (after `--install-aliases` and a gateway restart):
 `cloud-kimi-k3`, `cloud-kimi-k2.6`, `cloud-deepseek-v4.1-flash`,
 `cloud-deepseek-v4-flash`, `cloud-deepseek-v4-pro`, `cloud-glm-5.3`,
-`cloud-glm-5.3-flash`, `cloud-glm-5.2`, `local-qwen3.8`, plus the role aliases
-`local-cloud` and `local-cloud-fast`. Use them anywhere an alias is accepted:
+`cloud-glm-5.3-flash`, `cloud-glm-5.2`, `cloud-qwen3.8`, `local-qwen3.8`, plus
+the role aliases `local-cloud` and `local-cloud-fast`. Use them anywhere an
+alias is accepted:
 
 ```sh
 sovereign consult "review this design" --models cloud-kimi-k3,cloud-glm-5.3
@@ -180,8 +192,43 @@ subscription is on the account: on a Free plan every one of them returns HTTP
 402 with an upgrade link, which `sovereign cloud --probe` reports as
 `needs an Ollama Pro plan`. Qwen 3.8 is the exception because it runs locally.
 
-**Privacy.** Any `:cloud` tag sends the prompt, system message, and attached
-context to ollama.com. Local aliases and the local router are unchanged.
+### Use a provider key instead (no Ollama Pro needed)
+
+One **OpenRouter** key covers all eight models. Direct DeepSeek, Z.ai, Moonshot,
+and Alibaba keys also work and are preferred when present (fewer hops, usually
+cheaper):
+
+| Provider | Env var | Models |
+| --- | --- | --- |
+| OpenRouter | `OPENROUTER_API_KEY` | all eight, including exact `deepseek/deepseek-v4-flash` |
+| DeepSeek | `DEEPSEEK_API_KEY` | V4.1 Flash, V4 Pro, V4 Flash |
+| Z.ai | `ZAI_API_KEY` (or `ZHIPUAI_API_KEY`) | GLM 5.3, 5.3 Flash, 5.2 |
+| Moonshot | `MOONSHOT_API_KEY` (or `KIMI_API_KEY`) | Kimi K3, K2.6 |
+| Alibaba | `DASHSCOPE_API_KEY` (or `QWEN_API_KEY`) | Qwen 3.8 Max (cloud fallback) |
+
+```sh
+sovereign cloud --set-key openrouter     # prompts hidden; writes cloud.env 0600
+sovereign run cloud-kimi-k3 "…"          # direct provider call, works immediately
+sovereign cloud --install-aliases        # cloud-* now route through OpenRouter
+sovereign gateway --restart
+sovereign cloud --probe                  # one tiny completion through the chosen route
+```
+
+`sovereign run` talks to the provider directly for a provider route, so it
+needs no gateway restart. `consult`, `bench`, `summarize`, `pipeline`, and the
+client tools use the gateway aliases, which do need `--install-aliases` and a
+restart.
+
+Routing is `auto` by default: a configured direct provider key, then OpenRouter,
+then Ollama Cloud. Force a route with `--route openrouter` (or `ollama`,
+`deepseek`, `zai`, `moonshot`, `dashscope`). `local-qwen3.8` is always local;
+`cloud-qwen3.8` uses a provider when one is configured. Keys live in
+`~/Documents/local-ai/gateway/cloud.env` (mode 0600), which the gateway
+supervisor sources; `sovereign cloud` only shows a masked value.
+
+**Privacy.** A `:cloud` tag sends the prompt, system message, and attached
+context to ollama.com; a provider route sends them to that provider (OpenRouter
+or the direct vendor). Local aliases and the local router are unchanged.
 
 Every `pull` prints an estimated size and warns when free disk is low, and
 `sovereign rm <tag>` reclaims space.

@@ -11,6 +11,14 @@ All notable changes to Sovereign Code.
   `server.json` + `OLLAMA_NO_CLOUD`, updates the login agent and restarts Ollama;
   `--install-aliases` writes `cloud-*` gateway aliases; `--pull` registers the tags;
   `--probe` reports disabled / signed-out / Pro-plan states instead of a raw HTTP error.
+- **Provider routes for the same models**: `sovereign cloud --set-key openrouter` (or
+  `deepseek`, `zai`, `moonshot`, `dashscope`) stores a key in `cloud.env` (mode 0600);
+  `--install-aliases` then routes `cloud-*` through the first configured provider and
+  falls back to Ollama Cloud. One OpenRouter key covers all eight, and
+  `cloud-deepseek-v4-flash` uses the exact retired-from-Ollama V4 Flash model when a
+  key is present. `--probe` tests whichever route will actually serve the request.
+- `--enable` also updates the sourced `~/.config/sovereign-ai-os/profile.env`, which
+  previously re-exported `OLLAMA_NO_CLOUD=1` in every new shell.
 - Cloud-aware `models`, `status`, `model-info`, `pull`, and `run`: cloud tags are marked
   `☁`, never counted as local disk use, and 402 "not in the Free plan" replies are
   explained with the upgrade link. The local-first router never picks a cloud model.
@@ -50,6 +58,14 @@ All notable changes to Sovereign Code.
   implementer for bounded repair rounds (`--fix`, `--checks`, `--no-verify`, `--agent-timeout`).
   The reviewer sees the real `git diff` and the check output, and every run is archived under
   `~/Documents/local-ai/data/runs/<timestamp>/` with a summary and an explicit verdict.
+- `checks` prefer the project's venv interpreter (`.venv/bin/python`) when detecting pytest; the
+  system python usually has no pytest, which made auto-detection fail on real projects.
+- `pipeline` gained `--dry-run` (resolved models, checks and limits in under a second, no side
+  effects), per-stage timings in `summary.txt`, and pre-loads the implementer so an 18 GB cold load
+  is not mistaken for a provider failure.
+- Agent runs are bounded with `--max-wall-time` / `--max-tool-calls`, and Qwen's exit code 55 is
+  treated like our own timeout: keep the edits, let the checks decide. Measured on this Mac:
+  `qwen` client ~4–5 min per implement step but reliable; `opencode` ~1 min but wrote no files.
 - If a local agent hits `--agent-timeout` *after* writing files, the run continues to
   verification instead of discarding the work — Qwen Code frequently edits correctly and then
   fails to exit.

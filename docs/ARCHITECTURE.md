@@ -113,16 +113,25 @@ sends one tiny completion to learn the third, plus whether the account's plan
 includes the model.
 
 `apply_cloud()` is the only writer: it updates `server.json`, `launchctl setenv`,
-the login-agent plist (text edit, so its comments survive), then restarts the
-app. `open -a Ollama` inherits the caller's environment, so the restart removes
-`OLLAMA_NO_CLOUD` from `os.environ` first; otherwise a shell that has it set
-would immediately re-disable cloud.
+the login-agent plist (text edit, so its comments survive), the sourced
+`~/.config/sovereign-ai-os/profile.env` (otherwise every new shell re-exports
+`OLLAMA_NO_CLOUD=1`), then restarts the app. `open -a Ollama` inherits the
+caller's environment, so the restart removes `OLLAMA_NO_CLOUD` from
+`os.environ` first; otherwise a shell that has it set would immediately
+re-disable cloud. The restart waits for both app processes to exit before
+launching, because `open -a` is ignored while the old app is still shutting
+down.
 
 Gateway aliases are generated between marker comments and inserted before
 `router_settings:` so the YAML stays valid; `merge_gateway_text()` is idempotent
-and backs up the config. Every cloud alias maps to an Ollama tag, so LiteLLM
-needs no provider key. A 402 from the account's plan is wrapped by LiteLLM as a
-500; `summarize.complete()` reads the body and re-attaches the upgrade link.
+and backs up the config. `route_for()` decides each alias's backend: a direct
+provider key (DeepSeek, Z.ai, Moonshot, Alibaba), then OpenRouter, then Ollama
+Cloud, unless `--route` forces one. Provider entries use
+`openai/<vendor-model>` with an explicit `api_base` and
+`api_key: os.environ/<ENV_VAR>`; keys live in `gateway/cloud.env` (mode 0600),
+which the supervisor sources. A 402 from the Ollama plan is wrapped by LiteLLM
+as a 500; `summarize.complete()` reads the body and re-attaches the upgrade
+link.
 
 ## Storage layout
 

@@ -48,12 +48,50 @@
   </div>
 </section>
 
+<section class="what-you-get">
+  <h2>What the license includes</h2>
+  <div class="list">
+    <div class="row"><span class="check">✓</span><div><h3>Ready-to-run package</h3><p>The packaged release with the pre-built dashboard launcher and login agent — no build step, no config hunting.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Lifetime updates</h3><p>Every new model integration, command, and improvement ships to you for free, forever — one payment, no subscription.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Setup help</h3><p>A direct line for installation, model tuning, and troubleshooting on your specific Mac.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>The full source, MIT</h3><p>Everything is open source. Prefer to build it yourself? The repo is free — the license pays for the packaged convenience and support.</p></div></div>
+  </div>
+</section>
+
 <section class="install">
   <h2>Install in three lines</h2>
   <pre><code>cd ~/Documents/sovereign-code
 ./scripts/bootstrap.sh   # venv, install, PATH link, login agent
 sovereign                # open the dashboard</code></pre>
   <p class="fine">Runs on macOS with Python 3.11+ and <a href="https://ollama.com">Ollama</a>. MIT-licensed — build it free from <a href="https://github.com/ZeroXSHDW/sovereign-code">source</a>.</p>
+</section>
+
+<section class="faq">
+  <h2>Questions</h2>
+  <details>
+    <summary>Is it really local — does anything leave my Mac?</summary>
+    <p>Yes. Ollama and the LiteLLM gateway bind to 127.0.0.1 only, and the console never calls a cloud API. The only network use is downloading models from Ollama's registry — and that's optional; pre-downloaded models run fully offline.</p>
+  </details>
+  <details>
+    <summary>Do I have to pay to use it?</summary>
+    <p>No. The source is MIT-licensed and buildable free from GitHub. The €5 license is for the ready-to-run package, the pre-built dashboard launcher, lifetime updates, and setup help.</p>
+  </details>
+  <details>
+    <summary>What Mac do I need?</summary>
+    <p>An Apple Silicon Mac (M1 or newer) with macOS 14+, Python 3.11+, and Ollama. It's tuned for a 24 GB M-series machine but scales down to smaller unified memory.</p>
+  </details>
+  <details>
+    <summary>Which models are included?</summary>
+    <p>You bring the models through Ollama. The console already supports 13+ verified models — Qwen, DeepSeek-R1, Gemma, Llama, Mistral, and more — and can download and run any Ollama tag with a single command.</p>
+  </details>
+  <details>
+    <summary>Does it work with ChatGPT, Codex, and Claude Code?</summary>
+    <p>Yes. It wires those clients to your local models through a loopback gateway and auto-resolves the best installed model for each. Qwen Code and OpenCode are verified to edit files locally; Codex and Claude Code work as local chat clients.</p>
+  </details>
+  <details>
+    <summary>Refunds?</summary>
+    <p>Checkout is handled securely by Stripe. For order or refund questions, use the contact details on your receipt.</p>
+  </details>
 </section>
 
 <section class="buy-band">

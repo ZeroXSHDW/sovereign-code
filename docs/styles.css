@@ -94,6 +94,39 @@ body {
 .buy-band p { color: var(--muted); }
 .fine { font-size: 13px; margin-top: 18px; }
 
+.what-you-get { padding: 40px 5vw 56px; max-width: 760px; margin: 0 auto; }
+.what-you-get h2, .faq h2 { color: var(--purple); text-align: center; letter-spacing: 1px; }
+.list { display: flex; flex-direction: column; gap: 16px; margin-top: 26px; }
+.row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  background: var(--panel);
+  border: 1px solid rgba(183, 148, 244, 0.16);
+  border-radius: 8px;
+  padding: 18px 22px;
+}
+.check { color: var(--purple); font-weight: 800; line-height: 1.4; }
+.row h3 { color: var(--violet); margin: 0 0 6px; font-size: 15px; }
+.row p { margin: 0; color: var(--muted); font-size: 14px; }
+
+.faq { padding: 40px 5vw 56px; max-width: 760px; margin: 0 auto; }
+.faq details {
+  background: var(--panel);
+  border: 1px solid rgba(183, 148, 244, 0.16);
+  border-radius: 8px;
+  margin-top: 12px;
+  padding: 16px 20px;
+}
+.faq summary {
+  cursor: pointer;
+  color: var(--violet);
+  font-weight: 700;
+  outline: none;
+}
+.faq summary:hover { color: var(--ice); }
+.faq details p { margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+
 footer {
   display: flex;
   justify-content: space-between;

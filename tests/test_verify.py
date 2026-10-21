@@ -6,7 +6,12 @@ import json
 
 import httpx
 
-from sovereign_code.verify import CORE_ALIASES, probe_alias, probe_aliases
+from sovereign_code.verify import (
+    CORE_ALIASES,
+    configured_aliases,
+    probe_alias,
+    probe_aliases,
+)
 
 
 def _reply(content: str, status: int = 200) -> httpx.MockTransport:
@@ -82,3 +87,29 @@ def test_check_embedding_http_error() -> None:
     ok, detail = check_embedding("http://gw", transport=transport)
     assert ok is False
     assert "500" in detail
+
+
+def _config(tmp_path, body: str):
+    path = tmp_path / "config.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_configured_aliases_skips_the_openai_passthrough(tmp_path) -> None:
+    path = _config(
+        tmp_path,
+        "model_list:\n"
+        "  - model_name: local-code\n"
+        "    litellm_params:\n"
+        "      model: ollama/qwen3-coder:30b\n"
+        '  - model_name: "openai/*"\n'
+        "    litellm_params:\n"
+        '      model: "openai/*"\n'
+        "  - model_name: local-chat\n",
+    )
+    # Order preserved, quoting tolerated, cloud passthrough excluded.
+    assert configured_aliases(path) == ("local-code", "local-chat")
+
+
+def test_configured_aliases_missing_file_is_empty(tmp_path) -> None:
+    assert configured_aliases(tmp_path / "nope.yaml") == ()

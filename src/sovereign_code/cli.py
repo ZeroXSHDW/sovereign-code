@@ -74,7 +74,13 @@ from .system import (
     swap_usage_gb,
     wired_limit_gb,
 )
-from .verify import CORE_ALIASES, EXPECTED_ALIASES, check_embedding, probe_aliases
+from .verify import (
+    CORE_ALIASES,
+    EXPECTED_ALIASES,
+    check_embedding,
+    configured_aliases,
+    probe_aliases,
+)
 
 LABEL = "com.user.sovereign-code"
 console = Console()
@@ -437,7 +443,11 @@ def _verify(
     if not snap.gateway.up:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway")
         return 1
-    aliases = EXPECTED_ALIASES if all_aliases else CORE_ALIASES
+    aliases = (
+        configured_aliases(LOCAL_AI_ROOT / "gateway" / "config.yaml") or EXPECTED_ALIASES
+        if all_aliases
+        else CORE_ALIASES
+    )
     available = set(snap.gateway.models)
     missing = [alias for alias in aliases if alias not in available]
     if missing:

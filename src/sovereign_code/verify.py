@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
 CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
+
+_ALIAS_RE = re.compile(r"^\s*-\s*model_name:\s*[\"']?([^\"'\s]+)[\"']?\s*$", re.MULTILINE)
+
+
+def configured_aliases(config_path: Path) -> tuple[str, ...]:
+    """Alias names declared in a LiteLLM config, in file order.
+
+    Reading the config beats a hard-coded list: aliases added by hand (or by
+    another tool) stay verifiable, and removed ones stop being probed. The
+    `openai/*` passthrough is skipped — it has no local model behind it.
+    """
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    names = [m.group(1) for m in _ALIAS_RE.finditer(text)]
+    return tuple(name for name in names if not name.startswith("openai/"))
 
 EXPECTED_ALIASES = (
     "local-chat",

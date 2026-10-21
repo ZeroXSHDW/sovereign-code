@@ -104,16 +104,18 @@ def test_wrappers_live_in_documents_and_are_linked(home):
         "claude-local",
         "opencode-local",
         "codex-chatgpt",
+        "claude-cloud",
     }
+    cloud = {"codex-chatgpt": "exec codex", "claude-cloud": "exec claude"}
     for path in written:
         assert path.parent == home / "local-ai" / "bin"
         assert path.stat().st_mode & 0o111
-        if path.name == "codex-chatgpt":
-            # Deliberately does NOT go through `sovereign launch`: it must keep
-            # ~/.codex and the real ChatGPT login intact.
+        if path.name in cloud:
+            # Cloud wrappers deliberately do NOT go through `sovereign launch`:
+            # they must keep the real subscription login intact.
             body = path.read_text(encoding="utf-8")
             assert "launch" not in body
-            assert "exec codex" in body
+            assert cloud[path.name] in body
         else:
             assert "launch" in path.read_text(encoding="utf-8")
         link = home / ".local" / "bin" / path.name

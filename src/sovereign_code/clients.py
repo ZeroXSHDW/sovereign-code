@@ -256,9 +256,22 @@ def install_client_wrappers() -> list[Path]:
         link.symlink_to(path)
         written.append(path)
 
-    # ChatGPT-native Codex: no CODEX_HOME override, no gateway, no fake key, so
-    # it uses the real ChatGPT login in ~/.codex. This is the other half of the
-    # hybrid setup — `codex-local` for Ollama, `codex-chatgpt` for ChatGPT.
+    # Cloud-native wrappers: no gateway, no override, no fake key, so they use
+    # the real subscription login. `codex-local`/`claude-local` stay local.
+    claude_cloud = bin_dir / "claude-cloud"
+    claude_cloud.write_text(
+        "#!/bin/bash\nset -euo pipefail\n"
+        "# Uses your Claude subscription login (no local gateway overrides).\n"
+        'exec claude "$@"\n',
+        encoding="utf-8",
+    )
+    claude_cloud.chmod(0o755)
+    claude_link = link_dir / claude_cloud.name
+    if claude_link.is_symlink() or claude_link.exists():
+        claude_link.unlink()
+    claude_link.symlink_to(claude_cloud)
+    written.append(claude_cloud)
+
     cloud = bin_dir / "codex-chatgpt"
     cloud.write_text(
         "#!/bin/bash\nset -euo pipefail\n"

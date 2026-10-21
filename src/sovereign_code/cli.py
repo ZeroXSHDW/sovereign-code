@@ -1593,6 +1593,52 @@ def _make_room(snap: Snapshot, tag: str, dry_run: bool = False) -> list[str]:
     return evict
 
 
+def _best(snap: Snapshot) -> int:
+    """Show the effective model for every connected tool, strongest first."""
+    from .tools import (
+        codex_logged_in,
+        continue_default,
+        gateway_models,
+        opencode_default,
+        qwen_default,
+        read_text,
+    )
+
+    home = Path.home()
+    gateway = gateway_models(read_text(LOCAL_AI_ROOT / "gateway" / "config.yaml"))
+    opencode = opencode_default(read_text(home / ".config" / "opencode" / "opencode.json"))
+    qwen = qwen_default(read_text(home / ".qwen" / "settings.json"))
+    cont = continue_default(read_text(home / ".continue" / "config.yaml"))
+    chat = (
+        snap.chat_selection.tag
+        if snap.chat_selection and snap.chat_selection.model
+        else "-"
+    )
+    codex_state = "logged in" if codex_logged_in() else "not logged in"
+
+    table = Table(title="Strongest first · effective models", header_style="bold #b794f4")
+    table.add_column("Tool")
+    table.add_column("Model")
+    table.add_column("How", style="dim")
+    for tool, model, how in (
+        ("Codex (local)", gateway.get("local-code", "-"), "codex-local"),
+        ("Codex / ChatGPT", f"ChatGPT plan · {codex_state}", "codex login → codex-chatgpt"),
+        ("Claude Code (local)", gateway.get("local-claude", "-"), "claude-local"),
+        ("Claude Code (cloud)", "Claude subscription", "claude-cloud"),
+        ("OpenCode", opencode or "-", "opencode"),
+        ("Qwen Code", qwen or "-", "qwen-local"),
+        ("VS Codium", cont or "-", "Continue"),
+        ("Ollama chat", chat, "sovereign chat"),
+    ):
+        table.add_row(tool, model, how)
+    console.print(table)
+    console.print(
+        "[dim]Local picks follow the measured ranking; cloud wrappers use your "
+        "subscription with no local overrides.[/]"
+    )
+    return 0
+
+
 def _watchdog(settings: Settings, restart: bool = True, interval: float = 8.0) -> int:
     """Recover a wedged Ollama, but never interrupt one that is merely busy."""
     from .tune import restart_ollama
@@ -1664,6 +1710,18 @@ def _prune(snap: Snapshot, apply: bool = False) -> int:
     if not apply:
         console.print("[dim]Dry run: nothing removed. Re-run with --apply to delete.[/]")
         return 0
+
+    # Always leave a way back: record the exact pulls that would restore these.
+    from datetime import datetime
+
+    manifest = LOCAL_AI_ROOT / "data" / f"prune-{datetime.now():%Y%m%d-%H%M%S}.txt"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "# Restore the models removed by `sovereign prune --apply`:\n"
+        + "".join(f"ollama pull {tag}\n" for tag, _size in candidates),
+        encoding="utf-8",
+    )
+    console.print(f"[dim]Restore list written to {manifest}[/]")
 
     removed: list[str] = []
     for tag, _size in candidates:
@@ -2076,6 +2134,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
+    sub.add_parser("best", help="show the strongest model each connected tool uses")
     dog = sub.add_parser("watchdog", help="recover a wedged Ollama without killing a busy one")
     dog.add_argument("--no-restart", action="store_true", help="report only")
     dog.add_argument("--interval", type=float, default=8.0, help="seconds between samples")
@@ -2315,6 +2374,8 @@ def main(argv: list[str] | None = None) -> int:
         return _install_clients()
     if command == "launch":
         return _launch(args.client, args.path, yolo=args.yolo, dry_run=args.dry_run)
+    if command == "best":
+        return _best(_snapshot(settings))
     if command == "watchdog":
         return _watchdog(settings, restart=not args.no_restart, interval=args.interval)
     if command == "prune":

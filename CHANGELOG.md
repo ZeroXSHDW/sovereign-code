@@ -31,6 +31,14 @@ All notable changes to Sovereign Code.
   6-7 s cold load.
 - `sovereign prune` lists installed models that no alias, stack or task preference references
   (5.0 GB here), with `--apply` to delete and a dry run by default.
+- `sovereign best` prints the effective model for every connected tool (Codex, ChatGPT, Claude Code,
+  OpenCode, Qwen Code, VS Codium, Ollama chat) by reading their live configs, so "strongest first"
+  can be checked rather than assumed.
+- `claude-cloud` wrapper: the counterpart to `codex-chatgpt`, using the Claude subscription with no
+  local gateway overrides.
+- The catalog is curated to the strongest measured models; weaker/superseded ones (phi, mistral,
+  gemma3:4b, qwen3:8b, llama3.1:8b, deepseek-coder:6.7b, qwen2.5:0.5b, qwen2.5-coder:3b) were
+  pruned — 23.9 GB — and `prune --apply` now writes a restore list first.
 
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM

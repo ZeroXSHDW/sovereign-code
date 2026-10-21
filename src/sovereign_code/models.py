@@ -184,48 +184,44 @@ CATALOG: dict[str, ModelSpec] = {
 }
 
 TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
-    # Ranked by what was measured on this M5 Pro / 24 GB on 2026-10-21:
-    # qwen3-coder:30b 30.9 tok/s, gpt-oss:20b ~64 tok/s (alone), gemma4:12b
-    # 57.7 tok/s (MLX), qwen3.5:4b 63.8 tok/s, qwen2.5-coder:14b 28.4 tok/s.
+    # Curated to the strongest models measured on this M5 Pro / 24 GB
+    # (2026-10-21), strongest first. Weaker/superseded models are pruned so a
+    # task never silently falls back to something like phi or gemma3:4b.
     CODING: (
         "qwen3-coder:30b",
         "gpt-oss:20b",
         "qwen2.5-coder:14b",
-        "deepseek-coder:6.7b",
+        "glm-4.7-flash",
         "qwen2.5-coder:7b",
-        "glm4",
     ),
     CHAT: (
         "qwen3.5:9b",
-        "qwen3.5:4b",
         "gemma4:12b",
-        "qwen3:8b",
-        "glm4",
+        "qwen3.5:4b",
+        "glm-4.7-flash",
+        "gpt-oss:20b",
     ),
     REASON: (
+        "glm-4.7-flash",
         "deepseek-r1:8b",
         "gpt-oss:20b",
         "gemma4:12b",
         "qwen3.5:9b",
-        "glm4",
     ),
     VISION: (
         "qwen3.5:9b",
         "gemma4:12b",
-        "qwen3.5:4b",
     ),
     FAST: (
         "qwen3.5:4b",
-        "gemma3:4b",
+        "qwen3.5:9b",
         "qwen2.5-coder:7b",
-        "phi:latest",
     ),
     GENERAL: (
         "qwen3.5:9b",
         "qwen3.5:4b",
-        "qwen3:8b",
-        "glm4",
-        "mistral:latest",
+        "gemma4:12b",
+        "glm-4.7-flash",
     ),
     # Agentic coding needs reliable tool calls, not just code knowledge.
     AGENT: (
@@ -233,7 +229,7 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
         "gpt-oss:20b",
         "gemma4:12b",
         "qwen2.5-coder:14b",
-        "glm4",
+        "glm-4.7-flash",
     ),
 }
 
@@ -429,26 +425,25 @@ REMOTE_CATALOG: dict[str, tuple[str, float]] = {
 # time; the numbers are rough installed-size totals.
 MODEL_STACKS: dict[str, dict[str, object]] = {
     "lean": {
-        "models": ("qwen3.5:4b", "qwen2.5-coder:3b", "nomic-embed-text"),
-        "approx_gb": 7,
-        "note": "Fast chat + small coder + embeddings; leaves most RAM free.",
+        "models": ("qwen3.5:4b", "qwen2.5-coder:7b", "nomic-embed-text"),
+        "approx_gb": 8,
+        "note": "Fast chat + a FIM coder + embeddings; leaves most RAM free.",
     },
     "balanced": {
         "models": ("gpt-oss:20b", "qwen3.5:9b", "nomic-embed-text"),
         "approx_gb": 21,
-        "note": "Fast tool-caller + fast chat; fits beside the OS with room for KV.",
+        "note": "Strong tool-caller + fast chat; still fits beside the OS.",
     },
     "capable": {
         "models": ("qwen3-coder:30b", "qwen3.5:9b", "qwen3.5:4b", "nomic-embed-text"),
         "approx_gb": 33,
-        "note": "Best local coder + fast chat + tiny helper; the 30B wants the "
-        "machine to itself, so swap with `sovereign free` between turns.",
+        "note": "The daily stack: best coder, fast chat, tiny helper. The 30B wants "
+        "the machine to itself, so swap with `sovereign free`.",
     },
     "max": {
         "models": ("qwen3-coder:30b", "glm-4.7-flash", "gpt-oss:20b", "deepseek-r1:8b"),
-        "approx_gb": 59,
-        "note": "Everything worth keeping; the 18-19 GB models are strictly one at "
-        "a time on 24 GB.",
+        "approx_gb": 51,
+        "note": "Every model worth keeping; the 18-19 GB ones run strictly one at a time.",
     },
 }
 

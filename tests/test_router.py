@@ -95,9 +95,11 @@ def test_reason_prefers_deepseek_when_gemma_missing():
     assert selection.tag == "deepseek-r1:8b"
 
 
-def test_fast_prefers_gemma3_4b():
-    selection = choose(Task.FAST, views("gemma3:4b", "phi:latest"), free_gb=20)
-    assert selection.tag == "gemma3:4b"
+def test_fast_prefers_the_smallest_current_gen_model():
+    # gemma3:4b and phi were pruned from the curated catalog; qwen3.5:4b is the
+    # strongest model that still counts as "fast".
+    selection = choose(Task.FAST, views("qwen3.5:4b", "qwen2.5-coder:7b"), free_gb=20)
+    assert selection.tag == "qwen3.5:4b"
 
 
 def test_large_model_keeps_a_usable_context():

@@ -14,7 +14,13 @@
 <body>
 <header class="nav">
   <span class="brand">▚ SOVEREIGN&nbsp;<em>CODE</em></span>
-  <a class="nav-link" href="https://github.com/ZeroXSHDW/sovereign-code">Source</a>
+  <nav class="links">
+    <a class="nav-link" href="#features">Features</a>
+    <a class="nav-link" href="#how">How it works</a>
+    <a class="nav-link" href="#faq">FAQ</a>
+    <a class="nav-link" href="#buy">Buy</a>
+    <a class="nav-link" href="https://github.com/ZeroXSHDW/sovereign-code">Source</a>
+  </nav>
 </header>
 
 <section class="hero">
@@ -31,12 +37,20 @@
   </div>
 </section>
 
+<section class="stats">
+  <div class="stat"><strong>32k</strong><span>context tokens</span></div>
+  <div class="stat"><strong>13+</strong><span>verified models</span></div>
+  <div class="stat"><strong>12</strong><span>gateway aliases</span></div>
+  <div class="stat"><strong>100%</strong><span>offline inference</span></div>
+  <div class="stat"><strong>MIT</strong><span>open source</span></div>
+</section>
+
 <section class="preview">
   <img src="assets/dashboard.png" alt="Sovereign Code terminal dashboard">
   <p class="caption">The live terminal dashboard — model list, loaded context, memory, gateway, and a streaming chat prompt.</p>
 </section>
 
-<section class="features">
+<section class="features" id="features">
   <h2>Why it stands out</h2>
   <div class="grid">
     <div class="card"><h3>32k context on-device</h3><p>Flash attention plus a q8_0 KV cache push the 14B coder to 32,768 tokens — no cloud required.</p></div>
@@ -45,6 +59,37 @@
     <div class="card"><h3>Compliant browser operator</h3><p>Playwright drives a visible Chromium — no CAPTCHA solving, secret-field refusal, and an audit log.</p></div>
     <div class="card"><h3>Semantic search + memory</h3><p>Embed a repo and ask "where is X handled?"; project memory and <code>AGENTS.md</code> are injected automatically.</p></div>
     <div class="card"><h3>Local-only, always</h3><p>Ollama and the LiteLLM gateway bind to 127.0.0.1. No accounts, no analytics, it never phones home.</p></div>
+  </div>
+</section>
+
+<section class="how" id="how">
+  <h2>How it works</h2>
+  <div class="steps">
+    <div class="step"><span class="num">1</span><h3>Install</h3><p>One command bootstraps the venv, links <code>sovereign</code> to your PATH, and installs the login dashboard.</p></div>
+    <div class="step"><span class="num">2</span><h3>Pull models</h3><p><code>sovereign pull-stack capable</code> grabs a coder, a reasoner, and embeddings — or pull any Ollama tag you want.</p></div>
+    <div class="step"><span class="num">3</span><h3>Code</h3><p><code>sovereign code</code> drops into Qwen Code, or wire ChatGPT/Codex/Claude with <code>eval "$(sovereign env)"</code>.</p></div>
+  </div>
+</section>
+
+<section class="architecture">
+  <h2>Under the hood</h2>
+  <img src="assets/architecture.png" alt="Sovereign Code architecture">
+  <p class="caption">Terminal dashboard → OllamaClient → 127.0.0.1:11434 → router → sessions. The LiteLLM gateway exposes your local models to OpenAI- and Anthropic-compatible clients — everything on loopback.</p>
+</section>
+
+<section class="comparison">
+  <h2>Sovereign Code vs. cloud AI</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>Sovereign Code</th><th>Cloud (ChatGPT / Codex / Claude)</th></tr></thead>
+      <tbody>
+        <tr><td>Your code</td><td>Stays on-device</td><td>Sent to servers</td></tr>
+        <tr><td>Cost</td><td>One-time €5 + free models</td><td>Monthly subscription</td></tr>
+        <tr><td>Works offline</td><td>Yes</td><td>No</td></tr>
+        <tr><td>Models</td><td>Yours — any Ollama model</td><td>Locked to the vendor</td></tr>
+        <tr><td>Telemetry</td><td>None</td><td>Varies by vendor</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -58,7 +103,7 @@
   </div>
 </section>
 
-<section class="install">
+<section class="install" id="install">
   <h2>Install in three lines</h2>
   <pre><code>cd ~/Documents/sovereign-code
 ./scripts/bootstrap.sh   # venv, install, PATH link, login agent
@@ -66,7 +111,13 @@ sovereign                # open the dashboard</code></pre>
   <p class="fine">Runs on macOS with Python 3.11+ and <a href="https://ollama.com">Ollama</a>. MIT-licensed — build it free from <a href="https://github.com/ZeroXSHDW/sovereign-code">source</a>.</p>
 </section>
 
-<section class="faq">
+<section class="changelog">
+  <h2>What's new</h2>
+  <div class="entry"><span class="date">latest</span><div><h3>Auto model resolution + new models</h3><p>ChatGPT, Codex, and Claude Code now auto-resolve the best installed model. Added DeepSeek-R1, Qwen3, and Gemma3 to the catalog and gateway.</p></div></div>
+  <div class="entry"><span class="date">v0.1.0</span><div><h3>Local-first console</h3><p>Terminal dashboard, 32k context, multi-model pipeline, semantic search, skills bank, compliant browser, and offline model stacks.</p></div></div>
+</section>
+
+<section class="faq" id="faq">
   <h2>Questions</h2>
   <details>
     <summary>Is it really local — does anything leave my Mac?</summary>
@@ -94,7 +145,7 @@ sovereign                # open the dashboard</code></pre>
   </details>
 </section>
 
-<section class="buy-band">
+<section class="buy-band" id="buy">
   <h2>One-time €5.</h2>
   <p>Unlock the packaged release, the pre-built dashboard, and lifetime updates — delivered instantly.</p>
   <a class="buy" href="https://buy.stripe.com/8x2dRa1uE1D7bsF3YN14404">Buy now — €5</a>

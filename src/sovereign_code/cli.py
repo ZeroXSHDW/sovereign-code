@@ -43,7 +43,7 @@ from .config import (
 )
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
-from .models import MODEL_STACKS
+from .models import MODEL_STACKS, TASK_PREFERENCE
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .router import Task, choose
@@ -1557,6 +1557,170 @@ def _clients(snap: Snapshot) -> None:
         )
 
 
+def _make_room(snap: Snapshot, tag: str, dry_run: bool = False) -> list[str]:
+    """Unload residents that would stop `tag` from fitting the GPU budget.
+
+    Ollama does not error when a load cannot fit — it waits, and every later
+    request queues behind it. Freeing the machine up front is the only way to
+    keep the rest of the stack responsive.
+    """
+    view = snap.views.get(tag)
+    if view is None:
+        return []
+    evict = models_to_evict(
+        max(view.size_gb, view.spec.size_gb),
+        [(item.tag, item.size_gb) for item in snap.loaded if item.tag != tag],
+        wired_limit_gb(snap.memory.total_gb),
+    )
+    if not evict:
+        return []
+    console.print(
+        f"[dim]{'Would free' if dry_run else 'Freeing'} GPU memory for "
+        f"{tag}: unloading {', '.join(evict)}[/]"
+    )
+    if dry_run:
+        return evict
+
+    async def _evict() -> None:
+        ollama = OllamaClient(snap.settings.ollama_url)
+        for name in evict:
+            try:
+                await ollama.unload(name)
+            except OllamaError:
+                pass
+
+    asyncio.run(_evict())
+    return evict
+
+
+def _watchdog(settings: Settings, restart: bool = True, interval: float = 8.0) -> int:
+    """Recover a wedged Ollama, but never interrupt one that is merely busy."""
+    from .tune import restart_ollama
+    from .watchdog import STUCK, classify, sample
+
+    base = settings.ollama_url
+    live = probe_liveness(base, timeout=12.0)
+    if live.ok:
+        console.print(f"[green]serving[/] · {live.detail}")
+        return 0
+
+    console.print(f"[yellow]not serving[/] · {live.detail} — sampling for progress")
+    before = sample(base)
+    time.sleep(interval)
+    after = sample(base)
+    verdict = classify(False, before, after)
+    console.print(
+        f"verdict [bold]{verdict}[/] · runner cpu {after.cpu:.0f}% · "
+        f"{len(after.models)} model(s) resident"
+    )
+    if verdict != STUCK:
+        console.print("[dim]Ollama is busy, not wedged. Leaving it alone.[/]")
+        return 0
+
+    if not restart:
+        console.print("[yellow]Wedged.[/] Re-run without --no-restart to recover.")
+        return 1
+
+    console.print("[dim]Restarting Ollama…[/]")
+    restart_ollama()
+    for _ in range(30):
+        if probe_liveness(base, timeout=8.0).ok:
+            console.print("[green]recovered[/]")
+            return 0
+        time.sleep(1)
+    console.print("[red]Still not serving after restart.[/]")
+    return 1
+
+
+def _prune(snap: Snapshot, apply: bool = False) -> int:
+    """Report installed models that no alias, stack or task preference uses."""
+    from .prune import parse_alias_targets, prune_candidates, referenced_tags
+
+    config_path = LOCAL_AI_ROOT / "gateway" / "config.yaml"
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        config_text = ""
+
+    refs = referenced_tags(
+        parse_alias_targets(config_text), MODEL_STACKS, TASK_PREFERENCE
+    )
+    candidates = prune_candidates([(view.tag, view.size_gb) for view in snap.installed], refs)
+    if not candidates:
+        console.print("[green]Nothing to prune[/] — every installed model is referenced.")
+        return 0
+
+    total = sum(size for _tag, size in candidates)
+    table = Table(
+        title=f"Unreferenced · {total:.1f} GB",
+        header_style="bold #b794f4",
+    )
+    table.add_column("Model", style="bold")
+    table.add_column("Size", justify="right")
+    for tag, size in candidates:
+        table.add_row(tag, f"{size:.1f} GB")
+    console.print(table)
+
+    if not apply:
+        console.print("[dim]Dry run: nothing removed. Re-run with --apply to delete.[/]")
+        return 0
+
+    removed: list[str] = []
+    for tag, _size in candidates:
+        result = subprocess.run(
+            ["ollama", "rm", tag], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            removed.append(tag)
+        else:
+            console.print(f"[red]Could not remove {tag}:[/] {result.stderr.strip()[:120]}")
+    if removed:
+        console.print(f"[green]Removed[/] {', '.join(removed)} · {total:.1f} GB freed")
+    return 0 if len(removed) == len(candidates) else 1
+
+
+def _warm(settings: Settings, model: str | None, task: str) -> int:
+    """Load the chosen model now so the first prompt is not a cold start."""
+    snap = _snapshot(settings)
+    if not snap.ollama_up:
+        console.print("[red]Ollama is offline.[/]")
+        return 1
+    tasks = {"code": Task.CODE, "chat": Task.CHAT, "agent": Task.AGENT}
+    want = tasks.get(task, Task.CODE)
+    if model:
+        view = snap.views.get(model)
+        tag = model
+        context = (view.context if view and view.context else settings.max_context)
+    else:
+        selection = choose(want, snap.views, snap.potential_free_gb, max_context=settings.max_context)
+        if not selection.model:
+            console.print("[yellow]No installed model to warm.[/]")
+            return 1
+        tag, context = selection.tag, selection.context
+
+    _make_room(snap, tag)
+
+    async def _preload() -> dict:
+        client = OllamaClient(snap.settings.ollama_url)
+        started = time.monotonic()
+        data = await client.preload(tag, context)
+        return {"data": data, "elapsed": time.monotonic() - started}
+
+    try:
+        result = asyncio.run(_preload())
+    except OllamaError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    # With an empty prompt Ollama reports load_duration as 0 even when it had to
+    # load, so wall time is the honest number here.
+    elapsed = float(result["elapsed"])
+    if elapsed < 0.5:
+        console.print(f"[green]{tag}[/] already resident · {context} ctx")
+    else:
+        console.print(f"[green]{tag}[/] warmed in {elapsed:.1f}s · {context} ctx")
+    return 0
+
+
 def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -> int:
     target = Path(path).expanduser().resolve()
     if not target.is_dir():
@@ -1578,31 +1742,7 @@ def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -
     )
     agent_model = selection.tag or "gemma4:12b"
 
-    # A model that needs the whole GPU budget must not start beside a resident
-    # one: Ollama would hang instead of erroring. Unload the others first.
-    agent_view = snap.views.get(agent_model)
-    if agent_view is not None:
-        evict = models_to_evict(
-            max(agent_view.size_gb, agent_view.spec.size_gb),
-            [(view.tag, view.size_gb) for view in snap.loaded if view.tag != agent_model],
-            wired_limit_gb(snap.memory.total_gb),
-        )
-        if evict:
-            console.print(
-                f"[dim]{'Would free' if dry_run else 'Freeing'} GPU memory for "
-                f"{agent_model}: unloading {', '.join(evict)}[/]"
-            )
-            if not dry_run:
-
-                async def _evict() -> None:
-                    ollama = OllamaClient(snap.settings.ollama_url)
-                    for tag in evict:
-                        try:
-                            await ollama.unload(tag)
-                        except OllamaError:
-                            pass
-
-                asyncio.run(_evict())
+    _make_room(snap, agent_model, dry_run)
 
     try:
         plan = plan_launch(client, target, snap.settings, agent_model, yolo=yolo)
@@ -1936,6 +2076,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
+    dog = sub.add_parser("watchdog", help="recover a wedged Ollama without killing a busy one")
+    dog.add_argument("--no-restart", action="store_true", help="report only")
+    dog.add_argument("--interval", type=float, default=8.0, help="seconds between samples")
+    prune = sub.add_parser("prune", help="list installed models nothing references")
+    prune.add_argument("--apply", action="store_true", help="remove them (default: dry run)")
+    warm = sub.add_parser("warm", help="preload a model so the first prompt is fast")
+    warm.add_argument("--model", default=None, help="tag to warm (default: best for --task)")
+    warm.add_argument("--task", default="code", choices=("code", "chat", "agent"))
 
     browse = sub.add_parser("browse", help="drive a visible browser with the local model")
     browse.add_argument("url", nargs="?", default=None, help="starting URL")
@@ -2167,6 +2315,12 @@ def main(argv: list[str] | None = None) -> int:
         return _install_clients()
     if command == "launch":
         return _launch(args.client, args.path, yolo=args.yolo, dry_run=args.dry_run)
+    if command == "watchdog":
+        return _watchdog(settings, restart=not args.no_restart, interval=args.interval)
+    if command == "prune":
+        return _prune(_snapshot(settings), apply=args.apply)
+    if command == "warm":
+        return _warm(settings, args.model, args.task)
     if command == "free":
         return _free(settings)
     if command == "logs":

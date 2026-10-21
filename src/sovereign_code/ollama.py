@@ -61,6 +61,27 @@ class OllamaClient:
     async def show(self, model: str) -> dict[str, Any]:
         return await self._request("POST", "/api/show", {"model": model})
 
+    async def preload(
+        self, model: str, context: int = 16384, keep_alive: str = "15m"
+    ) -> dict[str, Any]:
+        """Load a model into memory without asking it to do anything.
+
+        The first request after 15 minutes idle pays a multi-second cold load,
+        which users read as "slow". Warming it up front moves that cost out of
+        the way of the first real prompt.
+        """
+        return await self._request(
+            "POST",
+            "/api/generate",
+            {
+                "model": model,
+                "prompt": "",
+                "stream": False,
+                "keep_alive": keep_alive,
+                "options": {"num_ctx": int(context)},
+            },
+        )
+
     async def unload(self, model: str) -> None:
         """Ask the server to evict a resident model immediately."""
         await self._request(

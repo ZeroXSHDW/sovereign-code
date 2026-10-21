@@ -24,6 +24,13 @@ All notable changes to Sovereign Code.
   the per-alias timeout on a hung server.
 - `sovereign doctor --fix` restarts a hung Ollama and confirms it serves again.
 - The dashboard shows each loaded model's engine (`mlx` / `llamacpp`) and the GPU-wired budget.
+- `sovereign watchdog` recovers a wedged Ollama while leaving a busy one alone: it samples `/api/ps`
+  and runner CPU over an interval and only restarts when nothing is progressing. The login watchdog
+  now calls a mirror of it from Application Support (launchd cannot read `~/Documents`).
+- `sovereign warm` preloads the best model for a task (or `--model`) so the first prompt is not a
+  6-7 s cold load.
+- `sovereign prune` lists installed models that no alias, stack or task preference references
+  (5.0 GB here), with `--apply` to delete and a dry run by default.
 
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM

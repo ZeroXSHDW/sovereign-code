@@ -74,10 +74,36 @@ def context_for(view: ModelView, free_gb: float | None, max_context: int = 32768
 
 
 def _fallback(views: dict[str, ModelView]) -> ModelView | None:
-    installed = [v for v in views.values() if v.installed]
+    """The best installed model when the curated list has nothing for the task.
+
+    Picking the *smallest* installed model chose `phi` (1.6 GB, a smoke-test
+    model) over anything usable, which is exactly what the curated preference
+    list exists to prevent. Prefer a real model, then the largest one, then
+    one that is already resident because a warm model answers sooner.
+    """
+    installed: list[ModelView] = []
+    seen: set[int] = set()
+    for view in views.values():
+        if view.installed and id(view) not in seen:
+            seen.add(id(view))
+            installed.append(view)
     if not installed:
         return None
-    return sorted(installed, key=lambda v: (not v.loaded, v.size_gb))[0]
+
+    def key(view: ModelView) -> tuple[int, float, int, str]:
+        return (
+            0 if _is_usable(view) else 1,
+            -view.size_gb,
+            0 if view.loaded else 1,
+            view.tag,
+        )
+
+    return sorted(installed, key=key)[0]
+
+
+def _is_usable(view: ModelView) -> bool:
+    """False for the tiny smoke-test models that cannot do real work."""
+    return not (view.spec.max_context <= 2048 and view.size_gb <= 2.0)
 
 
 def choose(
@@ -106,7 +132,7 @@ def choose(
         return Selection(task, fallback, context, "fallback to an installed model", None)
 
     # Nothing is installed: still tell the user which model to pull.
-    wanted = preferred_tags(task.value)[0]
+    wanted = recommend_pull(task)
     spec = CATALOG.get(wanted)
     reason = "no local models are installed"
     return Selection(task, None, 4096, reason, wanted if spec else None)

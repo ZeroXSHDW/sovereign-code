@@ -21,9 +21,11 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from .agents import build_headless, run_headless
 from .backup import create_backup
 from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
 from .browser.executor import chromium_path
+from .checks import detect_checks, run_checks
 from .clients import (
     codex_profile_path,
     install_client_wrappers,
@@ -31,6 +33,14 @@ from .clients import (
     plan_launch,
     resolve_client_models,
     wrapper_path,
+)
+from .cloud import (
+    apply_cloud,
+    cloud_enabled,
+    install_gateway_aliases,
+    probe_cloud,
+    read_cloud_status,
+    requested_models,
 )
 from .config import (
     LOCAL_AI_ROOT,
@@ -43,7 +53,7 @@ from .config import (
 )
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
-from .models import MODEL_STACKS, TASK_PREFERENCE
+from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .router import Task, choose
@@ -88,6 +98,14 @@ from .verify import (
 LABEL = "com.user.sovereign-code"
 console = Console()
 
+# Client name -> the executable that must be on PATH to use it as the agent.
+AGENT_CLIENTS: dict[str, str] = {
+    "qwen": "qwen",
+    "codex": "codex",
+    "claude": "claude",
+    "opencode": "opencode",
+}
+
 GATEWAY_WATCHDOG = (
     Path.home() / "Library" / "LaunchAgents" / "com.user.ailocalgateway.watchdog.plist"
 )
@@ -131,7 +149,14 @@ def _status(snap: Snapshot) -> None:
     table.add_row("Disk free", f"{snap.disk_free_gb:.0f} GB")
     table.add_row("Loopback", "yes" if snap.loopback else "[red]NO[/]")
     table.add_row("Login terminal", "installed" if snap.login_installed else "not installed")
-    table.add_row("Models", f"{len(snap.installed)} installed · {len(snap.loaded)} loaded")
+    local_installed = [view for view in snap.installed if not view.spec.cloud]
+    cloud_registered = [view for view in snap.installed if view.spec.cloud]
+    models_line = f"{len(local_installed)} local installed · {len(snap.loaded)} loaded"
+    if cloud_registered:
+        models_line += f" · {len(cloud_registered)} cloud registered"
+    table.add_row("Models", models_line)
+    cloud = "[green]enabled[/]" if snap.cloud_enabled else "[dim]disabled[/]"
+    table.add_row("Cloud", f"{cloud} [dim](sovereign cloud)[/]")
     console.print(table)
 
     if snap.loaded:
@@ -139,8 +164,7 @@ def _status(snap: Snapshot) -> None:
         for view in snap.loaded:
             engine = f" · [cyan]{view.runner}[/]" if view.runner else ""
             console.print(
-                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · "
-                f"{view.size_gb:.1f} GB{engine}"
+                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · {view.size_gb:.1f} GB{engine}"
             )
 
     coder = snap.recommended_coder or snap.best_coder
@@ -163,11 +187,19 @@ def _models_remote(snap: Snapshot, query: str | None = None) -> int:
     from .models import REMOTE_CATALOG
 
     installed = {view.tag for view in snap.installed}
-    rows = [
-        (tag, "[green]installed[/]" if tag in installed else "[dim]pull[/]", desc)
-        for tag, (desc, _size_gb) in sorted(REMOTE_CATALOG.items())
-        if not query or query.lower() in tag.lower()
-    ]
+    rows = []
+    for tag, (desc, _size_gb) in sorted(REMOTE_CATALOG.items()):
+        if query and query.lower() not in tag.lower():
+            continue
+        spec = CATALOG.get(tag)
+        if spec and spec.cloud:
+            status = "[cyan]registered[/]" if tag in installed else "[cyan]cloud[/]"
+            desc = f"{desc} — remote, needs Ollama Cloud"
+        elif tag in installed:
+            status = "[green]installed[/]"
+        else:
+            status = "[dim]pull[/]"
+        rows.append((tag, status, desc))
     if not rows:
         console.print(f"[dim]No models match '{query}'.[/]")
         return 0
@@ -193,6 +225,7 @@ def _run(
     keep_alive: str,
     think: bool | None,
 ) -> int:
+    model = CLOUD_TAG_ALIASES.get(model, model)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
         return 1
@@ -246,6 +279,7 @@ def _run(
 
 
 def _rm(settings: Settings, model: str) -> int:
+    model = CLOUD_TAG_ALIASES.get(model, model)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
         return 1
@@ -260,6 +294,7 @@ def _rm(settings: Settings, model: str) -> int:
 
 
 def _model_info(settings: Settings, tag: str) -> int:
+    tag = CLOUD_TAG_ALIASES.get(tag, tag)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
         console.print(f"[red]Invalid model tag:[/] {tag}")
         return 1
@@ -284,6 +319,15 @@ def _model_info(settings: Settings, tag: str) -> int:
         if value not in (None, ""):
             table.add_row(field, str(value))
     console.print(table)
+    spec = CATALOG.get(tag)
+    if spec and spec.cloud:
+        console.print(
+            "[cyan]Cloud model[/] · served by ollama.com · no local weights · "
+            "prompts leave this Mac"
+        )
+        if not cloud_enabled():
+            console.print("[yellow]Cloud is disabled.[/] Run: sovereign cloud --enable")
+        return 0
     snap = _snapshot(settings)
     view = snap.views.get(tag)
     if view and view.installed:
@@ -332,7 +376,7 @@ def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
     table.add_column("Size", justify="right")
     missing = []
     for alias, tag in aliases:
-        clean_tag = tag.strip('"\'')
+        clean_tag = tag.strip("\"'")
         if clean_tag.startswith("openai/"):
             table.add_row(alias, "OpenAI cloud passthrough", "[dim]passthrough[/]", "-")
             continue
@@ -341,7 +385,10 @@ def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
             if ":" not in clean_tag
             else snap.views.get(clean_tag.removesuffix(":latest"))
         )
-        if view and view.installed:
+        if view and view.installed and view.spec.cloud:
+            inst = "[cyan]cloud[/]"
+            size = "remote"
+        elif view and view.installed:
             inst = "[green]yes[/]"
             size = f"{view.size_gb:.1f} GB"
         else:
@@ -350,6 +397,11 @@ def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
             missing.append((alias, clean_tag))
         table.add_row(alias, clean_tag, inst, size)
     console.print(table)
+    if any(":cloud" in tag for _alias, tag in aliases) and not cloud_enabled():
+        console.print(
+            "[yellow]Cloud is disabled:[/] the :cloud aliases will fail until "
+            "`sovereign cloud --enable`."
+        )
     if missing:
         console.print("\n[yellow]Aliases pointing to missing models:[/]")
         for alias, tag in missing:
@@ -411,7 +463,21 @@ def _setup_stack(settings: Settings, name: str, yes: bool = False) -> int:
     return _gateway_aliases(settings, snap)
 
 
+def _context_label(tokens: int | None) -> str:
+    """Compact context sizes: 1M reads better than 1048576 in a table."""
+    if not tokens:
+        return "?"
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_048_576:.0f}M"
+    if tokens >= 1024:
+        return f"{round(tokens / 1024)}k"
+    return str(tokens)
+
+
 def _models(snap: Snapshot) -> None:
+    local = [view for view in snap.all_models if not view.spec.cloud]
+    cloud = [view for view in snap.all_models if view.spec.cloud]
+
     table = Table(title="Local models", header_style="bold #b794f4")
     table.add_column("", width=2)
     table.add_column("Model", style="bold")
@@ -420,7 +486,7 @@ def _models(snap: Snapshot) -> None:
     table.add_column("Context", justify="right")
     table.add_column("Status")
     table.add_column("Notes", overflow="fold")
-    for view in snap.all_models:
+    for view in local:
         marker = "▶" if view.loaded else ("●" if view.installed else "↓")
         status = "loaded" if view.loaded else ("installed" if view.installed else "missing")
         style = "green" if view.installed else "yellow"
@@ -429,12 +495,43 @@ def _models(snap: Snapshot) -> None:
             view.tag,
             view.spec.role,
             f"{view.size_gb:.1f}G",
-            str(view.context or view.spec.max_context),
+            _context_label(view.context or view.spec.max_context),
             f"[{style}]{status}[/]",
             view.spec.summary,
         )
     console.print(table)
-    console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
+
+    if cloud:
+        ctable = Table(
+            title="Cloud models · remote, prompts leave this Mac",
+            header_style="bold #b794f4",
+        )
+        ctable.add_column("", width=2)
+        ctable.add_column("Model", style="bold")
+        ctable.add_column("Role")
+        ctable.add_column("Context", justify="right")
+        ctable.add_column("Status")
+        ctable.add_column("Notes", overflow="fold")
+        for view in cloud:
+            if view.installed:
+                status, style = "registered", "green"
+            else:
+                status, style = "not pulled", "yellow"
+            ctable.add_row(
+                "☁",
+                view.tag,
+                view.spec.role,
+                _context_label(view.spec.max_context),
+                f"[{style}]{status}[/]",
+                view.spec.summary,
+            )
+        console.print(ctable)
+        console.print(
+            "[dim]Enable once with[/] sovereign cloud --enable "
+            "[dim]then pull a tag;[/] sovereign cloud [dim]shows the mapping.[/]"
+        )
+    else:
+        console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
 
 
 def _verify(
@@ -1151,9 +1248,7 @@ def _doctor(snap: Snapshot) -> int:
 
     swap_used, swap_total = swap_usage_gb()
     # macOS swaps routinely; only flag real thrash, not a 1 GB baseline.
-    swapping = swap_used >= 4.0 or (
-        swap_total >= 4.0 and swap_used / swap_total >= 0.85
-    )
+    swapping = swap_used >= 4.0 or (swap_total >= 4.0 and swap_used / swap_total >= 0.85)
     add(
         not swapping,
         "Swap pressure",
@@ -1212,9 +1307,7 @@ def _doctor(snap: Snapshot) -> int:
     referenced: set[str] = set(
         _gateway_models(_read_text(LOCAL_AI_ROOT / "gateway" / "config.yaml")).values()
     )
-    referenced.update(
-        _opencode_models(_read_text(home / ".config" / "opencode" / "opencode.json"))
-    )
+    referenced.update(_opencode_models(_read_text(home / ".config" / "opencode" / "opencode.json")))
     referenced.update(_qwen_models(_read_text(home / ".qwen" / "settings.json")))
     referenced.update(_continue_models(_read_text(home / ".continue" / "config.yaml")))
     installed_names: set[str] = set()
@@ -1412,8 +1505,15 @@ def _uninstall_login() -> int:
 
 
 def _pull(settings: Settings, tag: str, note: str = "") -> int:
+    if tag in CLOUD_TAG_ALIASES:
+        tag = CLOUD_TAG_ALIASES[tag]
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
         console.print(f"[red]Invalid model tag:[/] {tag}")
+        return 1
+    spec = CATALOG.get(tag)
+    if spec and spec.cloud and not cloud_enabled():
+        console.print("[red]Ollama Cloud is disabled on this Mac.[/]")
+        console.print("[dim]Enable it with:[/] sovereign cloud --enable")
         return 1
     snap = _snapshot(settings)
     if snap.views.get(tag) and snap.views[tag].installed:
@@ -1422,14 +1522,21 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
     from .models import REMOTE_CATALOG
 
     estimated_gb = REMOTE_CATALOG.get(tag, ("", 0.0))[1]
-    size_text = f" (~{estimated_gb:.0f} GB)" if estimated_gb else ""
-    if estimated_gb and snap.disk_free_gb < max(2.0, estimated_gb + 2.0):
+    if spec and spec.cloud:
+        # Nothing is downloaded: Ollama registers the remote model locally.
         console.print(
-            f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; {tag} is "
-            f"~{estimated_gb:.0f} GB. You may run out of disk — free space or "
-            "remove a model first (`sovereign rm <tag>`)."
+            f"Registering [bold]{tag}[/] [cyan](cloud · runs on ollama.com)[/]"
+            + (f" — {note}" if note else "")
         )
-    console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
+    else:
+        size_text = f" (~{estimated_gb:.0f} GB)" if estimated_gb else ""
+        if estimated_gb and snap.disk_free_gb < max(2.0, estimated_gb + 2.0):
+            console.print(
+                f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; {tag} is "
+                f"~{estimated_gb:.0f} GB. You may run out of disk — free space or "
+                "remove a model first (`sovereign rm <tag>`)."
+            )
+        console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
     client = OllamaClient(settings.ollama_url)
 
     async def run() -> None:
@@ -1449,11 +1556,125 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
                     progress.update(task, completed=float(completed))
                 status = event.get("status")
                 if status:
-                    progress.update(task, description=f"{tag}: {status}")
-            progress.update(task, description=f"{tag}: done")
+                    # A colon after `:cloud` would make Rich render an emoji.
+                    progress.update(task, description=f"{tag} — {status}")
+            progress.update(task, description=f"{tag} — done")
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except OllamaError as exc:
+        console.print(f"[red]{exc}[/]")
+        if spec and spec.cloud:
+            console.print("[dim]Cloud models also need a one-time login:[/] ollama signin")
+        return 1
     console.print(f"[green]{tag} installed.[/] Run: sovereign models")
+    return 0
+
+
+def _cloud(
+    settings: Settings,
+    *,
+    enable: bool = False,
+    disable: bool = False,
+    install_aliases: bool = False,
+    pull: bool = False,
+    probe: bool = False,
+    timeout: float = 12.0,
+) -> int:
+    """Show, enable, and wire Ollama Cloud's frontier models."""
+    if enable and disable:
+        console.print("[red]Choose --enable or --disable, not both.[/]")
+        return 1
+    if enable:
+        console.print("[bold]Enabling Ollama Cloud[/] (persists across restarts)")
+        for action in apply_cloud(True):
+            console.print(f"  [green]·[/] {action}")
+        console.print(
+            "[yellow]Cloud models run on ollama.com.[/] Prompts and context leave "
+            "this Mac when you use a :cloud tag."
+        )
+        console.print("One-time login is still required: [bold]ollama signin[/]")
+        probe = True
+    elif disable:
+        console.print("[bold]Disabling Ollama Cloud[/]")
+        for action in apply_cloud(False):
+            console.print(f"  [green]·[/] {action}")
+        console.print("[dim]Local models are unaffected.[/]")
+
+    if install_aliases:
+        paths = install_gateway_aliases()
+        if not paths:
+            console.print(
+                f"[yellow]No gateway config found under[/] {LOCAL_AI_ROOT / 'gateway'}"
+            )
+        for path in paths:
+            console.print(f"[green]Cloud aliases written[/] {path}")
+        if paths:
+            console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
+
+    status = read_cloud_status()
+    style = "green" if status.enabled else "yellow"
+    console.print(f"\n[bold]Ollama Cloud[/]  [{style}]{status.detail}[/]")
+    if not status.enabled:
+        console.print("[dim]Enable with:[/] sovereign cloud --enable")
+    console.print(
+        "[dim]Cloud aliases:[/] cloud-kimi-k3 · cloud-kimi-k2.6 · "
+        "cloud-deepseek-v4.1-flash · cloud-deepseek-v4-pro · cloud-glm-5.3 · "
+        "cloud-glm-5.3-flash · cloud-glm-5.2 · local-qwen3.8"
+    )
+    console.print("[dim]Install them into the gateway:[/] sovereign cloud --install-aliases")
+
+    snap = _snapshot(settings)
+    table = Table(
+        title="Requested models · where each name goes",
+        header_style="bold #b794f4",
+    )
+    table.add_column("Requested", style="bold", no_wrap=True)
+    table.add_column("Ollama tag", style="bold", no_wrap=True)
+    table.add_column("Context", justify="right", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    notes: list[str] = []
+    for name, tag, note in requested_models():
+        spec = CATALOG.get(tag)
+        view = snap.views.get(tag)
+        if spec and spec.cloud:
+            state = "registered" if view and view.installed else "not pulled"
+            state_style = "green" if state == "ready" else "yellow"
+        else:
+            state = "local · installed" if view and view.installed else "local · missing"
+            state_style = "green" if view and view.installed else "yellow"
+        table.add_row(
+            name,
+            tag,
+            _context_label(spec.max_context if spec else None),
+            f"[{state_style}]{state}[/]",
+        )
+        notes.append(f"  {name} → {tag} — {note}")
+    console.print(table)
+    console.print("\n[bold]Mapping[/]")
+    for line in notes:
+        console.print(f"[dim]{line}[/]", overflow="fold")
+
+    if probe:
+        result = probe_cloud(settings, timeout=timeout)
+        mark = "[green]PASS[/]" if result.ready else "[red]FAIL[/]"
+        console.print(f"\nCloud probe  {mark} {result.detail}")
+
+    if pull:
+        if not status.enabled:
+            console.print("[red]Enable cloud first:[/] sovereign cloud --enable")
+            return 1
+        if not cloud_enabled():
+            console.print("[red]Cloud is still disabled after the enable step.[/]")
+            return 1
+        for tag in CLOUD_TAGS:
+            if _pull(settings, tag, "cloud") != 0:
+                return 1
+        # Registration succeeds even on a plan that blocks generation, so
+        # check an actual completion instead of declaring success.
+        result = probe_cloud(settings, timeout=timeout)
+        mark = "[green]PASS[/]" if result.ready else "[yellow]NOT USABLE[/]"
+        console.print(f"\nCloud generation  {mark} {result.detail}")
     return 0
 
 
@@ -1580,7 +1801,7 @@ def _clients(snap: Snapshot) -> None:
     table.add_column("Mode")
     table.add_column("Local model")
     table.add_column("Notes", overflow="fold")
-    for client in local_clients():
+    for client in local_clients(resolved):
         status = "[green]ready[/]" if client.installed else "[yellow]missing[/]"
         style = "green" if client.capability == "agent" else "cyan"
         table.add_row(
@@ -1657,11 +1878,7 @@ def _best(snap: Snapshot) -> int:
     opencode = opencode_default(read_text(home / ".config" / "opencode" / "opencode.json"))
     qwen = qwen_default(read_text(home / ".qwen" / "settings.json"))
     cont = continue_default(read_text(home / ".continue" / "config.yaml"))
-    chat = (
-        snap.chat_selection.tag
-        if snap.chat_selection and snap.chat_selection.model
-        else "-"
-    )
+    chat = snap.chat_selection.tag if snap.chat_selection and snap.chat_selection.model else "-"
     codex_state = "logged in" if codex_logged_in() else "not logged in"
 
     table = Table(title="Strongest first · effective models", header_style="bold #b794f4")
@@ -1736,9 +1953,7 @@ def _prune(snap: Snapshot, apply: bool = False) -> int:
     except OSError:
         config_text = ""
 
-    refs = referenced_tags(
-        parse_alias_targets(config_text), MODEL_STACKS, TASK_PREFERENCE
-    )
+    refs = referenced_tags(parse_alias_targets(config_text), MODEL_STACKS, TASK_PREFERENCE)
     candidates = prune_candidates([(view.tag, view.size_gb) for view in snap.installed], refs)
     if not candidates:
         console.print("[green]Nothing to prune[/] — every installed model is referenced.")
@@ -1773,9 +1988,7 @@ def _prune(snap: Snapshot, apply: bool = False) -> int:
 
     removed: list[str] = []
     for tag, _size in candidates:
-        result = subprocess.run(
-            ["ollama", "rm", tag], capture_output=True, text=True, check=False
-        )
+        result = subprocess.run(["ollama", "rm", tag], capture_output=True, text=True, check=False)
         if result.returncode == 0:
             removed.append(tag)
         else:
@@ -1796,13 +2009,19 @@ def _warm(settings: Settings, model: str | None, task: str) -> int:
     if model:
         view = snap.views.get(model)
         tag = model
-        context = (view.context if view and view.context else settings.max_context)
+        context = view.context if view and view.context else settings.max_context
     else:
-        selection = choose(want, snap.views, snap.potential_free_gb, max_context=settings.max_context)
+        selection = choose(
+            want, snap.views, snap.potential_free_gb, max_context=settings.max_context
+        )
         if not selection.model:
             console.print("[yellow]No installed model to warm.[/]")
             return 1
         tag, context = selection.tag, selection.context
+        # The router prefers a conservative window; 2k would make the warmed
+        # model useless for real work, so keep at least a usable floor.
+        if context <= 4096:
+            context = min(settings.max_context, 16384)
 
     _make_room(snap, tag)
 
@@ -1877,27 +2096,148 @@ def _launch(client: str, path: str, yolo: bool = False, dry_run: bool = False) -
     return 0
 
 
-def _consult(settings: Settings, prompt: str, models: list[str], tokens: int) -> int:
+def _consult(
+    settings: Settings,
+    prompt: str,
+    models: list[str] | None,
+    tokens: int,
+    domain_key: str | None = None,
+) -> int:
     import httpx
+
+    from .domains import (
+        DOMAINS,
+        FORCE_VERDICT,
+        classify,
+        verdict,
+    )
+    from .domains import (
+        system_prompt as domain_system_prompt,
+    )
 
     try:
         httpx.get(settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0).raise_for_status()
     except httpx.HTTPError:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
         return 1
+
+    # A domain decides which specialist model answers, which skill frames the
+    # question, and which answer protocol the reply has to follow.
+    if domain_key:
+        domain = DOMAINS.get(domain_key)
+        if domain is None:
+            console.print(f"[red]Unknown domain:[/] {domain_key}")
+            console.print(f"[dim]Known: {', '.join(sorted(DOMAINS))}[/]")
+            return 1
+    else:
+        domain = classify(prompt)[0]
+    console.print(f"[dim]Domain:[/] [bold]{domain.label}[/] [dim]({domain.key})[/]")
+
+    if not models:
+        # No explicit models: the domain's own alias is the specialist that
+        # serves it, with a chat model as the second opinion.
+        models = [domain.alias, domain.fallback]
+
+    skill_body = ""
+    if domain.skill:
+        skill = read_skill(domain.skill)
+        if skill:
+            skill_body = render_skill(domain.skill, prompt)
+        else:
+            console.print(f"[dim]No skill named '{domain.skill}' — continuing without it.[/]")
+    elif domain_key:
+        console.print("[dim]This domain has no skill template; continuing without one.[/]")
+
+    system = domain_system_prompt(domain)
     for model in models:
         console.print(f"[dim]Consulting {model}…[/]")
+        user_prompt = skill_body or prompt
         try:
             answer = complete(
                 settings.gateway_url,
                 model,
-                [{"role": "user", "content": prompt}],
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
                 max_tokens=tokens,
             )
         except SourceError as exc:
             console.print(f"[red]{model}: {exc}[/]")
             continue
+        if verdict(answer) is None:
+            # The protocol asks for a definite answer. One retry gets the
+            # verdict without paying for a second full analysis.
+            try:
+                answer = complete(
+                    settings.gateway_url,
+                    model,
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": answer},
+                        {"role": "user", "content": FORCE_VERDICT},
+                    ],
+                    max_tokens=max(tokens, 200),
+                )
+            except SourceError as exc:
+                console.print(f"[dim]{model}: verdict retry failed ({exc})[/]")
         console.print(Panel(Text(answer), title=model, border_style="cyan"))
+    return 0
+
+
+def _backends(settings: Settings) -> int:
+    """Which local inference servers are reachable right now."""
+    from .backends import known_backends, probe
+
+    table = Table(title="Local inference backends", header_style="bold #b794f4")
+    table.add_column("Backend", style="bold")
+    table.add_column("Status")
+    table.add_column("URL", style="dim")
+    table.add_column("Models", overflow="fold")
+    for backend in known_backends(settings):
+        status = probe(backend)
+        table.add_row(
+            backend.name,
+            "[green]online[/]" if status.online else "[dim]offline[/]",
+            backend.url,
+            ", ".join(status.models) if status.models else "-",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Everything here is on loopback. Sovereign Code never calls a cloud API.[/]"
+    )
+    return 0
+
+
+def _domains(detect: str | None = None) -> int:
+    from .domains import DOMAINS, classify
+
+    if detect:
+        console.print(f"[bold]Prompt[/] {detect}\n")
+        for domain in classify(detect):
+            console.print(
+                f"  [bold cyan]{domain.key}[/]  {domain.label}  "
+                f"[dim]{domain.alias} → {domain.fallback}[/]"
+            )
+        return 0
+
+    table = Table(title="Specialist domains", header_style="bold #b794f4")
+    table.add_column("Key", style="bold")
+    table.add_column("Domain")
+    table.add_column("Alias", style="cyan")
+    table.add_column("Fallback")
+    table.add_column("Skill")
+    for key, domain in DOMAINS.items():
+        table.add_row(
+            key,
+            domain.label,
+            domain.alias,
+            domain.fallback,
+            domain.skill or "-",
+        )
+    console.print(table)
+    console.print("[dim]sovereign consult '…' [--domain KEY][/]")
     return 0
 
 
@@ -1984,6 +2324,35 @@ def _clone(settings: Settings, url: str, name: str | None) -> int:
     return 0
 
 
+def _is_git_repo(target: Path) -> bool:
+    return (target / ".git").exists()
+
+
+def _project_changes(target: Path, limit: int = 8000) -> str:
+    """The actual change set: git diff, else a git status listing, else ''."""
+    try:
+        diff = subprocess.run(
+            ["git", "-C", str(target), "diff", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        status = subprocess.run(
+            ["git", "-C", str(target), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    except OSError:
+        return ""
+    parts = []
+    if status.strip():
+        parts.append("Changed files:\n" + status.strip())
+    if diff.strip():
+        parts.append("Diff:\n" + diff.strip())
+    return ("\n\n".join(parts))[-limit:] if parts else ""
+
+
 def _pipeline(
     settings: Settings,
     prompt: str,
@@ -1994,6 +2363,13 @@ def _pipeline(
     yes: bool,
     no_review: bool,
     tokens: int,
+    checks: str | None = None,
+    no_verify: bool = False,
+    max_fixes: int = 1,
+    timeout: float = 900.0,
+    review_tokens: int = 1600,
+    agent_client: str = "qwen",
+    agent_timeout: float = 3600.0,
 ) -> int:
     import httpx
 
@@ -2006,10 +2382,49 @@ def _pipeline(
     if not target.is_dir():
         console.print(f"[red]Not a directory:[/] {target}")
         return 1
-    if not command_exists("qwen"):
-        console.print("[red]Qwen Code CLI is not installed.[/]")
-        console.print("[dim]npm i -g @qwen-code/qwen-code (then sovereign install-clients)[/]")
+    if agent_client not in AGENT_CLIENTS:
+        console.print(f"[red]Unknown agent client:[/] {agent_client}")
+        console.print(f"[dim]Choose one of: {', '.join(AGENT_CLIENTS)}[/]")
         return 1
+    if not command_exists(AGENT_CLIENTS[agent_client]):
+        console.print(f"[red]{agent_client} CLI is not installed.[/]")
+        return 1
+
+    # The pipeline cycles through several large models; start from a clean GPU
+    # so a 19 GB planner and an 18 GB coder never fight for the wired budget.
+    def clear_gpu(label: str = "") -> None:
+        """Evict residents so the next model gets the whole wired budget.
+
+        A 19 GB planner and an 18 GB coder cannot coexist; leaving the planner
+        loaded made the implementer fail with provider retries.
+        """
+        snap = _snapshot(settings)
+        if not snap.loaded:
+            return
+        if label:
+            console.print(f"[dim]Unloading {len(snap.loaded)} model(s) before {label}[/]")
+
+        async def _clear() -> None:
+            client = OllamaClient(settings.ollama_url)
+            for view in snap.loaded:
+                try:
+                    await client.unload(view.tag)
+                except OllamaError:
+                    pass
+
+        asyncio.run(_clear())
+
+    clear_gpu("planning")
+
+    # Verification is what makes the result trustworthy: the project's own
+    # tests decide, not the models.
+    if no_verify:
+        check_commands: list[str] = []
+    elif checks:
+        check_commands = [part.strip() for part in checks.split(";") if part.strip()]
+    else:
+        check_commands = detect_checks(target)
+    latest_check: dict[str, str] = {"log": ""}
 
     def plan_fn(text: str) -> str:
         return complete(
@@ -2029,32 +2444,38 @@ def _pipeline(
             max_tokens=tokens,
         )
 
-    def implement_fn(prompt_text: str, plan_text: str) -> tuple[bool, str]:
+    def implement_fn(prompt_text: str, plan_text: str, failure: str = "") -> tuple[bool, str]:
         context = project_context(target)
         combined = (
             f"{prompt_text}\n\nImplementation plan:\n{plan_text}\n\n"
             "Implement it now: create or edit the files."
         )
+        if failure:
+            combined += (
+                "\n\nThe project's checks failed after your last attempt. Fix the code so they "
+                f"pass.\n\nCheck output:\n{failure}"
+            )
         if context:
             combined = context + "\n\n" + combined
-        env = os.environ.copy()
-        env["QWEN_HOME"] = str(LOCAL_AI_ROOT / "qwen")
-        command = [
-            "qwen",
-            "--model",
-            agent,
-            "--approval-mode",
-            "yolo" if yes else "default",
-            "-p",
-            combined,
-        ]
-        process = subprocess.run(
-            command, cwd=str(target), env=env, capture_output=True, text=True, check=False
-        )
-        output = (process.stdout or "") + (process.stderr or "")
-        return process.returncode == 0, output[-4000:]
+        clear_gpu("implementation")
+        try:
+            plan = build_headless(
+                agent_client,
+                "local",
+                target,
+                combined,
+                settings,
+                agent,
+                unattended=yes,
+            )
+        except ValueError as exc:
+            return False, str(exc)
+        ok, output = run_headless(plan, timeout=agent_timeout)
+        return ok, output
 
     def review_fn(plan_text: str, implementation: str) -> str:
+        clear_gpu("review")
+        changes = _project_changes(target)
         return complete(
             settings.gateway_url,
             review_model,
@@ -2068,23 +2489,84 @@ def _pipeline(
                 },
                 {
                     "role": "user",
-                    "content": f"Plan:\n{plan_text}\n\nImplementation log:\n{implementation}",
+                    "content": (
+                        f"Plan:\n{plan_text}\n\nImplementation log:\n{implementation}\n\n"
+                        f"Project checks:\n{latest_check['log'][-2000:] or 'not run'}\n\n"
+                        f"Actual changes:\n{changes or 'no git repository'}"
+                    ),
                 },
             ],
-            max_tokens=tokens,
+            # Reasoning models (gpt-oss in particular) spend tokens on hidden
+            # reasoning before answering; too small a budget returns "".
+            max_tokens=max(review_tokens, 600),
         )
 
+    def verify_fn() -> tuple[bool, str]:
+        # An agent can report success while changing nothing; running the checks
+        # then fails on a missing module and hides the real problem.
+        if _is_git_repo(target) and not _project_changes(target):
+            log = "No files were changed by the implementer."
+            latest_check["log"] = log
+            return False, log
+        outcome = run_checks(target, check_commands, timeout=timeout)
+        latest_check["log"] = outcome.log
+        return outcome.ok, outcome.log
+
+    def fix_fn(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
+        return implement_fn(prompt_text, plan_text, failure)
+
+    shown = ", ".join(check_commands) if check_commands else "none"
     console.print(
-        f"[bold]Pipeline[/] · plan={plan_model} · implement={agent} · review={review_model}"
+        f"[bold]Pipeline[/] · plan={plan_model} · implement={agent_client}({agent}) · "
+        f"review={review_model} · checks={shown}"
     )
     try:
-        result = run_pipeline(prompt, plan_fn, implement_fn, None if no_review else review_fn)
+        result = run_pipeline(
+            prompt,
+            plan_fn,
+            implement_fn,
+            None if no_review else review_fn,
+            verify=None if not check_commands else verify_fn,
+            fix=fix_fn if max_fixes > 0 else None,
+            max_fixes=max(0, max_fixes),
+        )
     except SourceError as exc:
         console.print(f"[red]{exc}[/]")
         return 1
     for stage in result.stages:
         border = "green" if stage.ok else "red"
         console.print(Panel(Text(stage.output), title=stage.name, border_style=border))
+
+    # Keep an auditable record of what the models did and what proved it.
+    from datetime import datetime
+
+    run_dir = LOCAL_AI_ROOT / "data" / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}"
+    suffix = 1
+    while run_dir.exists():
+        # Two runs in the same second must not overwrite each other.
+        suffix += 1
+        run_dir = LOCAL_AI_ROOT / "data" / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-{suffix}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    for stage in result.stages:
+        (run_dir / f"{stage.name.replace(' ', '-')}.md").write_text(stage.output, encoding="utf-8")
+    verified = {True: "passed", False: "failed", None: "not run"}[result.verified]
+    summary = [
+        f"prompt: {prompt}",
+        f"directory: {target}",
+        f"plan={plan_model} implement={agent_client}({agent}) review={review_model}",
+        f"checks: {shown}",
+        f"verification: {verified}",
+        f"outcome: {'complete' if result.succeeded else 'incomplete'}",
+        f"stages: {', '.join(stage.name for stage in result.stages)}",
+    ]
+    (run_dir / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
+
+    state = "complete" if result.succeeded else "incomplete"
+    style = "green" if result.succeeded else "red"
+    console.print(
+        f"[{style}]{state}[/] · verification {verified} · "
+        f"{len(result.stages)} stages · [dim]{run_dir}[/]"
+    )
     return 0 if result.succeeded else 1
 
 
@@ -2165,6 +2647,23 @@ def build_parser() -> argparse.ArgumentParser:
     models = sub.add_parser("models", help="list installed and recommended models")
     models.add_argument("--remote", action="store_true", help="list downloadable models")
     models.add_argument("query", nargs="?", default=None, help="filter by name")
+    cloud = sub.add_parser(
+        "cloud", help="use Ollama Cloud models (Kimi K3, DeepSeek V4, GLM 5.3, Qwen 3.8)"
+    )
+    cloud.add_argument("--enable", action="store_true", help="enable Ollama Cloud and restart it")
+    cloud.add_argument("--disable", action="store_true", help="disable Ollama Cloud (local-only)")
+    cloud.add_argument(
+        "--install-aliases",
+        action="store_true",
+        help="write cloud-* aliases into the LiteLLM gateway config",
+    )
+    cloud.add_argument(
+        "--pull",
+        action="store_true",
+        help="register every cloud model with Ollama (no weights downloaded)",
+    )
+    cloud.add_argument("--probe", action="store_true", help="check login/readiness with one model")
+    cloud.add_argument("--timeout", type=float, default=12.0, help="probe timeout in seconds")
     tune = sub.add_parser("tune", help="apply/verify Ollama context, flash attention and q8 KV")
     tune.add_argument("--context", type=int, default=DEFAULT_CONTEXT)
     tune.add_argument("--dry-run", action="store_true", help="show changes without applying")
@@ -2180,6 +2679,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
+    sub.add_parser("backends", help="show which local inference servers are reachable")
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
     sub.add_parser("best", help="show the strongest model each connected tool uses")
@@ -2253,12 +2753,42 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline = sub.add_parser("pipeline", help="plan -> implement -> review across models")
     pipeline.add_argument("prompt")
     pipeline.add_argument("--dir", default=".")
-    pipeline.add_argument("--plan-model", default="local-reasoning")
-    pipeline.add_argument("--agent", default="gemma4:12b")
-    pipeline.add_argument("--review-model", default="local-agent")
+    pipeline.add_argument("--plan-model", default="local-glm", help="strongest reasoner")
+    pipeline.add_argument("--agent", default="qwen3-coder:30b", help="strongest coder")
+    pipeline.add_argument(
+        "--review-model", default="local-review", help="independent reviewer (different family)"
+    )
     pipeline.add_argument("--yes", action="store_true", help="yolo-approve agent tool calls")
     pipeline.add_argument("--no-review", action="store_true")
     pipeline.add_argument("--tokens", type=int, default=700)
+    pipeline.add_argument(
+        "--checks",
+        default=None,
+        help="semicolon-separated check commands (default: auto-detect from the project)",
+    )
+    pipeline.add_argument("--no-verify", action="store_true", help="skip project checks")
+    pipeline.add_argument(
+        "--fix", dest="max_fixes", type=int, default=1, help="repair rounds after a failed check"
+    )
+    pipeline.add_argument("--timeout", type=float, default=900.0, help="per-check timeout")
+    pipeline.add_argument(
+        "--review-tokens",
+        type=int,
+        default=1600,
+        help="budget for the reviewer (reasoning models need headroom)",
+    )
+    pipeline.add_argument(
+        "--agent-client",
+        default="qwen",
+        choices=sorted(AGENT_CLIENTS),
+        help="which local coding client writes the code",
+    )
+    pipeline.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=3600.0,
+        help="timeout for one agent run, in seconds",
+    )
 
     config = sub.add_parser("config", help="view or edit sovereign config")
     config.add_argument("--set", dest="set_value", default=None, metavar="KEY=VALUE")
@@ -2315,6 +2845,19 @@ def build_parser() -> argparse.ArgumentParser:
     consult.add_argument("prompt")
     consult.add_argument("--models", default=None, help="comma-separated aliases")
     consult.add_argument("--tokens", type=int, default=400)
+    consult.add_argument(
+        "--domain",
+        default=None,
+        help="force a specialist domain (default: detect it from the prompt)",
+    )
+
+    domains = sub.add_parser("domains", help="list the specialist domains and their aliases")
+    domains.add_argument(
+        "--detect",
+        default=None,
+        metavar="PROMPT",
+        help="show which domain a prompt would be routed to",
+    )
 
     sub.add_parser("skills", help="list saved skill prompts")
 
@@ -2394,6 +2937,16 @@ def main(argv: list[str] | None = None) -> int:
             return _models_remote(snap, args.query)
         _models(snap)
         return 0
+    if command == "cloud":
+        return _cloud(
+            settings,
+            enable=args.enable,
+            disable=args.disable,
+            install_aliases=args.install_aliases,
+            pull=args.pull,
+            probe=args.probe,
+            timeout=args.timeout,
+        )
     if command == "tune":
         return _tune(args.context, dry_run=args.dry_run)
     if command == "doctor":
@@ -2418,6 +2971,8 @@ def main(argv: list[str] | None = None) -> int:
     if command == "clients":
         _clients(_snapshot(settings))
         return 0
+    if command == "backends":
+        return _backends(settings)
     if command == "install-clients":
         return _install_clients()
     if command == "launch":
@@ -2503,9 +3058,11 @@ def main(argv: list[str] | None = None) -> int:
         models = (
             [name.strip() for name in args.models.split(",") if name.strip()]
             if args.models
-            else ["local-chat", "local-reasoning"]
+            else None
         )
-        return _consult(settings, args.prompt, models, args.tokens)
+        return _consult(settings, args.prompt, models, args.tokens, args.domain)
+    if command == "domains":
+        return _domains(args.detect)
     if command == "skills":
         return _skills(settings)
     if command == "skill":
@@ -2525,6 +3082,13 @@ def main(argv: list[str] | None = None) -> int:
             args.yes,
             args.no_review,
             args.tokens,
+            checks=args.checks,
+            no_verify=args.no_verify,
+            max_fixes=args.max_fixes,
+            timeout=args.timeout,
+            review_tokens=args.review_tokens,
+            agent_client=args.agent_client,
+            agent_timeout=args.agent_timeout,
         )
     if command == "pull-recommended":
         return _pull_recommended(settings)

@@ -8,24 +8,14 @@ reports the effective model instead of what we hoped was configured.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-_BLOCK = re.compile(
-    r"- model_name:\s*[\"']?([^\"'\s]+)[\"']?(.*?)(?=\n\s*-\s*model_name:|\Z)", re.S
-)
-_OLLAMA_TARGET = re.compile(r"model:\s*[\"']?ollama/([^\"'\s]+)")
+from .gateway import alias_targets
 
 
 def gateway_models(text: str) -> dict[str, str]:
     """alias -> ollama tag, from a LiteLLM model_list."""
-    mapping: dict[str, str] = {}
-    for match in _BLOCK.finditer(text):
-        alias, body = match.group(1), match.group(2)
-        target = _OLLAMA_TARGET.search(body)
-        if target:
-            mapping[alias] = target.group(1)
-    return mapping
+    return alias_targets(text)
 
 
 def opencode_default(text: str) -> str:
@@ -39,27 +29,55 @@ def opencode_default(text: str) -> str:
 
 
 def qwen_default(text: str) -> str:
+    """The model Qwen Code opens with.
+
+    Qwen writes the default either as an object (`{"model": {"name": ...}}`)
+    or as a plain string, and only the object form used to be read.
+    """
     try:
         data = json.loads(text)
     except ValueError:
         return ""
-    model = data.get("model") or {}
-    return str(model.get("name") or "") if isinstance(model, dict) else ""
+    model = data.get("model")
+    if isinstance(model, dict):
+        return str(model.get("name") or "")
+    if isinstance(model, str):
+        return model
+    return ""
+
+
+def _continue_models(text: str) -> list[str]:
+    """Model ids listed under Continue's `models:` block.
+
+    A `context:` key belongs to the model that precedes it, so it ends that
+    entry — it does not end the block. Stopping there dropped every model
+    after the first one.
+    """
+    found: list[str] = []
+    in_models = False
+    base_indent = 0
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if not in_models:
+            if stripped.startswith("models:"):
+                in_models = True
+                base_indent = indent
+            continue
+        if indent <= base_indent:
+            break  # a new top-level key ends the models block
+        entry = stripped.lstrip("-").strip()
+        if entry.startswith("model:"):
+            found.append(entry.split(":", 1)[1].strip().strip("\"'"))
+    return found
 
 
 def continue_default(text: str) -> str:
     """First `model:` under `models:` — Continue uses the first chat model."""
-    in_models = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("models:"):
-            in_models = True
-            continue
-        if in_models and line.startswith("context:"):
-            break
-        if in_models and line.startswith("model:"):
-            return line.split(":", 1)[1].strip().strip("\"'")
-    return ""
+    models = _continue_models(text)
+    return models[0] if models else ""
 
 
 def opencode_models(text: str) -> list[str]:
@@ -84,19 +102,7 @@ def qwen_models(text: str) -> list[str]:
 
 def continue_models(text: str) -> list[str]:
     """Every `model:` listed under Continue's `models:` block."""
-    found: list[str] = []
-    in_models = False
-    for raw in text.splitlines():
-        # Handle both `    model: x` (provider entries) and `- model: x`.
-        line = raw.strip().lstrip("-").strip()
-        if line.startswith("models:"):
-            in_models = True
-            continue
-        if in_models and line.startswith("context:"):
-            break
-        if in_models and line.startswith("model:"):
-            found.append(line.split(":", 1)[1].strip().strip("\"'"))
-    return found
+    return _continue_models(text)
 
 
 def read_text(path: Path) -> str:

@@ -15,12 +15,12 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Markdown, Static
 
-from ..clients import local_clients, plan_launch
+from ..clients import local_clients, plan_launch, resolve_client_models
 from ..config import Settings
 from ..memory import project_context
 from ..models import ModelView
 from ..ollama import OllamaClient
-from ..router import Task, choose, mode_label, system_prompt
+from ..router import Task, choose, mode_label, system_prompt, task_from_name
 from ..sessions import SessionWriter, prune_sessions, scan_sessions, select_prunable
 from ..status import Snapshot, collect
 from ..system import Memory, wired_limit_gb
@@ -63,6 +63,8 @@ class ModelListItem(ListItem):
         label.append(f"  {view.size_gb:.1f}G", style="dim")
         if view.spec.role:
             label.append(f"  {view.spec.role}", style="dim italic")
+        if view.runner:
+            label.append(f"  {view.runner}", style="dim italic")
         super().__init__(
             Label(label),
             id="model-" + view.tag.replace(":", "-").replace("/", "-").replace(".", "-"),
@@ -221,9 +223,7 @@ class SovereignApp(App[None]):
             if snap.loaded:
                 for view in snap.loaded:
                     engine = f" · {view.runner}" if view.runner else ""
-                    text.append(
-                        f"{view.tag} · {view.context or '?'}{engine}\n", style="green"
-                    )
+                    text.append(f"{view.tag} · {view.context or '?'}{engine}\n", style="green")
             else:
                 text.append("  none\n", style="dim")
             text.append("\nCODER\n", style="bold")
@@ -421,7 +421,7 @@ class SovereignApp(App[None]):
             self._render_status()
             await self.add_message("system", f"Model set to `{arg}`.")
         elif command in {"/chat", "/code", "/reason", "/vision", "/fast"}:
-            self.ai_task = Task(command[1:])
+            self.ai_task = task_from_name(command[1:])
             selection = self.current_selection()
             if selection and selection.model:
                 self.selected_model = selection.model.tag
@@ -438,10 +438,19 @@ class SovereignApp(App[None]):
         elif command == "/claude":
             await self.action_launch_claude(arg or None)
         elif command == "/clients":
+            resolved = (
+                resolve_client_models(
+                    self.snapshot.views,
+                    self.snapshot.potential_free_gb,
+                    self.settings.max_context,
+                )
+                if self.snapshot
+                else None
+            )
             rows = "\n".join(
                 f"- **{item.name}** — {item.capability} · `{item.model}` · "
                 f"{'ready' if item.installed else 'missing'}\n  {item.detail}"
-                for item in local_clients()
+                for item in local_clients(resolved)
             )
             await self.add_message("system", rows)
         elif command == "/status":
@@ -636,7 +645,10 @@ class SovereignApp(App[None]):
         selection = choose(
             Task.AGENT,
             self.snapshot.views if self.snapshot else {},
-            self.snapshot.memory.free_gb if self.snapshot else None,
+            # The same figure the CLI uses: free RAM *after* evicting the
+            # current residents. Using the raw free-RAM number here picked a
+            # smaller model and context than the CLI for the same machine.
+            self.snapshot.potential_free_gb if self.snapshot else None,
             max_context=self.settings.max_context,
         )
         try:
@@ -649,6 +661,10 @@ class SovereignApp(App[None]):
         except ValueError as exc:
             await self.add_message("system", f"Could not launch {info.name}: {exc}")
             return
+        if selection.tag:
+            # Free the GPU before the agent loads its model, exactly as the CLI
+            # does; otherwise a resident model squeezes the agent's context.
+            await self._make_room(selection.tag)
         note = f" — {plan.note}" if plan.note else ""
         await self.add_message(
             "system",

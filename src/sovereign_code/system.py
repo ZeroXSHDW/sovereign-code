@@ -8,7 +8,9 @@ import shutil
 import socket
 import subprocess
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .config import launch_agent_path
 
@@ -21,9 +23,15 @@ class Memory:
     total_gb: float
     free_gb: float
     free_pct: float
+    # False when the probe itself failed. "0 GB free" and "I could not read the
+    # memory counters" are different facts, and treating the second as the
+    # first collapsed every model to a 2k context.
+    known: bool = True
 
     @property
     def label(self) -> str:
+        if not self.known:
+            return f"{self.total_gb:.0f} GB · free unknown"
         return f"{self.total_gb:.0f} GB · {self.free_pct:.0f}% free"
 
 
@@ -55,12 +63,17 @@ def read_memory() -> Memory:
         m = re.match(r"([^:]+):\s+(\d+)\.", line)
         if m:
             pages[m.group(1).strip()] = int(m.group(2))
+    if total <= 0:
+        total = 24.0
+    if "Pages free" not in pages:
+        # vm_stat failed or returned something unrecognised. Report "unknown"
+        # rather than "0 GB free": the router treats a real zero as a signal to
+        # shrink the context window to its floor.
+        return Memory(total_gb=total, free_gb=0.0, free_pct=0.0, known=False)
     free_pages = sum(
         pages.get(key, 0) for key in ("Pages free", "Pages inactive", "Pages speculative")
     )
     free_gb = round(free_pages * page_size / _GIB, 1)
-    if total <= 0:
-        total = 24.0
     free_gb = min(free_gb, total)
     pct = round((free_gb / total) * 100, 0) if total else 0.0
     return Memory(total_gb=total, free_gb=free_gb, free_pct=pct)
@@ -156,13 +169,6 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def load_average() -> tuple[float, float, float]:
-    try:
-        return tuple(round(v, 2) for v in os.getloadavg())  # type: ignore[return-value]
-    except OSError:
-        return (0.0, 0.0, 0.0)
-
-
 def login_agent_installed() -> bool:
     return launch_agent_path(_LABEL).is_file()
 
@@ -170,12 +176,16 @@ def login_agent_installed() -> bool:
 def login_agent_loaded() -> bool:
     if os.uname().sysname != "Darwin":
         return False
-    result = subprocess.run(
-        ["launchctl", "print", f"gui/{os.getuid()}/{_LABEL}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/{_LABEL}"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
     return result.returncode == 0
 
 
@@ -187,5 +197,30 @@ def qwen_memory_path() -> Path:
     return Path.home() / ".qwen" / "QWEN.md"
 
 
+_LOOPBACK_HOSTS = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
 def is_loopback(url: str) -> bool:
-    return any(token in url for token in ("127.0.0.1", "localhost", "::1"))
+    """True only for a host that really resolves to this machine.
+
+    A substring test accepted "http://notlocalhost.example.com" and
+    "http://127.0.0.1.evil.test", which would have silenced the loopback
+    warning that guards the "nothing leaves the Mac" promise.
+    """
+    text = url.strip()
+    if not text:
+        return False
+    if "://" not in text:
+        text = f"http://{text}"
+    try:
+        host = (urlsplit(text).hostname or "").strip("[]").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False

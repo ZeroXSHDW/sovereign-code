@@ -25,6 +25,10 @@ class ModelSpec:
     strengths: tuple[str, ...] = ()
     summary: str = ""
     recommended: bool = False
+    # True for Ollama Cloud tags (`:cloud`). They are served from ollama.com,
+    # not from this Mac: no weights are downloaded and the prompt leaves the
+    # machine. The local-first router never selects one unless it is named.
+    cloud: bool = False
 
     @property
     def thinking(self) -> bool:
@@ -40,6 +44,91 @@ CATALOG: dict[str, ModelSpec] = {
         max_context=32768,
         strengths=("agent", "code", "tools", "reason"),
         summary="GLM-4 9B: fast agentic tool use, multilingual coding & reasoning.",
+    ),
+    # --- Frontier models served by Ollama Cloud -------------------------------
+    # Verified on ollama.com/library (2026-10-21). Ollama Cloud is opt-in: the
+    # server must run without OLLAMA_NO_CLOUD and the account must be signed in
+    # (`ollama signin`). These entries carry no local size because nothing is
+    # downloaded; `sovereign cloud` reports their readiness.
+    "kimi-k3:cloud": ModelSpec(
+        tag="kimi-k3:cloud",
+        role=AGENT,
+        params_b=2800.0,
+        size_gb=0.0,
+        max_context=1_048_576,
+        strengths=("agent", "code", "reason", "vision", "tools", "thinking"),
+        summary="Kimi K3 (Moonshot): 1M ctx, native multimodal agentic model.",
+        cloud=True,
+    ),
+    "kimi-k2.6:cloud": ModelSpec(
+        tag="kimi-k2.6:cloud",
+        role=AGENT,
+        params_b=1000.0,
+        size_gb=0.0,
+        max_context=262_144,
+        strengths=("agent", "code", "vision", "tools"),
+        summary="Kimi K2.6 (Moonshot): 256k ctx, long-horizon coding and agents.",
+        cloud=True,
+    ),
+    "deepseek-v4.1-flash:cloud": ModelSpec(
+        tag="deepseek-v4.1-flash:cloud",
+        role=CODING,
+        params_b=0.0,
+        size_gb=0.0,
+        max_context=1_048_576,
+        strengths=("code", "reason", "agent", "tools", "thinking"),
+        summary="DeepSeek V4.1 Flash: 1M ctx, fast high-throughput coding/reasoning.",
+        cloud=True,
+    ),
+    "deepseek-v4-pro:cloud": ModelSpec(
+        tag="deepseek-v4-pro:cloud",
+        role=REASON,
+        params_b=1600.0,
+        size_gb=0.0,
+        max_context=1_048_576,
+        strengths=("reason", "code", "agent", "tools", "thinking"),
+        summary="DeepSeek V4 Pro: 1.6T MoE, 1M ctx, frontier reasoning and agents.",
+        cloud=True,
+    ),
+    "glm-5.3:cloud": ModelSpec(
+        tag="glm-5.3:cloud",
+        role=AGENT,
+        params_b=0.0,
+        size_gb=0.0,
+        max_context=1_048_576,
+        strengths=("agent", "code", "reason", "tools", "thinking"),
+        summary="GLM-5.3 (Z.ai): 1M ctx, flagship long-horizon coding and agents.",
+        cloud=True,
+    ),
+    "glm-5.3-flash:cloud": ModelSpec(
+        tag="glm-5.3-flash:cloud",
+        role=AGENT,
+        params_b=320.0,
+        size_gb=0.0,
+        max_context=1_048_576,
+        strengths=("agent", "code", "vision", "tools", "thinking"),
+        summary="GLM-5.3 Flash (Z.ai): 320B MoE / 18B active, 1M ctx, multimodal.",
+        cloud=True,
+    ),
+    "glm-5.2:cloud": ModelSpec(
+        tag="glm-5.2:cloud",
+        role=AGENT,
+        params_b=0.0,
+        size_gb=0.0,
+        max_context=999_424,
+        strengths=("agent", "code", "reason", "tools"),
+        summary="GLM-5.2 (Z.ai): ~976k ctx, previous-gen long-horizon flagship.",
+        cloud=True,
+    ),
+    # --- Current-gen local Qwen ------------------------------------------------
+    "qwen3.8:27b": ModelSpec(
+        tag="qwen3.8:27b",
+        role=CODING,
+        params_b=27.0,
+        size_gb=18.0,
+        max_context=262_144,
+        strengths=("code", "agent", "vision", "tools", "thinking"),
+        summary="Qwen 3.8 27B: current-gen coding/agents; 18 GB download, 256k ctx.",
     ),
     "deepseek-coder:6.7b": ModelSpec(
         tag="deepseek-coder:6.7b",
@@ -59,7 +148,6 @@ CATALOG: dict[str, ModelSpec] = {
         max_context=32768,
         strengths=("code", "refactor", "tools", "agent"),
         summary="Agentic coder (MoE); larger download for 24 GB.",
-        recommended=False,
     ),
     "glm-4.7-flash": ModelSpec(
         tag="glm-4.7-flash",
@@ -189,6 +277,7 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     # task never silently falls back to something like phi or gemma3:4b.
     CODING: (
         "qwen3-coder:30b",
+        "qwen3.8:27b",
         "gpt-oss:20b",
         "qwen2.5-coder:14b",
         "glm-4.7-flash",
@@ -203,6 +292,7 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     ),
     REASON: (
         "glm-4.7-flash",
+        "qwen3.8:27b",
         "deepseek-r1:8b",
         "gpt-oss:20b",
         "gemma4:12b",
@@ -226,12 +316,57 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     # Agentic coding needs reliable tool calls, not just code knowledge.
     AGENT: (
         "qwen3-coder:30b",
+        "qwen3.8:27b",
         "gpt-oss:20b",
         "gemma4:12b",
         "qwen2.5-coder:14b",
         "glm-4.7-flash",
     ),
 }
+
+# Ollama Cloud tags, strongest first. Deliberately separate from
+# TASK_PREFERENCE: the router must stay local-first, so a cloud model is only
+# used when the user names it or asks the `cloud-*` aliases for it.
+CLOUD_PREFERENCE: tuple[str, ...] = (
+    "kimi-k3:cloud",
+    "deepseek-v4-pro:cloud",
+    "glm-5.3:cloud",
+    "deepseek-v4.1-flash:cloud",
+    "glm-5.3-flash:cloud",
+    "kimi-k2.6:cloud",
+    "glm-5.2:cloud",
+)
+
+CLOUD_TAGS: tuple[str, ...] = tuple(
+    tag for tag, spec in CATALOG.items() if spec.cloud
+)
+
+# What the eight requested model names map to. Kept here (not only in the CLI)
+# so the mapping is testable and `sovereign cloud` can show exactly where each
+# familiar name goes. "DeepSeek V4 Flash" is the retired `deepseek-v4-flash`
+# tag; the current Flash is V4.1, which is what the alias points at.
+REQUESTED_CLOUD_MODELS: tuple[tuple[str, str, str], ...] = (
+    ("Kimi K3", "kimi-k3:cloud", "1M ctx · multimodal agent · Moonshot"),
+    (
+        "DeepSeek Flash V4.1",
+        "deepseek-v4.1-flash:cloud",
+        "1M ctx · fast coding/reasoning · DeepSeek",
+    ),
+    (
+        "DeepSeek Flash V4 Pro",
+        "deepseek-v4-pro:cloud",
+        "1M ctx · 1.6T MoE frontier reasoning · DeepSeek",
+    ),
+    (
+        "DeepSeek V4 Flash",
+        "deepseek-v4.1-flash:cloud",
+        "the V4 Flash tag retired 2026-08-27; V4.1 Flash supersedes it",
+    ),
+    ("GLM 5.3 FL", "glm-5.3-flash:cloud", "1M ctx · 320B MoE / 18B active · Z.ai"),
+    ("GLM 5.2", "glm-5.2:cloud", "~976k ctx · long-horizon flagship · Z.ai"),
+    ("QWEN 3.8", "qwen3.8:27b", "local 18 GB · 256k ctx · runs on this Mac"),
+    ("Kimi K2.6", "kimi-k2.6:cloud", "256k ctx · multimodal agent · Moonshot"),
+)
 
 
 @dataclass
@@ -252,12 +387,21 @@ class ModelView:
         return self.spec.tag
 
     @property
+    def cloud(self) -> bool:
+        return self.spec.cloud
+
+    @property
     def label(self) -> str:
-        marker = "▶" if self.loaded else ("●" if self.installed else "↓")
+        if self.cloud:
+            marker = "☁" if self.installed else "↓☁"
+        else:
+            marker = "▶" if self.loaded else ("●" if self.installed else "↓")
         return f"{marker} {self.tag}"
 
     @property
     def status(self) -> str:
+        if self.cloud:
+            return "cloud · registered" if self.installed else "cloud · not registered"
         if self.loaded:
             return f"loaded · {self.context or '?'} ctx"
         if self.installed:
@@ -335,7 +479,11 @@ def build_views(
             continue
         view = views.get(tag)
         if view is None:
-            spec = CATALOG.get(tag) or _dynamic_spec(tag, parse_size_gb(item.get("size")), None, "")
+            spec = (
+                CATALOG.get(tag)
+                or CATALOG.get(tag.removesuffix(":latest"))
+                or _dynamic_spec(tag, parse_size_gb(item.get("size")), None, "")
+            )
             view = ModelView(spec=spec, installed=True, size_gb=parse_size_gb(item.get("size")))
             views[tag] = view
         view.loaded = True
@@ -349,10 +497,6 @@ def build_views(
                 views[tag] = ModelView(spec=spec, installed=False, size_gb=spec.size_gb)
 
     return views
-
-
-def installed_views(views: dict[str, ModelView]) -> list[ModelView]:
-    return [v for v in views.values() if v.installed]
 
 
 def sort_views(views: Iterable[ModelView]) -> list[ModelView]:
@@ -371,9 +515,24 @@ def preferred_tags(task: str) -> tuple[str, ...]:
     return TASK_PREFERENCE.get(task, TASK_PREFERENCE[GENERAL])
 
 
+def recommended_tag() -> str:
+    """The model to download when the user asks for a recommendation.
+
+    This is the single source of truth for "recommended": the `recommended`
+    flag on the catalog entry, which the doctor, the dashboard and
+    `sovereign pull-recommended` all read. The router's own preference order
+    is a different question — that one ranks by capability, not by fit.
+    """
+    for tag, spec in CATALOG.items():
+        if spec.recommended:
+            return tag
+    return TASK_PREFERENCE[CODING][0]
+
+
 REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     # fast agentic MoE models (best speed/capability on 24 GB)
     "glm4": ("GLM-4 9B; fast multilingual coding, agentic tool use & reasoning", 5.5),
+    "qwen3.8:27b": ("current-gen Qwen coder/agent; 18 GB, 256k ctx", 18.0),
     "qwen3-coder:30b": ("best agentic coder; 30B MoE, ~3B active — fast", 19.0),
     "glm-4.7-flash": ("GLM Flash; agentic tool use + reasoning, 198k ctx", 19.0),
     "gpt-oss:20b": ("fastest reliable tool-caller; low memory", 14.0),
@@ -419,6 +578,16 @@ REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     "qwen2.5-vl:7b": ("vision-language model", 4.4),
     "mxbai-embed-large": ("embedding model (1024-dim)", 0.7),
     "snowflake-arctic-embed": ("small embedding model", 0.2),
+    # Ollama Cloud frontier models: no local download (0 GB). They are listed
+    # here so `models --remote` and `sovereign cloud` use one catalog. Pulling
+    # one still requires Ollama Cloud to be enabled and the account signed in.
+    "kimi-k3:cloud": ("Kimi K3; 1M ctx, multimodal agent (cloud)", 0.0),
+    "kimi-k2.6:cloud": ("Kimi K2.6; 256k ctx, long-horizon coding (cloud)", 0.0),
+    "deepseek-v4.1-flash:cloud": ("DeepSeek V4.1 Flash; 1M ctx, fast coding (cloud)", 0.0),
+    "deepseek-v4-pro:cloud": ("DeepSeek V4 Pro; 1.6T MoE, 1M ctx (cloud)", 0.0),
+    "glm-5.3:cloud": ("GLM-5.3; 1M ctx flagship coding agent (cloud)", 0.0),
+    "glm-5.3-flash:cloud": ("GLM-5.3 Flash; 320B MoE, 1M ctx, multimodal (cloud)", 0.0),
+    "glm-5.2:cloud": ("GLM-5.2; ~976k ctx long-horizon agent (cloud)", 0.0),
 }
 
 # Honest offline model stacks for a 24 GB Mac. Only one ~18 GB model fits at a
@@ -445,17 +614,30 @@ MODEL_STACKS: dict[str, dict[str, object]] = {
         "approx_gb": 51,
         "note": "Every model worth keeping; the 18-19 GB ones run strictly one at a time.",
     },
+    "cloud": {
+        "models": CLOUD_PREFERENCE,
+        "approx_gb": 0,
+        "note": "Frontier models served by Ollama Cloud: no download, but prompts "
+        "leave this Mac. Run `sovereign cloud --enable` and `ollama signin` first.",
+    },
 }
 
-# Models that exist on Ollama only as CLOUD (routed) entries — verified
-# 2026-10-21. They cannot be pulled and run locally, so they are deliberately
-# not offered as one-click downloads. GLM itself *is* local: see glm-4.7-flash.
-NOT_ON_OLLAMA = (
-    "glm-5.3",
-    "glm-5.3-flash",
-    "deepseek-v4.1-flash",
-    "deepseek-v4-pro",
-    "kimi-k2.7-code",
-    "kimi k3",
-    "kimi-k3",
-)
+# These tags were once mistaken for local Ollama models. They now exist as
+# Ollama Cloud entries only: no weights are downloaded, and the prompt is
+# processed on ollama.com. `sovereign cloud` owns their setup.
+CLOUD_ONLY = CLOUD_PREFERENCE
+
+# Bare names people type for the cloud models, mapped to the real Ollama tag.
+# The original DeepSeek V4 Flash tag was retired by Ollama on 2026-08-27, so
+# its name resolves to the current Flash instead of failing with a bare 404.
+CLOUD_TAG_ALIASES: dict[str, str] = {
+    "deepseek-v4-flash:cloud": "deepseek-v4.1-flash:cloud",
+    "deepseek-v4-flash": "deepseek-v4.1-flash:cloud",
+    "glm-5.3-flash": "glm-5.3-flash:cloud",
+    "deepseek-v4.1-flash": "deepseek-v4.1-flash:cloud",
+    "deepseek-v4-pro": "deepseek-v4-pro:cloud",
+    "kimi-k3": "kimi-k3:cloud",
+    "kimi-k2.6": "kimi-k2.6:cloud",
+    "glm-5.3": "glm-5.3:cloud",
+    "glm-5.2": "glm-5.2:cloud",
+}

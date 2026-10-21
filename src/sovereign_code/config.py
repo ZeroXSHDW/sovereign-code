@@ -67,6 +67,10 @@ class Settings:
     session_retention_days: float = 0.0
     session_keep: int = 50
 
+    def __post_init__(self) -> None:
+        # Not a dataclass field: it must never be written to the TOML file.
+        self.parse_error: str = ""
+
     @property
     def ollama_url(self) -> str:
         host = self.ollama_host.strip().rstrip("/")
@@ -90,8 +94,12 @@ class Settings:
         if path.is_file():
             try:
                 data = tomllib.loads(path.read_text(encoding="utf-8"))
-            except (OSError, tomllib.TOMLDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
                 data = {}
+                settings.parse_error = f"config could not be read: {exc}"
+            except tomllib.TOMLDecodeError as exc:
+                data = {}
+                settings.parse_error = f"config is not valid TOML: {exc}"
             for key in asdict(settings):
                 if key in data and data[key] is not None:
                     setattr(settings, key, data[key])
@@ -100,25 +108,40 @@ class Settings:
                 setattr(settings, key, value)
         if not settings.default_model:
             settings.default_model = None
-        settings.max_context = max(2048, int(settings.max_context))
-        settings.temperature = min(2.0, max(0.0, float(settings.temperature)))
-        settings.session_retention_days = max(0.0, float(settings.session_retention_days))
-        settings.session_keep = max(0, int(settings.session_keep))
+        settings._coerce()
         return settings
+
+    def _coerce(self) -> None:
+        """Bring every field to its declared type, ignoring bad values.
+
+        A hand-edited config with `max_context = "abc"` used to raise a
+        ValueError out of `load()` and kill every command in the CLI.
+        """
+        self.ollama_host = str(self.ollama_host)
+        self.gateway_url = str(self.gateway_url)
+        self.default_model = str(self.default_model) if self.default_model else None
+        self.theme = str(self.theme)
+        self.workspace = str(self.workspace)
+        self.login_enabled = _as_bool(self.login_enabled)
+        self.max_context = max(2048, _as_int(self.max_context, 32768))
+        self.temperature = min(2.0, max(0.0, _as_float(self.temperature, 0.25)))
+        self.session_retention_days = max(0.0, _as_float(self.session_retention_days, 0.0))
+        self.session_keep = max(0, _as_int(self.session_keep, 50))
+        self.default_task = _as_task(self.default_task)
 
     def save(self) -> Path:
         ensure_layout()
         lines = [
             "# Sovereign Code configuration",
-            f'ollama_host = "{self.ollama_host}"',
-            f'gateway_url = "{self.gateway_url}"',
+            f"ollama_host = {_toml_value(self.ollama_host)}",
+            f"gateway_url = {_toml_value(self.gateway_url)}",
             f"default_model = {_toml_value(self.default_model)}",
-            f'default_task = "{self.default_task}"',
+            f"default_task = {_toml_value(self.default_task)}",
             f"max_context = {int(self.max_context)}",
             f"temperature = {float(self.temperature)}",
-            f'theme = "{self.theme}"',
+            f"theme = {_toml_value(self.theme)}",
             f"login_enabled = {str(self.login_enabled).lower()}",
-            f'workspace = "{self.workspace}"',
+            f"workspace = {_toml_value(self.workspace)}",
             f"session_retention_days = {float(self.session_retention_days)}",
             f"session_keep = {int(self.session_keep)}",
             "",
@@ -127,10 +150,48 @@ class Settings:
         return self.config_path
 
 
+def _as_int(value: object, fallback: int) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_float(value: object, fallback: float) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _as_task(value: object) -> str:
+    """Keep `default_task` a task the router actually knows."""
+    from .router import Task
+
+    name = str(value).strip().lower()
+    return name if name in {task.value for task in Task} else "code"
+
+
 def _toml_value(value: str | None) -> str:
+    """Render a string as a TOML basic string.
+
+    Every string field goes through here. Interpolating a raw value between
+    quotes produced malformed TOML for any value containing a quote or a
+    backslash, and the next load then silently fell back to the defaults.
+    """
     if value is None:
         return '""'
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = escaped.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return '"' + escaped + '"'
 
 
 def ensure_layout() -> None:

@@ -66,8 +66,16 @@ class SessionWriter:
 
 def recent_sessions(limit: int = 10) -> list[Path]:
     ensure_layout()
-    files = sorted(SESSIONS_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(SESSIONS_DIR.glob("*.jsonl"), key=_mtime, reverse=True)
     return files[:limit]
+
+
+def _mtime(path: Path) -> float:
+    """Sort key that survives a file disappearing mid-scan."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
@@ -109,7 +117,7 @@ def read_session(path: Path) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 records.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return records
     return records
 

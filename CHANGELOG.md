@@ -5,6 +5,15 @@ All notable changes to Sovereign Code.
 ## [Unreleased]
 
 ### Added
+- **Ollama Cloud models**: Kimi K3, Kimi K2.6, DeepSeek V4.1 Flash, DeepSeek V4 Pro,
+  GLM-5.3, GLM-5.3 Flash, and GLM-5.2 are registered as `:cloud` models, plus local
+  Qwen 3.8 27B. `sovereign cloud` shows the mapping and readiness; `--enable` flips
+  `server.json` + `OLLAMA_NO_CLOUD`, updates the login agent and restarts Ollama;
+  `--install-aliases` writes `cloud-*` gateway aliases; `--pull` registers the tags;
+  `--probe` reports disabled / signed-out / Pro-plan states instead of a raw HTTP error.
+- Cloud-aware `models`, `status`, `model-info`, `pull`, and `run`: cloud tags are marked
+  `☁`, never counted as local disk use, and 402 "not in the Free plan" replies are
+  explained with the upgrade link. The local-first router never picks a cloud model.
 - Hardware guardrails in `doctor`: Apple-silicon GPU-wired budget, swap pressure, stale model
   runners, and gateway-config drift (16 → 19 checks). These catch the failure mode where a model
   larger than the GPU budget makes Ollama **hang** instead of erroring.
@@ -36,6 +45,20 @@ All notable changes to Sovereign Code.
   can be checked rather than assumed.
 - `claude-cloud` wrapper: the counterpart to `codex-chatgpt`, using the Claude subscription with no
   local gateway overrides.
+- `pipeline` now runs **verification**, not just plan → implement → review: it auto-detects the
+  project's checks (`make test`, pytest, npm, cargo, go), runs them, and feeds a failure back to the
+  implementer for bounded repair rounds (`--fix`, `--checks`, `--no-verify`, `--agent-timeout`).
+  The reviewer sees the real `git diff` and the check output, and every run is archived under
+  `~/Documents/local-ai/data/runs/<timestamp>/` with a summary and an explicit verdict.
+- `pipeline` fails fast when the agent changed nothing (`No files were changed by the implementer`)
+  instead of running checks against an empty tree, and clears resident models between stages so a
+  19 GB planner and an 18 GB coder never fight over the wired budget.
+- `local-review` gateway alias: gemma4:12b as the independent reviewer (different family from the
+  Qwen implementer). gpt-oss spends its whole budget on hidden reasoning and returns empty content.
+- `tune` now sets `OLLAMA_MAX_LOADED_MODELS=1`: with 2, Ollama keeps the old model and waits for
+  memory instead of evicting, which wedges the server on a 24 GB machine.
+- The watchdog is now runner-aware and uses a two-strike rule, so it no longer restarts Ollama
+  during a legitimate cold load (which was killing active pipeline runs).
 - `doctor` gained a **Client models** check: every model referenced by the gateway, OpenCode, Qwen
   Code and Continue must still be installed, which catches a pruning pass or another agent's edit
   leaving a dangling reference (20 checks).

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
-CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
+from .gateway import alias_names
 
-_ALIAS_RE = re.compile(r"^\s*-\s*model_name:\s*[\"']?([^\"'\s]+)[\"']?\s*$", re.MULTILINE)
+CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
 
 
 def configured_aliases(config_path: Path) -> tuple[str, ...]:
@@ -23,10 +22,10 @@ def configured_aliases(config_path: Path) -> tuple[str, ...]:
     """
     try:
         text = config_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ()
-    names = [m.group(1) for m in _ALIAS_RE.finditer(text)]
-    return tuple(name for name in names if not name.startswith("openai/"))
+    return tuple(name for name in alias_names(text) if not name.startswith("openai/"))
+
 
 EXPECTED_ALIASES = (
     "local-chat",
@@ -36,6 +35,7 @@ EXPECTED_ALIASES = (
     "local-agent",
     "local-browser-nav",
     "local-reasoning",
+    "local-reasoning-deep",
     "local-vision",
     "local-vision-deep",
 )
@@ -43,7 +43,14 @@ EXPECTED_ALIASES = (
 PROMPT = "Reply with exactly: OK"
 
 # Reasoning models spend the budget on hidden thinking before emitting content.
-TOKEN_BUDGETS = {"local-thinking": 512}
+# Probing them with the default 8-token budget returned an empty body and
+# reported a healthy alias as broken.
+TOKEN_BUDGETS = {
+    "local-thinking": 512,
+    "local-reasoning": 512,
+    "local-reasoning-deep": 512,
+    "local-vision-deep": 256,
+}
 DEFAULT_BUDGET = 8
 
 
@@ -153,12 +160,19 @@ def probe_liveness(
         with httpx.Client(
             timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
         ) as client:
-            response = client.post(
-                f"{base}/api/embed", json={"model": model, "input": "ping"}
-            )
+            response = client.post(f"{base}/api/embed", json={"model": model, "input": "ping"})
     except httpx.HTTPError as exc:
         return LivenessResult(False, f"no response in {timeout:.0f}s ({type(exc).__name__})")
     elapsed = time.monotonic() - started
     if response.status_code >= 400:
         return LivenessResult(False, f"HTTP {response.status_code}")
+    # A 200 that carries an error body is not a served request: a stuck load
+    # answers with HTTP 200 and an error payload, which a status-only check
+    # would have reported as a healthy stack.
+    try:
+        payload = response.json()
+    except ValueError:
+        return LivenessResult(False, "malformed response")
+    if isinstance(payload, dict) and payload.get("error"):
+        return LivenessResult(False, f"error: {str(payload['error'])[:120]}")
     return LivenessResult(True, f"served in {elapsed * 1000:.0f} ms")

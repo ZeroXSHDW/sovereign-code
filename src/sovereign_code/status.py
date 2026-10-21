@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
+from .cloud import cloud_enabled
 from .config import Settings
 from .gateway import GatewayStatus
 from .gateway import check as check_gateway
-from .models import ModelView, build_views, sort_views
+from .models import ModelView, build_views, recommended_tag, sort_views
 from .ollama import OllamaClient
-from .router import Selection, Task, choose, recommend_pull
+from .router import Selection, Task, choose
 from .system import (
     Memory,
     disk_free_gb,
@@ -37,6 +39,9 @@ class Snapshot:
     loopback: bool = True
     login_installed: bool = False
     login_loaded: bool = False
+    # Ollama Cloud readiness is a machine setting, not a network probe; the
+    # dashboard stays fast and `sovereign cloud --probe` does the live check.
+    cloud_enabled: bool = False
     code_selection: Selection | None = None
     chat_selection: Selection | None = None
     error: str = ""
@@ -76,9 +81,18 @@ class Snapshot:
         return sort_views(self._unique(lambda view: True))
 
     @property
-    def potential_free_gb(self) -> float:
-        """Free RAM after evicting current residents (the one-model policy)."""
-        return round(self.memory.free_gb + sum(v.size_gb for v in self.loaded), 1)
+    def potential_free_gb(self) -> float | None:
+        """Free RAM after evicting current residents (the one-model policy).
+
+        `None` means the memory counters could not be read. That is not the
+        same as "0 GB free": the router treats a real zero as a signal to
+        shrink the context window to its floor, so an unreadable counter must
+        not be allowed to shrink every model to 2k.
+        """
+        if not self.memory.known:
+            return None
+        resident_gb = sum(view.vram_gb or view.size_gb for view in self.loaded)
+        return round(self.memory.free_gb + resident_gb, 1)
 
     @property
     def best_coder(self) -> ModelView | None:
@@ -86,8 +100,13 @@ class Snapshot:
 
     @property
     def recommended_coder(self) -> ModelView | None:
-        """The coder the router would recommend, not a hard-coded tag."""
-        return self.views.get(recommend_pull(Task.CODE))
+        """The coder to download, i.e. the catalog's recommended model.
+
+        Not the router's strongest pick: the router ranks by capability, while
+        this is the model that fits a 24 GB Mac with room to spare, which is
+        what "pull the recommended coder" means.
+        """
+        return self.views.get(recommended_tag())
 
     def model(self, tag: str | None) -> ModelView | None:
         return self.views.get(tag) if tag else None
@@ -100,6 +119,20 @@ async def _safe(coro: Any) -> Any:
         return exc
 
 
+def _host_port(url: str, default_port: int) -> tuple[str, int]:
+    """Split a service URL into (host, port).
+
+    The probes used to hardcode 11434 and 4000, so a user who moved Ollama to
+    another port was told the stack was down.
+    """
+    text = url if "://" in url else f"http://{url}"
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return ("127.0.0.1", default_port)
+    return (parts.hostname or "127.0.0.1", parts.port or default_port)
+
+
 async def collect(settings: Settings) -> Snapshot:
     client = OllamaClient(settings.ollama_url)
     snapshot = Snapshot(settings=settings)
@@ -107,8 +140,9 @@ async def collect(settings: Settings) -> Snapshot:
     snapshot.disk_free_gb = disk_free_gb()
     snapshot.login_installed = login_agent_installed()
     snapshot.login_loaded = login_agent_loaded()
-    snapshot.ollama_port = port_open("127.0.0.1", 11434)
-    snapshot.gateway_port = port_open("127.0.0.1", 4000)
+    snapshot.cloud_enabled = cloud_enabled()
+    snapshot.ollama_port = port_open(*_host_port(settings.ollama_url, 11434))
+    snapshot.gateway_port = port_open(*_host_port(settings.gateway_url, 4000))
     snapshot.loopback = is_loopback(settings.ollama_url) and is_loopback(settings.gateway_url)
 
     version, tags, ps, gateway = await asyncio.gather(
@@ -117,17 +151,23 @@ async def collect(settings: Settings) -> Snapshot:
         _safe(client.ps()),
         _safe(check_gateway(settings.gateway_url)),
     )
+    problems: list[str] = []
     if isinstance(version, Exception):
-        snapshot.error = str(version)
+        problems.append(f"ollama: {version}")
     else:
         snapshot.version = str(version)
         snapshot.ollama_up = True
     if isinstance(tags, Exception):
+        problems.append(f"model list: {tags}")
         tags = None
     if isinstance(ps, Exception):
+        problems.append(f"resident models: {ps}")
         ps = None
     if isinstance(gateway, GatewayStatus):
         snapshot.gateway = gateway
+    else:
+        problems.append(f"gateway: {gateway}")
+    snapshot.error = "; ".join(problems)
 
     snapshot.views = build_views(tags, ps, include_missing=True)
     snapshot.code_selection = choose(

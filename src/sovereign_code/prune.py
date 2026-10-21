@@ -8,9 +8,7 @@ deletes anything itself.
 
 from __future__ import annotations
 
-import re
-
-_ALIAS_TARGET_RE = re.compile(r"^\s*model:\s*ollama/([^\s\"']+)", re.MULTILINE)
+from .gateway import alias_targets
 
 
 def base_tag(tag: str) -> str:
@@ -20,7 +18,7 @@ def base_tag(tag: str) -> str:
 
 def parse_alias_targets(config_text: str) -> set[str]:
     """Ollama tags referenced by gateway aliases (`model: ollama/<tag>`)."""
-    return {base_tag(match.group(1)) for match in _ALIAS_TARGET_RE.finditer(config_text)}
+    return {base_tag(tag) for tag in alias_targets(config_text).values()}
 
 
 def referenced_tags(

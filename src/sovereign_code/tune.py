@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 DEFAULT_CONTEXT = 32768
@@ -29,7 +30,10 @@ def desired_env(context: int = DEFAULT_CONTEXT) -> dict[str, str]:
         "OLLAMA_FLASH_ATTENTION": "1",
         "OLLAMA_KV_CACHE_TYPE": "q8_0",
         "OLLAMA_KEEP_ALIVE": "15m",
-        "OLLAMA_MAX_LOADED_MODELS": "2",
+        # One model at a time. With 2, Ollama tries to keep the previous model
+        # and load the next; when the pair cannot fit the ~18 GB wired budget it
+        # waits forever instead of evicting, which blocks every later request.
+        "OLLAMA_MAX_LOADED_MODELS": "1",
         "OLLAMA_CONTEXT_LENGTH": str(int(context)),
     }
 
@@ -79,9 +83,7 @@ def write_context_length(value: int, path: Path | None = None) -> bool:
         return False
     try:
         with sqlite3.connect(db) as con:
-            cur = con.execute(
-                "UPDATE settings SET context_length = ? WHERE id = 1", (int(value),)
-            )
+            cur = con.execute("UPDATE settings SET context_length = ? WHERE id = 1", (int(value),))
             con.commit()
             return cur.rowcount > 0
     except sqlite3.Error:
@@ -117,17 +119,51 @@ def set_session_env(values: dict[str, str]) -> None:
         subprocess.run(["launchctl", "setenv", key, value], check=False)
 
 
-def restart_ollama() -> None:
+_OLLAMA_PATTERNS = (
+    "Ollama.app/Contents/MacOS/Ollama",
+    "Ollama.app/Contents/Resources/ollama serve",
+)
+
+
+def _any_process(patterns: tuple[str, ...]) -> bool:
+    for pattern in patterns:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern], capture_output=True, text=True, check=False
+            )
+        except OSError:
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+    return False
+
+
+def restart_ollama(timeout: float = 10.0) -> None:
     """Fully restart the app so a fresh server inherits the new environment.
 
     The UI process must die too: `osascript quit` alone leaves it hidden, and it
     respawns the server with the settings it still holds in memory.
+
+    `open -a Ollama` is ignored while the old app is still shutting down, which
+    left no server running at all. Wait for both processes to disappear first,
+    then launch, and retry once if the launch did not take.
     """
-    subprocess.run(["osascript", "-e", 'quit app "Ollama"'], check=False)
-    subprocess.run(["pkill", "-f", "Ollama.app/Contents/MacOS/Ollama"], check=False)
+    # The quit can report "User cancelled" when the app is busy; the hard kill
+    # below is authoritative, so keep that noise out of the CLI.
     subprocess.run(
-        ["pkill", "-f", "Ollama.app/Contents/Resources/ollama serve"], check=False
+        ["osascript", "-e", 'quit app "Ollama"'], capture_output=True, text=True, check=False
     )
+    for pattern in _OLLAMA_PATTERNS:
+        subprocess.run(["pkill", "-f", pattern], check=False)
+
+    deadline = time.monotonic() + timeout
+    while _any_process(_OLLAMA_PATTERNS) and time.monotonic() < deadline:
+        time.sleep(0.25)
+    if _any_process(_OLLAMA_PATTERNS):
+        for pattern in _OLLAMA_PATTERNS:
+            subprocess.run(["pkill", "-9", "-f", pattern], check=False)
+        time.sleep(0.5)
+
     subprocess.run(["open", "-a", "Ollama"], check=False)
 
 

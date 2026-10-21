@@ -1,0 +1,111 @@
+---
+name: yuandian-law-search
+title: 元典法律检索
+description: 元典法律检索与精选报告。查询中国法律法规、案例或围绕案件争点查找依据时使用；优先直接调用可用的元典 MCP，无 MCP 时使用 API。轻量理解问题、筛除不适用候选，按需生成可追溯报告。不要用于替代完整证据审查、诉讼方案或正式法律意见。
+author: cat-xierluo
+author_url: https://github.com/cat-xierluo/legal-skills/tree/main/skills/yuandian-law-search
+license: MIT
+version: 0.1.2
+execution_mode: open
+jurisdiction: cn
+practice: general
+language: zh
+sources:
+- title: 01 keyword expansion
+  path: references/01-keyword-expansion.md
+- title: 02 typical workflows
+  path: references/02-typical-workflows.md
+- title: 03 report consolidation
+  path: references/03-report-consolidation.md
+- title: 04 report design notes
+  path: references/04-report-design-notes.md
+- title: 05 mcp workflow
+  path: references/05-mcp-workflow.md
+- title: 06 enterprise portrait
+  path: references/06-enterprise-portrait.md
+- title: 07 research middleware
+  path: references/07-research-middleware.md
+- title: 08 selected sources delivery
+  path: references/08-selected-sources-delivery.md
+- title: 09 api usage
+  path: references/09-api-usage.md
+---
+
+# 元典法律检索
+
+把中间层用于两件事：把问题问准，把返回材料选准。普通检索直接执行；不要把思维模型变成每次必填的表格。
+
+## 默认路径
+
+1. **定位问题**：从已有上下文识别“要判断什么、哪一项事实会改变适用”。有现成分析报告时只读相关争点，不重复全案分析。明确法名条号或案号直接查详情；即使附带案件事实，单争点也默认轻量处理。
+2. **调用一次合适的工具**：有元典 MCP 就按工具实际 schema 直接调用，不要求本地 Key、CLI、研究计划 JSON 或归档。无 MCP／用户要求 API 时才读 [API 入口](references/09-api-usage.md)。首轮不是“试检后必有正式检索”，能回答即完成。
+3. **筛选并回答**：核对适用范围、关键事实、时点、原文支持和来源；只解释有用的依据。已有结果足够则停止。
+
+普通对话不生成 `research-plan.json`、`selected-sources.json`，不运行合同校验，不强制拉详情、不自动语义加关键词双查。不要为凑正反两面另发请求：一次返回可以同时包含支持和反向材料。
+
+### 参数与预算
+
+- 使用当前 MCP schema／API 的默认值；仅在具体需要时显式设置过滤、改写或数量。不要把 CLI 参数名直接塞入 MCP 参数。
+- `YD_STRATEGY=aggressive/balanced/economical` 是历史兼容配置，不再指挥法律检索，也不再改变 CLI 检索参数。不要先读取策略、更改用户配置或批量执行旧流程。
+- 默认值不等于少返回：元典语义接口可能召回几十条。候选量不是报告篇幅；不逐条重写摘要，不把整个响应复述给用户。若上下文已明显拥挤，可按实际需要显式限制下一次候选数，说明这不是服务端默认。
+- 调用会消耗平台积分；在用户授权的检索范围和预算内执行，不每次重复索要许可。扩大问题范围、批量核验、企业调查、幻觉检测或费用超出已有授权时再确认。无预算约定时不自行批量调用。
+
+## 轻量法律判断
+
+只保留能改变检索或选材的判断，不要求展示内部推理全过程：
+
+- **问题**：请求或抗辩是什么，而不只是案由名称。
+- **关键前提**：主体、客体、行为、履行顺序／时间中哪些会影响规则适用。未知事实不填成已查明；只有会改变路线时才补问，否则标注假设推进。
+- **适用检查**：材料能支持哪一点，缺哪项事实，是否只是同主题近邻。
+
+例如“提前退租能否没收保证金”，需要区分普通房屋租赁与融资租赁，并将“保证金是否构成违约金”作为待验证问题，不能预先认定。房屋过户与尾款问题，要比较同时履行还是先后履行；客户名单纠纷要看信息内容、保密措施及使用行为，不能只看“员工离职”。
+
+**涵摄是判断方式，不是固定输出工序。** 只有多争点相互牵制、决定性依据冲突、用户明确要求深度案件研究／完整检索计划时，才按需加载 [深度研究](references/07-research-middleware.md)。不得仅因有案件事实或代理立场就升级。
+
+## 何时追加检索
+
+先指出首轮尚未解决的缺口，再选择一个对应动作：
+
+| 观察到的问题 | 有必要时的下一步 |
+|---|---|
+| 已知法名条号／案号，需要确定文本 | 精确详情；已有完整可核对文本则不重复取 |
+| 结果混入近邻案型 | 补关键事实、换表达或使用该接口支持的过滤 |
+| 语义结果主题对，但履行顺序／裁判命题不对 | 用已经发现的裁判用语做关键词／字段复检 |
+| 零命中 | 检查参数、缩短过窄表达或换检索方式；不宣称“无类案” |
+| 返回文本不足以支撑拟引用结论 | 只核验准备采用的来源；取得不到就披露未核实 |
+| 缺的是案件事实或证据 | 提示补充，不用更多查询代替补证 |
+
+已解决用户问题、没有新有效材料、或下一步超预算时停止并说明边界。关键词技巧和场景示例仅在需要时读 [查询修正](references/01-keyword-expansion.md)、[检索示例](references/02-typical-workflows.md)。
+
+## 结果质量与交付
+
+- 后端分数只反映检索排序，不代表法律适用性、权威性或核验通过。
+- 核对规范对象、效力层级、施行时点和案涉时间。典型案例是案例，不是法律条文；行业指引不是司法解释。“现行有效”也不等于适用本案。
+- 历史法源不当然无用：旧事实可能需要旧法；不得仅因有新法就替换，也不得无时间适用说明直接采用。现有报告脚本暂不接受历史法源作 core；遇此情形披露限制，不把它伪标 current 来过门禁。
+- 类案比较决定性事实与法院实际裁判理由，区分当事人主张、法院判断和平台整理。元典案例语义结果可能是整理内容，不自动等于裁判文书逐字全文；不要称已经“原文全文核验”。
+- 默认对话交付：先答问题，再给少量精选依据、适用前提和未解决点。没有必要就不追加案例、不填满12条上限。
+- 用户要求报告／落盘时才读 [报告生成](references/03-report-consolidation.md) 与 [精选来源合同](references/08-selected-sources-delivery.md)。普通报告用 focused 轻量记录，深度报告兼容原完整合同。完整召回不得复制进正文。
+- 正式报告仍需来源核验、相关性说明、分组排序及引用追溯。程序只检查结构和声明，不会自动证明 Agent 的法律判断正确。
+
+## MCP、API 与数据留存
+
+MCP 连接配置／可选归档见 [MCP 指南](references/05-mcp-workflow.md)。不要为归档把整份工具响应重新手写成 JSON；有文件再用 `ingest --input`，没有则保留工具调用和来源链接即可。
+
+CLI 默认写 `archive/` 原始 JSON、per-call Markdown，通常另写工作目录副本；这些是候选底稿，不是正式报告。普通 API 检索优先加 `--no-report` 避免底稿冒充交付。
+
+- `--no-report`：不写 Markdown，仍写 archive JSON。
+- `--no-cwd-report`：仅不写工作目录 Markdown。
+- `--no-archive`：关闭全部检索留存；仍读取已有缓存，新查询不再入缓存，后续可能重复扣费。此开关不代替用户明确发起的 `consolidate` 报告写入。
+- `--archive-dir`／`YD_ARCHIVE_DIR`：重定向归档。归档失败只告警，不吞响应、不自动重试。
+
+请求发送至 `open.chineselaw.com`，来源链接可能位于 `ydzk.chineselaw.com`；用最少必要事实，先脱敏。原始文书、客户材料、Key 和归档不提交公开仓库。不要输出 `scripts/.env` 内容或把 Key 写入命令。
+
+## 依赖
+
+MCP 路径只需客户端已配置元典工具，无本地 Python 或 API Key 前置要求。API／归档／报告脚本使用 Python 3 标准库，无第三方 Python 包。
+
+| 依赖 | 安装方式 |
+|---|---|
+| Python 3（仅本地脚本） | macOS：`brew install python`；Linux：`sudo apt-get install python3` |
+
+需要 API 时从环境变量 `YD_API_KEY` 或 `scripts/.env` 读取 Key，缺失时按 [API 入口](references/09-api-usage.md) 提示配置；不因 Key 缺失阻止使用现成 MCP 或整理已有结果。

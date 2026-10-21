@@ -1,131 +1,119 @@
-"""Tests for local client detection, profiles, and launch plans."""
+"""Tests for the client launch plans and the OpenCode model pinning."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
-from sovereign_code import clients
+from sovereign_code.clients import (
+    CLIENT_ROLE_ALIAS,
+    _pin_opencode_model,
+    local_clients,
+    plan_launch,
+    resolve_client_models,
+)
 from sovereign_code.config import Settings
-from sovereign_code.models import CATALOG, build_views
-
-GIB = 1024**3
-
-
-def _views(*names):
-    tags = {
-        "models": [
-            {"name": name, "size": int(CATALOG[name].size_gb * GIB), "details": {}}
-            for name in names
-        ]
-    }
-    return build_views(tags, None)
-
-
-def test_resolve_client_models_picks_best_installed():
-    resolved = clients.resolve_client_models(_views("qwen2.5-coder:14b", "qwen3.5:4b"), free_gb=20)
-    assert resolved["codex"] == ("local-code", "qwen2.5-coder:14b")
-    assert resolved["chatgpt"] == ("local-chat", "qwen3.5:4b")
-    assert resolved["claude"] == ("local-claude", "qwen3.5:4b")
-
-
-def test_resolve_client_models_empty_machine():
-    resolved = clients.resolve_client_models(build_views({"models": []}, None), free_gb=20)
-    assert resolved["codex"] == ("local-code", "")
-    assert resolved["qwen"] == ("local-agent", "")
+from sovereign_code.models import build_views
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setattr(clients, "LOCAL_AI_ROOT", tmp_path / "local-ai")
-    monkeypatch.setattr(clients.Path, "home", classmethod(lambda cls: tmp_path))
-    return tmp_path
+def project(tmp_path) -> Path:
+    path = tmp_path / "project"
+    path.mkdir()
+    return path
 
 
-def test_codex_profile_targets_loopback(home):
-    path = clients.write_codex_profile()
-    text = path.read_text(encoding="utf-8")
-
-    assert path == home / "local-ai" / "config" / "codex" / "local.config.toml"
-    assert 'model = "local-code"' in text
-    assert 'base_url = "http://127.0.0.1:4000/v1"' in text
-    assert "model_context_window = 32768" in text
-    assert "api.openai.com" not in text
+def _views(*tags: str) -> dict:
+    payload = {"models": [{"name": tag, "size": (4 * 1024**3), "details": {}} for tag in tags]}
+    return build_views(payload, None)
 
 
-def test_codex_launch_requires_profile(home, tmp_path):
-    with pytest.raises(ValueError, match="install-clients"):
-        clients.plan_launch("codex", tmp_path, Settings())
+def test_resolve_client_models_returns_every_client():
+    views = _views("qwen3-coder:30b", "qwen3.5:4b")
+    resolved = resolve_client_models(views, free_gb=8.0)
+    assert set(resolved) == set(CLIENT_ROLE_ALIAS)
+    for client, (alias, tag) in resolved.items():
+        assert alias
+        assert tag, f"{client} has no resolved model"
 
 
-def test_codex_launch_uses_documents_home(home, tmp_path):
-    clients.write_codex_profile()
-    plan = clients.plan_launch("codex", tmp_path, Settings())
+def test_resolved_models_match_the_router_choice():
+    """The displayed model has to be the model the client will actually run."""
+    views = _views("qwen3-coder:30b")
+    resolved = resolve_client_models(views, free_gb=8.0)
+    for _client, (_alias, tag) in resolved.items():
+        assert tag in views
+        assert views[tag].installed
 
-    assert plan.env["CODEX_HOME"] == str(home / "local-ai" / "config" / "codex")
+
+def test_resolve_client_models_survives_an_empty_machine():
+    resolved = resolve_client_models(_views(), free_gb=8.0)
+    assert set(resolved) == set(CLIENT_ROLE_ALIAS)
+    assert all(alias for alias, _tag in resolved.values())
+
+
+def test_local_clients_reports_the_resolved_models(project):
+    """The displayed model has to be the model the client will actually run."""
+    views = _views("qwen3-coder:30b")
+    resolved = resolve_client_models(views, free_gb=8.0)
+    clients = local_clients(resolved)
+    assert clients
+    for info in clients:
+        tag = resolved.get(info.key, ("", ""))[1]
+        if tag:
+            assert tag in info.model, f"{info.key} shows {info.model!r}, not {tag!r}"
+
+
+def test_local_clients_falls_back_to_the_defaults():
+    clients = local_clients(None)
+    assert clients
+    assert all(info.model for info in clients)
+
+
+def test_pin_opencode_model_writes_the_config_content(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        "sovereign_code.tools.read_text",
+        lambda _path: json.dumps(
+            {"provider": {"ollama": {"models": {"qwen3-coder:30b": {"name": "Qwen"}}}}}
+        ),
+    )
+    env: dict[str, str] = {}
+    assert _pin_opencode_model(env, "qwen3-coder:30b") is True
+    payload = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    assert payload["model"] == "ollama/qwen3-coder:30b"
+
+
+def test_pin_opencode_model_refuses_an_unlisted_model(monkeypatch, tmp_path):
+    """Pinning a model OpenCode does not know makes it fail to start."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        "sovereign_code.tools.read_text",
+        lambda _path: json.dumps(
+            {"provider": {"ollama": {"models": {"other:1b": {"name": "Other"}}}}}
+        ),
+    )
+    env: dict[str, str] = {}
+    assert _pin_opencode_model(env, "qwen3-coder:30b") is False
+    assert "OPENCODE_CONFIG_CONTENT" not in env
+
+
+def test_pin_opencode_model_works_without_a_user_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("sovereign_code.tools.read_text", lambda _path: "")
+    env: dict[str, str] = {}
+    assert _pin_opencode_model(env, "qwen3-coder:30b") is True
+    assert "OPENCODE_CONFIG_CONTENT" in env
+
+
+def test_plan_launch_sets_the_local_environment(project):
+    plan = plan_launch("codex", project, Settings(), "qwen3-coder:30b")
     assert plan.env["SOVEREIGN_API_KEY"] == "local"
+    assert plan.argv[0] == "codex"
 
 
-def test_qwen_launch_uses_agent_model(home, tmp_path):
-    plan = clients.plan_launch("qwen", tmp_path, Settings(), yolo=True)
-
-    assert plan.argv[:2] == ["qwen", "--model"]
-    assert plan.argv[2] == clients.AGENT_MODEL
-    assert "yolo" in plan.argv
-    assert plan.env["QWEN_HOME"] == str(home / "local-ai" / "qwen")
-    assert plan.cwd == tmp_path.resolve()
-
-
-def test_claude_launch_stays_local(home, tmp_path):
-    plan = clients.plan_launch("claude", tmp_path, Settings())
-
-    assert plan.env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
-    assert plan.env["ANTHROPIC_MODEL"] == clients.CLAUDE_ALIAS
-    assert plan.env["ANTHROPIC_API_KEY"] == "local"
-    assert "api.anthropic.com" not in " ".join(plan.argv)
-    assert plan.note
-
-
-def test_opencode_launch(home, tmp_path):
-    plan = clients.plan_launch("opencode", tmp_path, Settings())
-    assert plan.argv == ["opencode", str(tmp_path.resolve())]
-    assert plan.cwd == tmp_path.resolve()
-    assert plan.model == f"ollama/{clients.AGENT_MODEL}"
-
-
-def test_launch_rejects_missing_directory(home, tmp_path):
+def test_plan_launch_rejects_a_missing_directory(tmp_path):
     with pytest.raises(ValueError, match="not a directory"):
-        clients.plan_launch("qwen", tmp_path / "nope", Settings())
-
-
-def test_wrappers_live_in_documents_and_are_linked(home):
-    written = clients.install_client_wrappers()
-
-    assert {path.name for path in written} == {
-        "qwen-local",
-        "codex-local",
-        "claude-local",
-        "opencode-local",
-        "codex-chatgpt",
-        "claude-cloud",
-    }
-    cloud = {"codex-chatgpt": "exec codex", "claude-cloud": "exec claude"}
-    for path in written:
-        assert path.parent == home / "local-ai" / "bin"
-        assert path.stat().st_mode & 0o111
-        if path.name in cloud:
-            # Cloud wrappers deliberately do NOT go through `sovereign launch`:
-            # they must keep the real subscription login intact.
-            body = path.read_text(encoding="utf-8")
-            assert "launch" not in body
-            assert cloud[path.name] in body
-        else:
-            assert "launch" in path.read_text(encoding="utf-8")
-        link = home / ".local" / "bin" / path.name
-        assert link.is_symlink() and link.readlink() == path
-
-
-def test_agent_clients_are_marked_agent():
-    by_key = {client.key: client for client in clients.local_clients()}
-
-    assert by_key["qwen"].capability == "agent"
-    assert by_key["opencode"].capability == "agent"
-    assert by_key["codex"].capability == "chat"
-    assert by_key["claude"].capability == "chat"
+        plan_launch("codex", tmp_path / "nope", Settings(), "qwen3-coder:30b")

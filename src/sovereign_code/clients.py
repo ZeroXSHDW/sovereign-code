@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,14 +119,25 @@ def write_codex_profile() -> Path:
     return path
 
 
-def local_clients() -> list[ClientInfo]:
+def local_clients(resolved: dict[str, tuple[str, str]] | None = None) -> list[ClientInfo]:
+    """What each client is and which model it will actually use.
+
+    `resolved` is the router's answer for the models that are installed. Without
+    it the table shows a hard-coded default, which is how the Claude row used
+    to advertise `qwen3.5:4b` while the router was picking `qwen3.5:9b`.
+    """
+    picks = resolved or {}
+
+    def pick(client: str, fallback: str) -> str:
+        return picks.get(client, ("", fallback))[1] or fallback
+
     return [
         ClientInfo(
             key="qwen",
             name="Qwen Code",
             command="qwen",
             capability="agent",
-            model=AGENT_MODEL,
+            model=pick("qwen", AGENT_MODEL),
             detail="Writes files and runs commands; the default local coding agent.",
         ),
         ClientInfo(
@@ -133,7 +145,7 @@ def local_clients() -> list[ClientInfo]:
             name="OpenCode",
             command="opencode",
             capability="agent",
-            model=f"ollama/{AGENT_MODEL}",
+            model=f"ollama/{pick('opencode', AGENT_MODEL)}",
             detail="Local agentic coder; fully configured for fast Ollama models.",
         ),
         ClientInfo(
@@ -141,7 +153,7 @@ def local_clients() -> list[ClientInfo]:
             name="ChatGPT / Codex",
             command="codex",
             capability="chat",
-            model=f"{CODEX_ALIAS} ({CODE_MODEL} via gateway)",
+            model=f"{CODEX_ALIAS} ({pick('codex', CODE_MODEL)} via gateway)",
             detail="Local profile is ready; use Qwen Code for reliable local edits.",
         ),
         ClientInfo(
@@ -149,7 +161,7 @@ def local_clients() -> list[ClientInfo]:
             name="Claude Code",
             command="claude",
             capability="chat",
-            model=f"{CLAUDE_ALIAS} (qwen3.5:4b via gateway)",
+            model=f"{CLAUDE_ALIAS} ({pick('claude', 'qwen3.5:4b')} via gateway)",
             detail="Launcher points it at loopback; use Qwen Code for local edits.",
         ),
     ]
@@ -219,16 +231,39 @@ def plan_launch(
         )
 
     if client == "opencode":
+        # OpenCode's interactive command has no --model flag: it takes the
+        # model from its own config. `OPENCODE_CONFIG_CONTENT` is OpenCode's
+        # inline-config hook, so the model is pinned for this child process
+        # only — no user file is rewritten.
+        pinned = _pin_opencode_model(env, agent_model)
         argv = ["opencode", str(target)]
-        return LaunchPlan(
-            argv,
-            target,
-            env,
-            f"ollama/{agent_model}",
-            "OpenCode local coding agent",
-        )
+        if pinned:
+            note = "OpenCode local coding agent (model pinned for this session)"
+        else:
+            note = (
+                "OpenCode local coding agent; it uses the model from your OpenCode "
+                f"config because '{agent_model}' is not in that config's model list"
+            )
+        return LaunchPlan(argv, target, env, f"ollama/{agent_model}", note)
 
     raise ValueError(f"unsupported client: {client}")
+
+
+def _pin_opencode_model(env: dict[str, str], agent_model: str) -> bool:
+    """Pin OpenCode's model for this session. Returns False when it cannot.
+
+    The user's OpenCode config may list its models explicitly. Pinning a model
+    that is not in that list would make OpenCode fail to start, so in that case
+    the launch is left alone and the caller says so.
+    """
+    from .tools import opencode_models, read_text
+
+    config = Path.home() / ".config" / "opencode" / "opencode.json"
+    available = opencode_models(read_text(config))
+    if available and agent_model not in available:
+        return False
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"model": f"ollama/{agent_model}"})
+    return True
 
 
 def wrapper_path(client: str) -> Path:

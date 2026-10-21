@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import math
 import os
 import sqlite3
@@ -105,9 +106,12 @@ def embed(
     if response.status_code != 200:
         raise EmbedError(f"embed HTTP {response.status_code}")
     try:
-        return response.json()["embeddings"]
+        vectors = response.json()["embeddings"]
     except (ValueError, KeyError, TypeError) as exc:
         raise EmbedError("malformed embedding response") from exc
+    if len(vectors) != len(texts):
+        raise EmbedError(f"expected {len(texts)} embeddings, got {len(vectors)}")
+    return vectors
 
 
 def pack(vector: list[float]) -> bytes:
@@ -121,6 +125,14 @@ def unpack(blob: bytes) -> list[float]:
 
 
 def cosine(left: list[float], right: list[float]) -> float:
+    """Cosine similarity; 0.0 when the vectors cannot be compared.
+
+    A dimension mismatch used to raise ValueError out of the search. That
+    happens in practice when the index was built with a different embedding
+    model, and it turned "no match" into a crash.
+    """
+    if len(left) != len(right):
+        return 0.0
     dot = sum(a * b for a, b in zip(left, right, strict=True))
     norm_left = math.sqrt(sum(a * a for a in left))
     norm_right = math.sqrt(sum(b * b for b in right))
@@ -218,18 +230,27 @@ class IndexStore:
         return int(row[0]) if row else 0
 
     def search(self, vector: list[float], top: int = 5) -> list[SearchResult]:
-        results: list[SearchResult] = []
+        """Return the best matching chunks.
+
+        Only the best few are kept in memory: the whole table is streamed
+        through a bounded heap instead of being materialised as a list, so a
+        large index costs a constant amount of RAM.
+        """
+        limit = max(1, top)
+        best: list[tuple[float, str, int, str]] = []
         for path, line, text, blob in self.conn.execute("SELECT path, line, text, vec FROM chunks"):
-            results.append(
-                SearchResult(
-                    path=path,
-                    line=line,
-                    text=text,
-                    score=cosine(vector, unpack(blob)),
-                )
-            )
+            score = cosine(vector, unpack(blob))
+            entry = (score, path, line, text)
+            if len(best) < limit:
+                heapq.heappush(best, entry)
+            elif score > best[0][0]:
+                heapq.heapreplace(best, entry)
+        results = [
+            SearchResult(path=path, line=line, text=text, score=score)
+            for score, path, line, text in best
+        ]
         results.sort(key=lambda result: result.score, reverse=True)
-        return results[: max(1, top)]
+        return results
 
     def close(self) -> None:
         self.conn.close()

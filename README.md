@@ -24,8 +24,10 @@ dashboard showing the local stack, the loaded model, free memory, the gateway,
 and a streaming chat prompt. From the dashboard you can code with the best local
 model or drop straight into Qwen Code in the current repository.
 
-Nothing leaves the Mac. Both Ollama and the LiteLLM gateway are bound to
-`127.0.0.1`, and the UI never calls a cloud API.
+Nothing leaves the Mac by default. Both Ollama and the LiteLLM gateway are bound
+to `127.0.0.1`, and every local alias stays local. Frontier models served by
+Ollama Cloud are available as an explicit opt-in (`sovereign cloud`); the router
+never selects one on its own.
 
 ## Quick start
 
@@ -129,15 +131,59 @@ browse the curated catalog.
 | `gemma3:12b` | ~7.7 GB | general model with strong reasoning |
 | `phi4:14b` | ~9 GB | small reasoning model |
 | `codestral:22b` | ~13 GB | Mistral coding model; tight on 24 GB |
+| `qwen3.8:27b` | ~18 GB | current-gen Qwen coder/agent; 256k ctx; tight on 24 GB |
 | `nomic-embed-text` | ~0.3 GB | embeddings for semantic search |
 
-### Honest note on specific models
+### Frontier cloud models (opt-in — prompts leave the Mac)
 
-GLM (Zhipu), "Deepseek v4.1 Flash," and Kimi K3 are **not published on
-Ollama's library** as far as this project can verify, so they are not added as
-one-click downloads. If you have a GGUF for one of them, you can still run it
-through Ollama (`ollama create` / `ollama run`) and then `sovereign run <tag>`
-it. Every `pull` prints an estimated size and warns when free disk is low, and
+These are served by **Ollama Cloud**, not downloaded. `sovereign cloud` shows the
+mapping and readiness; `sovereign cloud --enable` flips the two switches that
+disable cloud (`~/.ollama/server.json` and `OLLAMA_NO_CLOUD`), updates the login
+agent, and restarts Ollama.
+
+| Requested | Ollama tag | Context | What it is |
+| --- | --- | --- | --- |
+| Kimi K3 | `kimi-k3:cloud` | 1M | Moonshot, native multimodal agent, 2.8T |
+| DeepSeek Flash V4.1 | `deepseek-v4.1-flash:cloud` | 1M | DeepSeek's current fast coding model |
+| DeepSeek Flash V4 Pro | `deepseek-v4-pro:cloud` | 1M | 1.6T MoE, frontier reasoning |
+| DeepSeek V4 Flash | `deepseek-v4.1-flash:cloud` | 1M | the old `deepseek-v4-flash` tag was retired 2026-08-27; V4.1 supersedes it |
+| GLM 5.3 FL | `glm-5.3-flash:cloud` | 1M | Z.ai 320B MoE / 18B active, multimodal |
+| GLM 5.2 | `glm-5.2:cloud` | ~976k | Z.ai previous flagship |
+| QWEN 3.8 | `qwen3.8:27b` | 256k | **local** 18 GB download; not cloud |
+| Kimi K2.6 | `kimi-k2.6:cloud` | 256k | Moonshot multimodal agent |
+
+```sh
+sovereign cloud                     # status, mapping, and what is ready
+sovereign cloud --enable            # enable Ollama Cloud + restart (persists)
+ollama signin                       # one-time account login
+sovereign cloud --install-aliases   # write cloud-* aliases into the gateway
+sovereign pull kimi-k3:cloud        # register a cloud model (no weights)
+sovereign run kimi-k3:cloud "…"     # stream a prompt from it
+sovereign pull qwen3.8:27b          # the one local model in the list (~18 GB)
+```
+
+Gateway aliases (after `--install-aliases` and a gateway restart):
+`cloud-kimi-k3`, `cloud-kimi-k2.6`, `cloud-deepseek-v4.1-flash`,
+`cloud-deepseek-v4-flash`, `cloud-deepseek-v4-pro`, `cloud-glm-5.3`,
+`cloud-glm-5.3-flash`, `cloud-glm-5.2`, `local-qwen3.8`, plus the role aliases
+`local-cloud` and `local-cloud-fast`. Use them anywhere an alias is accepted:
+
+```sh
+sovereign consult "review this design" --models cloud-kimi-k3,cloud-glm-5.3
+sovereign bench --models cloud-kimi-k3,cloud-deepseek-v4-pro
+sovereign pipeline "…" --plan-model cloud-glm-5.3 --review-model cloud-kimi-k3
+```
+
+**Plan requirement.** Ollama Cloud needs an account, and these frontier models
+need an **Ollama Pro** plan. The app wires everything correctly, but the
+subscription is on the account: on a Free plan every one of them returns HTTP
+402 with an upgrade link, which `sovereign cloud --probe` reports as
+`needs an Ollama Pro plan`. Qwen 3.8 is the exception because it runs locally.
+
+**Privacy.** Any `:cloud` tag sends the prompt, system message, and attached
+context to ollama.com. Local aliases and the local router are unchanged.
+
+Every `pull` prints an estimated size and warns when free disk is low, and
 `sovereign rm <tag>` reclaims space.
 
 ### Offline model stacks
@@ -160,6 +206,7 @@ sovereign pull-stack balanced   # ~14 GB: solid coder + chat + reasoning
 sovereign pull-stack capable    # ~29 GB: best coder + deep reasoning
 sovereign pull-stack max        # ~53 GB: maximum capability (pull one at a time)
 sovereign setup-stack capable   # pull stack, then verify gateway aliases
+sovereign pull-stack cloud      # register the 7 cloud tags (no download)
 ```
 
 The router picks the best **installed** model for the task, then chooses the
@@ -231,6 +278,7 @@ sovereign clients              # shows the auto-resolved best model per client
 sovereign                  # live dashboard
 sovereign status           # one-shot status
 sovereign models           # installed + recommended, with roles
+sovereign cloud            # Ollama Cloud status, mapping, aliases (--enable/--probe/--pull)
 sovereign doctor           # checks and concrete fixes
 sovereign doctor --fix     # apply the safe fixes automatically
 sovereign verify           # tiny completion per core alias (--all for nine)
@@ -428,7 +476,9 @@ python3 -m venv .venv
 ## Security
 
 - Ollama and LiteLLM bind to loopback only; `sovereign doctor` fails if not.
-- `OLLAMA_NO_CLOUD=1` comes from the profile environment.
+- `OLLAMA_NO_CLOUD=1` is the default. `sovereign cloud --enable` is an explicit
+  opt-in; it updates `~/.ollama/server.json`, the session env, and the login
+  agent, then restarts Ollama. `sovereign cloud --disable` restores local-only.
 - Session files are mode `0600`; no telemetry is sent anywhere.
 - `sovereign code --yolo` is explicitly opt-in; the default asks before edits.
 

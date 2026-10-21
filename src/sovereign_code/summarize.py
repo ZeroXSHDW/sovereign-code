@@ -71,7 +71,25 @@ def complete(
     except httpx.HTTPError as exc:
         raise SourceError(f"gateway unreachable: {exc.__class__.__name__}") from exc
     if response.status_code != 200:
-        raise SourceError(f"gateway HTTP {response.status_code}")
+        # LiteLLM wraps an upstream 402 in a 500, so the useful reason (the
+        # Ollama plan or a disabled cloud) is only in the body. Surface it.
+        from .cloud import PRO_UPGRADE, plan_required
+
+        detail = response.text.strip().replace("\n", " ")[:240]
+        if plan_required(detail):
+            # The raw body is a nested LiteLLM/Ollama JSON blob; the actionable
+            # part is the plan, not the wrapper.
+            message = (
+                f"gateway HTTP {response.status_code}: this model needs an "
+                f"Ollama Pro plan: {PRO_UPGRADE}"
+            )
+        else:
+            message = f"gateway HTTP {response.status_code}"
+            if detail:
+                message += f": {detail}"
+            if "cloud is disabled" in detail.lower():
+                message += " — enable it with: sovereign cloud --enable"
+        raise SourceError(message)
     try:
         return response.json()["choices"][0]["message"]["content"] or ""
     except (ValueError, KeyError, IndexError, TypeError) as exc:

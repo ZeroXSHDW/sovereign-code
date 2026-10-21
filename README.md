@@ -78,6 +78,7 @@ Input commands: `/model <tag>`, `/models`, `/chat`, `/code`, `/reason`,
 | Menu-bar window, mouse-first | Live terminal dashboard, keyboard-first |
 | Hard-coded model/client paths in Swift | One TOML + env config; model catalog in Python |
 | No automated tests in the repo | 26 unit/headless-TUI tests, `pytest` |
+| Single model pinned at build time | Curated remote catalog with ~35 downloadable tags, model-info, and offline stacks |
 | Context fitting spread across UI code | `router.py` estimates KV + weights against free RAM |
 | Client setup mutates many apps | Detects clients, writes only its own profile and `*-local` wrappers |
 | No session history | JSONL per conversation under `~/Documents/local-ai/data` |
@@ -88,6 +89,8 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 
 ## Models (24 GB M5 Pro)
 
+### Installed / recommended
+
 | Model | Role | Notes |
 | --- | --- | --- |
 | `qwen2.5-coder:14b` | best coder | 9.0 GB; preferred for code; verified at **32k** with q8 KV |
@@ -95,6 +98,65 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 | `qwen3.5:4b` | chat / vision / tools | 4.0 GB; 65k with `think:false` |
 | `gemma4:12b` | agent + deep reasoning / vision | 7.7 GB; 32k with `think:false`; verified tool calls |
 | `llama3.1:8b` | reasoning fallback | 4.9 GB; 65k |
+
+### Downloadable (any tag works with `sovereign pull` / `sovereign run`)
+
+`OllamaClient` talks to Ollama directly, so **any** Ollama library tag can be
+downloaded and run — not just the curated ones below. Use
+`sovereign model-info <tag>` to check parameter size, quantization, family, and
+context length before you pull, and `sovereign models --remote [query]` to
+browse the curated catalog.
+
+| Model | Rough size | Notes |
+| --- | --- | --- |
+| `qwen2.5-coder:1.5b` | ~0.9 GB | tiny coder; fast, low RAM |
+| `qwen2.5-coder:3b` | ~1.9 GB | small coder; quick edits and iteration |
+| `qwen2.5-coder:7b` | ~4.7 GB | solid coder |
+| `qwen2.5-coder:14b` | ~9.0 GB | best coder that fits 24 GB |
+| `qwen2.5-coder:32b` | ~20 GB | stronger coder; tight on 24 GB |
+| `deepseek-coder-v2:16b` | ~9 GB | strong coding model |
+| `deepseek-r1:7b` | ~4.4 GB | reasoning with visible chain-of-thought |
+| `deepseek-r1:14b` | ~9 GB | reasoning with visible chain-of-thought |
+| `deepseek-r1:32b` | ~20 GB | strong reasoning; tight on 24 GB |
+| `qwen3:4b` | ~2.3 GB | current-gen general model |
+| `qwen3:8b` | ~4.9 GB | current-gen general model with reasoning |
+| `qwen3:14b` | ~9 GB | current-gen general model with reasoning |
+| `llama3.2:3b` | ~2.0 GB | tiny fast general model |
+| `llama3.1:8b` | ~4.9 GB | reasoning fallback with long context |
+| `gemma3:12b` | ~7.7 GB | general model with strong reasoning |
+| `phi4:14b` | ~9 GB | small reasoning model |
+| `codestral:22b` | ~13 GB | Mistral coding model; tight on 24 GB |
+| `nomic-embed-text` | ~0.3 GB | embeddings for semantic search |
+
+### Honest note on specific models
+
+GLM (Zhipu), "Deepseek v4.1 Flash," and Kimi K3 are **not published on
+Ollama's library** as far as this project can verify, so they are not added as
+one-click downloads. If you have a GGUF for one of them, you can still run it
+through Ollama (`ollama create` / `ollama run`) and then `sovereign run <tag>`
+it. Every `pull` prints an estimated size and warns when free disk is low, and
+`sovereign rm <tag>` reclaims space.
+
+### Offline model stacks
+
+These are rough installed-size totals for a 24 GB Mac; models run one or two
+at a time (Ollama swaps automatically).
+
+| Stack | Models | Approx. total | Note |
+| --- | --- | --- | --- |
+| `lean` | qwen2.5-coder:3b, qwen2.5:0.5b, nomic-embed-text | ~4 GB | fast edits + tiny chat + embeddings |
+| `balanced` | qwen2.5-coder:7b, qwen3:4b, deepseek-r1:8b, nomic-embed-text | ~14 GB | solid coder + chat + reasoning |
+| `capable` | qwen2.5-coder:14b, gemma4:12b, deepseek-r1:14b, nomic-embed-text | ~29 GB | best local coder + reasoning; swap with `sovereign free` |
+| `max` | qwen2.5-coder:32b, deepseek-r1:32b, codestral:22b | ~53 GB | maximum capability; pull only what you need |
+
+Pull a stack one model at a time:
+
+```sh
+sovereign pull qwen2.5-coder:14b
+sovereign pull gemma4:12b
+sovereign pull deepseek-r1:14b
+sovereign pull nomic-embed-text
+```
 
 The router picks the best **installed** model for the task, then chooses the
 largest context that fits in ~85% of free memory. Agentic coding prefers a
@@ -146,6 +208,7 @@ sovereign stats            # disk usage across the stack
 sovereign sessions --search "term"   # search chat history
 sovereign pull <model>     # pull any Ollama model by tag
 sovereign run <model> "…"  # download (if needed) and run any model on a prompt
+sovereign model-info <tag> # inspect size/context/family before pulling
 sovereign rm <model>       # remove an installed model
 sovereign models --remote  # list downloadable models (--remote coder)
 sovereign consult "…"      # run one prompt across several models

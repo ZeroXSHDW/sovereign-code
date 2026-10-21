@@ -101,13 +101,17 @@ Sovereign Code keeps the idea and changes the foundation.
   `sovereign sessions --search` finds past chats; and `sovereign browse
   --screenshots` saves a PNG at each terminal state for review.
 - **Model and prompt management.** `sovereign pull <tag>` installs any Ollama
-  model, `sovereign run <model> "…"` downloads-on-demand and runs it directly,
-  `sovereign models --remote [query]` lists downloadable models, and
-  `sovereign rm <model>` removes one. `sovereign consult` runs one prompt across
-  several models; a Markdown skills bank (code-review, write-tests, refactor,
-  specify, security/legal/financial review) runs with `sovereign skill`;
-  per-project memory is injected into chat; and `sovereign clone` bootstraps a
-  GitHub repo.
+  model (with estimated-size and disk-space warnings), `sovereign run <model>
+  "…"` downloads-on-demand, streams the reply, and runs it directly with
+  `--context`, `--temperature`, `--system`, `--keep-alive`, and `--think`,
+  `sovereign model-info <tag>` inspects a model before you pull it,
+  `sovereign models --remote [query]` lists curated downloadable models with
+  rough sizes, and `sovereign rm <model>` removes one. `sovereign consult`
+  runs one prompt across several models; a Markdown skills bank
+  (code-review, write-tests, refactor, specify, security/legal/financial review)
+  runs with `sovereign skill`; per-project memory is injected into chat; and
+  `sovereign clone` bootstraps a GitHub repo. Recommended offline stacks
+  (lean / balanced / capable / max) are documented in README.md.
 - **End-to-end multi-model pipeline.** `sovereign pipeline` chains a planner,
   the Qwen Code agent, and a reviewer into one coding pass, so a prompt becomes
   a plan, then real file changes, then a critique. `sovereign verify --embedding`
@@ -129,7 +133,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 100 pytest tests cover model merging, router context behaviour, config,
+- 103 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

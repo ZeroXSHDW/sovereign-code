@@ -268,22 +268,75 @@ def preferred_tags(task: str) -> tuple[str, ...]:
     return TASK_PREFERENCE.get(task, TASK_PREFERENCE[GENERAL])
 
 
-REMOTE_CATALOG: dict[str, str] = {
-    "qwen2.5-coder:3b": "fast small coder; quick edits and iteration",
-    "qwen2.5-coder:32b": "stronger coder; too big for a comfortable fit on 24 GB",
-    "qwen3:8b": "current-generation general model with reasoning",
-    "qwen3:14b": "current-generation general model with reasoning",
-    "qwen3:32b": "large reasoning model; too big for 24 GB",
-    "llama3.2:1b": "smallest general model",
-    "llama3.2:3b": "tiny fast general model",
-    "gemma3:4b": "compact general model",
-    "gemma3:12b": "general model with strong reasoning",
-    "gemma3:27b": "large general model; too big for 24 GB",
-    "phi4:14b": "small reasoning model",
-    "deepseek-r1:14b": "reasoning model with visible chain-of-thought",
-    "mistral-small:24b": "mid-size general model; tight on 24 GB",
-    "mxbai-embed-large": "embedding model (1024-dim)",
-    "snowflake-arctic-embed": "small embedding model",
-    "llava:13b": "vision model",
-    "qwen2.5-vl:7b": "vision-language model",
+REMOTE_CATALOG: dict[str, tuple[str, float]] = {
+    # coding specialists
+    "qwen2.5-coder:1.5b": ("tiny coder; fast, low RAM", 0.9),
+    "qwen2.5-coder:3b": ("small coder; quick edits and iteration", 1.9),
+    "qwen2.5-coder:7b": ("solid coder", 4.7),
+    "qwen2.5-coder:14b": ("best coder that fits 24 GB", 9.0),
+    "qwen2.5-coder:32b": ("stronger coder; tight on 24 GB", 20.0),
+    "deepseek-coder-v2:16b": ("strong coding model", 9.0),
+    "deepseek-coder-v2:236b": ("max-capability coder; needs far more than 24 GB", 134.0),
+    # reasoning / chain-of-thought
+    "deepseek-r1:1.5b": ("tiny reasoning model", 0.9),
+    "deepseek-r1:7b": ("reasoning model with visible chain-of-thought", 4.4),
+    "deepseek-r1:8b": ("reasoning model with visible chain-of-thought", 4.7),
+    "deepseek-r1:14b": ("reasoning model with visible chain-of-thought", 9.0),
+    "deepseek-r1:32b": ("strong reasoning model; tight on 24 GB", 20.0),
+    # general / chat
+    "qwen2.5:0.5b": ("tiny general model", 0.4),
+    "qwen2.5:3b": ("fast general model", 1.9),
+    "qwen2.5:7b": ("general model", 4.4),
+    "qwen2.5:32b": ("large general model; too big for 24 GB", 20.0),
+    "qwen3:0.6b": ("tiny current-gen model", 0.4),
+    "qwen3:4b": ("current-gen general model", 2.3),
+    "qwen3:8b": ("current-gen general model with reasoning", 4.9),
+    "qwen3:14b": ("current-gen general model with reasoning", 9.0),
+    "qwen3:32b": ("large reasoning model; too big for 24 GB", 20.0),
+    "llama3.2:1b": ("smallest general model", 0.8),
+    "llama3.2:3b": ("tiny fast general model", 2.0),
+    "llama3.1:8b": ("reasoning fallback with long context", 4.9),
+    "gemma3:1b": ("compact general model", 0.8),
+    "gemma3:4b": ("compact general model", 2.7),
+    "gemma3:12b": ("general model with strong reasoning", 7.7),
+    "gemma3:27b": ("large general model; too big for 24 GB", 17.0),
+    "phi4:14b": ("small reasoning model", 9.0),
+    "mistral-small:24b": ("mid-size general model; tight on 24 GB", 15.0),
+    "codestral:22b": ("Mistral coding model; tight on 24 GB", 13.0),
+    # vision / embeddings
+    "llava:13b": ("vision model", 8.0),
+    "qwen2.5-vl:7b": ("vision-language model", 4.4),
+    "mxbai-embed-large": ("embedding model (1024-dim)", 0.7),
+    "snowflake-arctic-embed": ("small embedding model", 0.2),
 }
+
+# Honest offline model stacks for a 24 GB Mac. Models run one or two at a time
+# (Ollama swaps automatically); the numbers are rough installed-size totals.
+MODEL_STACKS: dict[str, dict[str, object]] = {
+    "lean": {
+        "models": ("qwen2.5-coder:3b", "qwen2.5:0.5b", "nomic-embed-text"),
+        "approx_gb": 4,
+        "note": "Fast edits + tiny chat + embeddings; leaves most RAM free.",
+    },
+    "balanced": {
+        "models": ("qwen2.5-coder:7b", "qwen3:4b", "deepseek-r1:8b", "nomic-embed-text"),
+        "approx_gb": 14,
+        "note": "Solid coder + current-gen chat + reasoning; comfortable on 24 GB.",
+    },
+    "capable": {
+        "models": ("qwen2.5-coder:14b", "gemma4:12b", "deepseek-r1:14b", "nomic-embed-text"),
+        "approx_gb": 29,
+        "note": "Best local coder + deep reasoning + strong CoT; tight on 24 GB — "
+        "swap models with `sovereign free` between turns.",
+    },
+    "max": {
+        "models": ("qwen2.5-coder:32b", "deepseek-r1:32b", "codestral:22b"),
+        "approx_gb": 53,
+        "note": "Maximum capability but will not fit comfortably on 24 GB; only pull "
+        "what you need, one at a time.",
+    },
+}
+
+# Models asked about by name that are NOT published on Ollama's library as far as
+# this project can verify. We deliberately do not add them as one-click downloads.
+NOT_ON_OLLAMA = ("GLM", "deepseek-v4.1-flash", "kimi k3", "kimi-k3")

@@ -144,7 +144,7 @@ def _models_remote(snap: Snapshot, query: str | None = None) -> int:
     installed = {view.tag for view in snap.installed}
     rows = [
         (tag, "[green]installed[/]" if tag in installed else "[dim]pull[/]", desc)
-        for tag, desc in sorted(REMOTE_CATALOG.items())
+        for tag, (desc, _size_gb) in sorted(REMOTE_CATALOG.items())
         if not query or query.lower() in tag.lower()
     ]
     if not rows:
@@ -169,6 +169,8 @@ def _run(
     temperature: float,
     system: str | None,
     no_pull: bool,
+    keep_alive: str,
+    think: bool | None,
 ) -> int:
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
@@ -195,15 +197,30 @@ def _run(
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    console.print(f"[dim]Running {model}…[/]")
+    console.print(
+        f"[dim]Running {model} (ctx={context}, temp={temperature}, keep_alive={keep_alive})…[/]\n"
+    )
     try:
-        answer = asyncio.run(
-            client.chat_once(model, messages, context=context, temperature=temperature)
-        )
+
+        async def stream() -> None:
+            async for chunk in client.chat_stream(
+                model,
+                messages,
+                context=context,
+                temperature=temperature,
+                think=think,
+                keep_alive=keep_alive,
+            ):
+                if chunk.content:
+                    console.print(Text(chunk.content), end="")
+                if chunk.thinking:
+                    console.print(Text(chunk.thinking, style="dim #8a8aa0"), end="")
+
+        asyncio.run(stream())
     except OllamaError as exc:
-        console.print(f"[red]{exc}[/]")
+        console.print(f"\n[red]{exc}[/]")
         return 1
-    console.print(Panel(Text(answer), title=model, border_style="cyan"))
+    console.print()
     return 0
 
 
@@ -218,6 +235,43 @@ def _rm(settings: Settings, model: str) -> int:
         console.print(f"[red]{detail}[/]")
         return 1
     console.print(f"[green]Removed {model}.[/]")
+    return 0
+
+
+def _model_info(settings: Settings, tag: str) -> int:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
+        console.print(f"[red]Invalid model tag:[/] {tag}")
+        return 1
+    client = OllamaClient(settings.ollama_url)
+    try:
+        data = asyncio.run(client.show(tag))
+    except OllamaError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+    details = data.get("details") or {}
+    model_info = data.get("model_info") or {}
+    table = Table(title=f"Model info · {tag}", header_style="bold #b794f4")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    for field, value in [
+        ("Parameter size", details.get("parameter_size")),
+        ("Quantization", details.get("quantization_level")),
+        ("Family", ", ".join(details.get("families") or []) or details.get("family")),
+        ("Context length", model_info.get("context_length")),
+        ("Format", details.get("format")),
+    ]:
+        if value not in (None, ""):
+            table.add_row(field, str(value))
+    console.print(table)
+    snap = _snapshot(settings)
+    view = snap.views.get(tag)
+    if view and view.installed:
+        console.print(
+            f"[green]Installed[/] · {view.size_gb:.1f} GB · "
+            f"{'loaded' if view.loaded else 'not loaded'}"
+        )
+    else:
+        console.print(f"[dim]Not installed locally.[/]  Run: sovereign pull {tag}")
     return 0
 
 
@@ -1015,7 +1069,17 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
     if snap.views.get(tag) and snap.views[tag].installed:
         console.print(f"[green]{tag} is already installed.[/]")
         return 0
-    console.print(f"Pulling [bold]{tag}[/]" + (f" — {note}" if note else ""))
+    from .models import REMOTE_CATALOG
+
+    estimated_gb = REMOTE_CATALOG.get(tag, ("", 0.0))[1]
+    size_text = f" (~{estimated_gb:.0f} GB)" if estimated_gb else ""
+    if estimated_gb and snap.disk_free_gb < max(2.0, estimated_gb + 2.0):
+        console.print(
+            f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; {tag} is "
+            f"~{estimated_gb:.0f} GB. You may run out of disk — free space or "
+            "remove a model first (`sovereign rm <tag>`)."
+        )
+    console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
     client = OllamaClient(settings.ollama_url)
 
     async def run() -> None:
@@ -1603,6 +1667,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--temperature", type=float, default=0.25)
     run.add_argument("--system", default=None)
     run.add_argument("--no-pull", action="store_true", help="fail instead of auto-pulling")
+    run.add_argument("--keep-alive", default="15m", help="how long Ollama keeps the model resident")
+    run.add_argument(
+        "--think",
+        action="store_true",
+        default=None,
+        help="force thinking mode on (use with --no-think to force off)",
+    )
+    run.add_argument(
+        "--no-think",
+        action="store_false",
+        dest="think",
+        default=None,
+        help="force thinking mode off",
+    )
+
+    model_info = sub.add_parser("model-info", help="inspect a model before pulling it")
+    model_info.add_argument("model")
 
     consult = sub.add_parser("consult", help="run one prompt through several models")
     consult.add_argument("prompt")
@@ -1763,7 +1844,11 @@ def main(argv: list[str] | None = None) -> int:
             args.temperature,
             args.system,
             args.no_pull,
+            args.keep_alive,
+            args.think,
         )
+    if command == "model-info":
+        return _model_info(settings, args.model)
     if command == "consult":
         models = (
             [name.strip() for name in args.models.split(",") if name.strip()]

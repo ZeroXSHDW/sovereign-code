@@ -149,13 +149,14 @@ at a time (Ollama swaps automatically).
 | `capable` | qwen2.5-coder:14b, gemma4:12b, deepseek-r1:14b, nomic-embed-text | ~29 GB | best local coder + reasoning; swap with `sovereign free` |
 | `max` | qwen2.5-coder:32b, deepseek-r1:32b, codestral:22b | ~53 GB | maximum capability; pull only what you need |
 
-Pull a stack one model at a time:
+Pull a stack one model at a time, or pull a whole stack in one command:
 
 ```sh
-sovereign pull qwen2.5-coder:14b
-sovereign pull gemma4:12b
-sovereign pull deepseek-r1:14b
-sovereign pull nomic-embed-text
+sovereign pull-stack lean       # ~4 GB: fast edits + tiny chat + embeddings
+sovereign pull-stack balanced   # ~14 GB: solid coder + chat + reasoning
+sovereign pull-stack capable    # ~29 GB: best coder + deep reasoning
+sovereign pull-stack max        # ~53 GB: maximum capability (pull one at a time)
+sovereign setup-stack capable   # pull stack, then verify gateway aliases
 ```
 
 The router picks the best **installed** model for the task, then chooses the
@@ -168,6 +169,26 @@ verified ceiling is 20,480. The context choices are
 models before a turn so a 4B model is not squeezed into a 2k context by a
 resident 12B. If the 14B coder is missing it falls back to 7B and says so;
 `sovereign pull-recommended` installs it.
+
+### Gateway wiring for ChatGPT / Codex / Claude local clients
+
+`qwen-local`, `codex-local`, and `claude-local` (from `sovereign install-clients`)
+and the `sovereign env` exports route those clients through the LiteLLM gateway
+aliases (`local-chat`, `local-code`, `local-agent`, `local-claude`,
+`local-reasoning`, …). Those aliases are mapped to Ollama models in
+`~/Documents/local-ai/gateway/config.yaml`. Use these commands to make sure the
+aliases actually point at models you have downloaded:
+
+```sh
+sovereign gateway-aliases        # alias → model → installed? → size
+sovereign gateway-aliases        # exit code 1 if any alias points to a missing model
+sovereign pull qwen2.5-coder:14b gemma4:12b   # pull multiple at once
+sovereign setup-stack capable    # pull a stack, then verify all aliases route
+```
+
+If an alias shows "no" under Installed, the corresponding client (Codex, Claude,
+or ChatGPT via the local profile) will get an empty reply until you `sovereign pull`
+that model. All aliases currently route to installed models.
 
 ## Local coding clients
 
@@ -206,11 +227,14 @@ sovereign search "query"   # find relevant chunks (--path DIR --top N)
 sovereign config           # view settings; --get KEY, --set KEY=VALUE
 sovereign stats            # disk usage across the stack
 sovereign sessions --search "term"   # search chat history
-sovereign pull <model>     # pull any Ollama model by tag
-sovereign run <model> "…"  # download (if needed) and run any model on a prompt
-sovereign model-info <tag> # inspect size/context/family before pulling
-sovereign rm <model>       # remove an installed model
-sovereign models --remote  # list downloadable models (--remote coder)
+sovereign pull <model1> <model2>   # pull one or more Ollama models by tag
+sovereign run <model> "…"          # download (if needed) and run any model on a prompt
+sovereign model-info <tag>         # inspect size/context/family before pulling
+sovereign pull-stack <name>        # pull an offline stack (lean/balanced/capable/max)
+sovereign setup-stack <name>       # pull stack + verify gateway aliases
+sovereign gateway-aliases          # show which aliases route to installed models
+sovereign rm <model>               # remove an installed model
+sovereign models --remote          # list downloadable models (--remote coder)
 sovereign consult "…"      # run one prompt across several models
 sovereign skills           # list saved prompt templates
 sovereign skill <name> --prompt "…"

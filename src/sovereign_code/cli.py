@@ -42,7 +42,7 @@ from .config import (
 )
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
-from .models import sort_views
+from .models import MODEL_STACKS, sort_views
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .router import Task, choose
@@ -273,6 +273,113 @@ def _model_info(settings: Settings, tag: str) -> int:
     else:
         console.print(f"[dim]Not installed locally.[/]  Run: sovereign pull {tag}")
     return 0
+
+
+def _parse_gateway_aliases(path: Path) -> list[tuple[str, str]]:
+    """Return [(alias, ollama_tag)] from the gateway config.yaml model_list."""
+    aliases: list[tuple[str, str]] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return aliases
+    current_alias: str | None = None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- model_name:"):
+            current_alias = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("model:") and current_alias is not None:
+            value = stripped.split(":", 1)[1].strip()
+            tag = value[len("ollama/") :] if value.startswith("ollama/") else value
+            aliases.append((current_alias, tag))
+            current_alias = None
+    return aliases
+
+
+def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
+    path = LOCAL_AI_ROOT / "gateway" / "config.yaml"
+    aliases = _parse_gateway_aliases(path)
+    if not aliases:
+        console.print(f"[yellow]No gateway aliases found at[/] {path}")
+        console.print("[dim]Run: sovereign gateway --restart[/]")
+        return 1
+    table = Table(title="Gateway aliases → Ollama models", header_style="bold #b794f4")
+    table.add_column("Alias", style="bold")
+    table.add_column("Ollama model", style="bold")
+    table.add_column("Installed")
+    table.add_column("Size", justify="right")
+    missing = []
+    for alias, tag in aliases:
+        view = snap.views.get(tag)
+        if view and view.installed:
+            inst = "[green]yes[/]"
+            size = f"{view.size_gb:.1f} GB"
+        else:
+            inst = "[yellow]no[/]"
+            size = "-"
+            missing.append((alias, tag))
+        table.add_row(alias, tag, inst, size)
+    console.print(table)
+    if missing:
+        console.print("\n[yellow]Aliases pointing to missing models:[/]")
+        for alias, tag in missing:
+            console.print(f"  {alias} → {tag}   (sovereign pull {tag})")
+        console.print(
+            "[dim]Codex / Claude / ChatGPT local clients route through these aliases via `sovereign env`.[/]"
+        )
+        return 1
+    console.print("\n[green]All gateway aliases route to installed models.[/]")
+    return 0
+
+
+def _pull_stack(settings: Settings, name: str, yes: bool = False) -> int:
+    from .models import REMOTE_CATALOG
+
+    if name not in MODEL_STACKS:
+        console.print(f"[red]Unknown stack:[/] {name}. Stacks: {', '.join(sorted(MODEL_STACKS))}")
+        return 1
+    stack = MODEL_STACKS[name]
+    models = stack["models"]
+    snap = _snapshot(settings)
+    installed = {view.tag for view in snap.installed}
+    to_pull = [m for m in models if m not in installed]
+    if not to_pull:
+        console.print(f"[green]Stack '{name}' is already fully installed.[/]")
+        return 0
+    total_est = sum(REMOTE_CATALOG.get(m, ("", 0.0))[1] for m in to_pull)
+    console.print(f"[bold]Stack {name}[/] · {len(to_pull)} model(s) to pull · ~{total_est:.0f} GB")
+    console.print(f"[dim]{' · '.join(to_pull)}[/]")
+    if snap.disk_free_gb < max(2.0, total_est + 2.0):
+        console.print(
+            f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; stack needs ~{total_est:.0f} GB. "
+            "Free space or remove a model first (`sovereign rm <tag>`)."
+        )
+    if not yes:
+        try:
+            if input(
+                f"Pull {len(to_pull)} model(s) for stack '{name}'? [y/N] "
+            ).strip().lower() not in {"y", "yes"}:
+                console.print("[dim]Cancelled.[/]")
+                return 1
+        except EOFError:
+            console.print("[dim]Cancelled.[/]")
+            return 1
+    for tag in to_pull:
+        console.print()
+        if _pull(settings, tag, f"stack {name}") != 0:
+            console.print(f"[red]Stopping stack at {tag}.[/]")
+            return 1
+    console.print(f"\n[green]Stack '{name}' complete.[/] Run: sovereign models")
+    return 0
+
+
+def _setup_stack(settings: Settings, name: str, yes: bool = False) -> int:
+    code = _pull_stack(settings, name, yes=yes)
+    if code != 0:
+        return code
+    snap = _snapshot(settings)
+    return _gateway_aliases(settings, snap)
 
 
 def _models(snap: Snapshot) -> None:
@@ -1654,8 +1761,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="show disk usage across the local AI stack")
 
-    pull = sub.add_parser("pull", help="pull any Ollama model by tag")
-    pull.add_argument("model")
+    pull = sub.add_parser("pull", help="pull one or more Ollama models by tag")
+    pull.add_argument("model", nargs="+", help="one or more Ollama model tags")
+
+    pull_stack = sub.add_parser(
+        "pull-stack", help="pull every model in an offline stack (lean/balanced/capable/max)"
+    )
+    pull_stack.add_argument("name", choices=sorted(MODEL_STACKS))
+    pull_stack.add_argument("--yes", action="store_true", help="skip confirmation prompt")
+
+    setup_stack = sub.add_parser(
+        "setup-stack", help="pull a stack then verify gateway aliases route to installed models"
+    )
+    setup_stack.add_argument("name", choices=sorted(MODEL_STACKS))
+    setup_stack.add_argument("--yes", action="store_true", help="skip confirmation prompt")
+
+    sub.add_parser("gateway-aliases", help="show which gateway aliases route to installed models")
 
     rm = sub.add_parser("rm", help="remove an installed model")
     rm.add_argument("model")
@@ -1832,7 +1953,16 @@ def main(argv: list[str] | None = None) -> int:
     if command == "stats":
         return _stats(settings)
     if command == "pull":
-        return _pull(settings, args.model)
+        for tag in args.model:
+            if _pull(settings, tag) != 0:
+                return 1
+        return 0
+    if command == "pull-stack":
+        return _pull_stack(settings, args.name, yes=args.yes)
+    if command == "setup-stack":
+        return _setup_stack(settings, args.name, yes=args.yes)
+    if command == "gateway-aliases":
+        return _gateway_aliases(settings, _snapshot(settings))
     if command == "rm":
         return _rm(settings, args.model)
     if command == "run":

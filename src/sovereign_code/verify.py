@@ -126,3 +126,39 @@ def probe_aliases(
     transport: httpx.BaseTransport | None = None,
 ) -> list[AliasResult]:
     return [probe_alias(base_url, alias, timeout, transport) for alias in aliases]
+
+
+@dataclass
+class LivenessResult:
+    ok: bool
+    detail: str
+
+
+def probe_liveness(
+    base_url: str,
+    model: str = "nomic-embed-text",
+    timeout: float = 5.0,
+    transport: httpx.BaseTransport | None = None,
+) -> LivenessResult:
+    """Prove the server can actually *serve*, not just answer /api/version.
+
+    When a model load cannot fit the GPU budget, Ollama stops progressing while
+    /api/version and /api/ps still return 200. Every later request queues behind
+    the stuck one, so the stack looks "up" but is unusable. A tiny embedding
+    request exercises the scheduler and detects that state.
+    """
+    base = base_url.rstrip("/")
+    started = time.monotonic()
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
+        ) as client:
+            response = client.post(
+                f"{base}/api/embed", json={"model": model, "input": "ping"}
+            )
+    except httpx.HTTPError as exc:
+        return LivenessResult(False, f"no response in {timeout:.0f}s ({type(exc).__name__})")
+    elapsed = time.monotonic() - started
+    if response.status_code >= 400:
+        return LivenessResult(False, f"HTTP {response.status_code}")
+    return LivenessResult(True, f"served in {elapsed * 1000:.0f} ms")

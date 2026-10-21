@@ -11,6 +11,7 @@ from sovereign_code.verify import (
     configured_aliases,
     probe_alias,
     probe_aliases,
+    probe_liveness,
 )
 
 
@@ -113,3 +114,35 @@ def test_configured_aliases_skips_the_openai_passthrough(tmp_path) -> None:
 
 def test_configured_aliases_missing_file_is_empty(tmp_path) -> None:
     assert configured_aliases(tmp_path / "nope.yaml") == ()
+
+
+def _embed_ok(content: bytes = b"{}") -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/embed"
+        return httpx.Response(200, content=content)
+
+    return httpx.MockTransport(handler)
+
+
+def test_liveness_probe_passes_when_the_scheduler_serves() -> None:
+    result = probe_liveness("http://ollama", transport=_embed_ok())
+    assert result.ok is True
+    assert "served in" in result.detail
+
+
+def test_liveness_probe_detects_a_stuck_server() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("stuck", request=request)
+
+    result = probe_liveness("http://ollama", transport=httpx.MockTransport(handler))
+    assert result.ok is False
+    assert "no response" in result.detail
+
+
+def test_liveness_probe_reports_http_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    result = probe_liveness("http://ollama", transport=httpx.MockTransport(handler))
+    assert result.ok is False
+    assert "503" in result.detail

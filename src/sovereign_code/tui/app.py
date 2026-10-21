@@ -23,7 +23,7 @@ from ..ollama import OllamaClient
 from ..router import Task, choose, mode_label, system_prompt
 from ..sessions import SessionWriter, prune_sessions, scan_sessions, select_prunable
 from ..status import Snapshot, collect
-from ..system import Memory
+from ..system import Memory, wired_limit_gb
 from ..verify import CORE_ALIASES, AliasResult, probe_aliases
 
 HELP_TEXT = """\
@@ -220,7 +220,10 @@ class SovereignApp(App[None]):
             text.append("LOADED\n", style="bold")
             if snap.loaded:
                 for view in snap.loaded:
-                    text.append(f"{view.tag} · {view.context or '?'}\n", style="green")
+                    engine = f" · {view.runner}" if view.runner else ""
+                    text.append(
+                        f"{view.tag} · {view.context or '?'}{engine}\n", style="green"
+                    )
             else:
                 text.append("  none\n", style="dim")
             text.append("\nCODER\n", style="bold")
@@ -233,8 +236,10 @@ class SovereignApp(App[None]):
                     text.append(f"  fallback {snap.best_coder.tag}\n", style="dim")
             else:
                 text.append("  none installed\n", style="yellow")
+            wired = wired_limit_gb(snap.memory.total_gb)
             text.append(
-                f"\nMEM {snap.memory.free_gb:.0f}G free / {snap.memory.total_gb:.0f}G\n",
+                f"\nMEM {snap.memory.free_gb:.0f}G free / {snap.memory.total_gb:.0f}G"
+                f" · GPU {wired:.0f}G wired\n",
                 style="dim",
             )
             text.append(

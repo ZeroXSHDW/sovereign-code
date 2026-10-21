@@ -18,6 +18,12 @@ All notable changes to Sovereign Code.
   process has to die too) and confirms the server inherited it. `--dry-run` shows the diff first.
 - `sovereign verify --all` now reads the alias list from `gateway/config.yaml` instead of a
   hard-coded tuple, so it cannot go stale.
+- `doctor` gained a **Generation liveness** check (20 checks): it sends a tiny embedding request,
+  because a hung Ollama still answers `/api/version` while every generation queues behind it.
+- `sovereign verify` runs the liveness probe first and fails in seconds instead of sitting through
+  the per-alias timeout on a hung server.
+- `sovereign doctor --fix` restarts a hung Ollama and confirms it serves again.
+- The dashboard shows each loaded model's engine (`mlx` / `llamacpp`) and the GPU-wired budget.
 
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM

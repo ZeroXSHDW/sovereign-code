@@ -82,6 +82,7 @@ from .verify import (
     check_embedding,
     configured_aliases,
     probe_aliases,
+    probe_liveness,
 )
 
 LABEL = "com.user.sovereign-code"
@@ -445,6 +446,15 @@ def _verify(
     if not snap.gateway.up:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway")
         return 1
+
+    # Fail fast: a hung Ollama answers /api/version but queues every completion,
+    # so probing each alias would sit through the full timeout for each one.
+    live = probe_liveness(snap.settings.ollama_url)
+    if not live.ok:
+        console.print(f"[red]Ollama is not serving:[/] {live.detail}")
+        console.print("[dim]Restart it with: sovereign tune[/]")
+        return 1
+
     aliases = (
         configured_aliases(LOCAL_AI_ROOT / "gateway" / "config.yaml") or EXPECTED_ALIASES
         if all_aliases
@@ -851,6 +861,25 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
             rows.append(("[red]FAILED[/]", label, str(exc)))
 
     run("config", lambda: write_default_config())
+
+    # A hung Ollama answers /api/version, so check that it actually serves and
+    # recover it here rather than making the user work out why nothing replies.
+    has_embed = any("embed" in view.tag for view in snap.installed)
+    if snap.ollama_up and has_embed:
+        live = probe_liveness(snap.settings.ollama_url)
+        if not live.ok:
+            from .tune import current_server_env, restart_ollama
+
+            def _restart() -> str:
+                restart_ollama()
+                for _ in range(30):
+                    if probe_liveness(settings.ollama_url).ok:
+                        break
+                    time.sleep(1)
+                env = current_server_env()
+                return f"restarted (context {env.get('OLLAMA_CONTEXT_LENGTH', '?')})"
+
+            run("ollama liveness", _restart)
     if not login_agent_installed():
         run("login agent", lambda: (_install_login(False), "installed")[1])
     run("client wrappers", lambda: f"{len(install_client_wrappers())} wrappers")
@@ -1182,6 +1211,15 @@ def _doctor(snap: Snapshot) -> int:
         "ollama pull nomic-embed-text",
         warn=True,
     )
+    if has_embed and snap.ollama_up:
+        live = probe_liveness(snap.settings.ollama_url)
+        add(
+            live.ok,
+            "Generation liveness",
+            live.detail if live.ok else f"not serving: {live.detail}",
+            "restart Ollama: sovereign tune (or quit and reopen the app)",
+            warn=True,
+        )
     add(
         (LOCAL_AI_ROOT / "gateway" / "config.yaml").is_file(),
         "Local AI root",

@@ -32,6 +32,62 @@ class ModelSpec:
 
 
 CATALOG: dict[str, ModelSpec] = {
+    "glm4": ModelSpec(
+        tag="glm4",
+        role=AGENT,
+        params_b=9.0,
+        size_gb=5.5,
+        max_context=32768,
+        strengths=("agent", "code", "tools", "reason"),
+        summary="GLM-4 9B: fast agentic tool use, multilingual coding & reasoning.",
+    ),
+    "deepseek-coder:6.7b": ModelSpec(
+        tag="deepseek-coder:6.7b",
+        role=CODING,
+        params_b=6.7,
+        size_gb=3.8,
+        max_context=16384,
+        strengths=("code", "tools", "refactor"),
+        summary="DeepSeek Coder 6.7B: dedicated fast coding model.",
+    ),
+    "qwen3-coder:30b": ModelSpec(
+        tag="qwen3-coder:30b",
+        role=CODING,
+        params_b=30.5,
+        size_gb=19.0,
+        # 256k native; 32k is the comfortable ceiling on 24 GB with q8 KV.
+        max_context=32768,
+        strengths=("code", "refactor", "tools", "agent"),
+        summary="Agentic coder (MoE); larger download for 24 GB.",
+        recommended=False,
+    ),
+    "glm-4.7-flash": ModelSpec(
+        tag="glm-4.7-flash",
+        role=AGENT,
+        params_b=30.5,
+        size_gb=19.0,
+        max_context=32768,
+        strengths=("agent", "code", "tools", "thinking"),
+        summary="GLM Flash: strong agentic tool use and reasoning.",
+    ),
+    "gpt-oss:20b": ModelSpec(
+        tag="gpt-oss:20b",
+        role=CODING,
+        params_b=20.9,
+        size_gb=14.0,
+        max_context=32768,
+        strengths=("code", "reason", "tools", "agent"),
+        summary="Fast tool-caller; low memory, quick first token.",
+    ),
+    "qwen3.5:9b": ModelSpec(
+        tag="qwen3.5:9b",
+        role=CHAT,
+        params_b=9.0,
+        size_gb=6.6,
+        max_context=65536,
+        strengths=("chat", "reason", "vision", "tools"),
+        summary="Fast current-gen general model; chat alternative.",
+    ),
     "qwen2.5-coder:14b": ModelSpec(
         tag="qwen2.5-coder:14b",
         role=CODING,
@@ -128,51 +184,56 @@ CATALOG: dict[str, ModelSpec] = {
 }
 
 TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
+    # Ranked by what was measured on this M5 Pro / 24 GB on 2026-10-21:
+    # qwen3-coder:30b 30.9 tok/s, gpt-oss:20b ~64 tok/s (alone), gemma4:12b
+    # 57.7 tok/s (MLX), qwen3.5:4b 63.8 tok/s, qwen2.5-coder:14b 28.4 tok/s.
     CODING: (
+        "qwen3-coder:30b",
+        "gpt-oss:20b",
         "qwen2.5-coder:14b",
+        "deepseek-coder:6.7b",
         "qwen2.5-coder:7b",
-        "qwen3:8b",
-        "qwen3.5:4b",
-        "llama3.1:8b",
+        "glm4",
     ),
     CHAT: (
+        "qwen3.5:9b",
         "qwen3.5:4b",
-        "qwen3:8b",
         "gemma4:12b",
-        "llama3.1:8b",
-        "mistral:latest",
+        "qwen3:8b",
+        "glm4",
     ),
     REASON: (
-        "gemma4:12b",
         "deepseek-r1:8b",
-        "qwen3:8b",
-        "llama3.1:8b",
-        "qwen3.5:4b",
-        "qwen2.5-coder:14b",
+        "gpt-oss:20b",
+        "gemma4:12b",
+        "qwen3.5:9b",
+        "glm4",
     ),
     VISION: (
+        "qwen3.5:9b",
         "gemma4:12b",
         "qwen3.5:4b",
     ),
     FAST: (
-        "gemma3:4b",
-        "phi:latest",
         "qwen3.5:4b",
-        "mistral:latest",
+        "gemma3:4b",
+        "qwen2.5-coder:7b",
+        "phi:latest",
     ),
     GENERAL: (
+        "qwen3.5:9b",
         "qwen3.5:4b",
         "qwen3:8b",
-        "llama3.1:8b",
+        "glm4",
         "mistral:latest",
     ),
     # Agentic coding needs reliable tool calls, not just code knowledge.
     AGENT: (
+        "qwen3-coder:30b",
+        "gpt-oss:20b",
         "gemma4:12b",
-        "qwen3.5:4b",
-        "llama3.1:8b",
         "qwen2.5-coder:14b",
-        "qwen2.5-coder:7b",
+        "glm4",
     ),
 }
 
@@ -186,6 +247,9 @@ class ModelView:
     context: int | None = None
     vram_gb: float | None = None
     capabilities: tuple[str, ...] = field(default_factory=tuple)
+    # "mlx" or "llamacpp" as reported by /api/ps. MLX models run substantially
+    # faster on Apple silicon, so this is worth showing.
+    runner: str = ""
 
     @property
     def tag(self) -> str:
@@ -252,13 +316,22 @@ def build_views(
         size_gb = parse_size_gb(item.get("size"))
         details = item.get("details") or {}
         params = parse_params_b(details.get("parameter_size"))
-        spec = CATALOG.get(tag) or _dynamic_spec(tag, size_gb, params, details.get("family", ""))
-        views[tag] = ModelView(
+        spec = (
+            CATALOG.get(tag)
+            or CATALOG.get(tag.removesuffix(":latest"))
+            or _dynamic_spec(tag, size_gb, params, details.get("family", ""))
+        )
+        view = ModelView(
             spec=spec,
             installed=True,
             size_gb=size_gb or spec.size_gb,
             capabilities=tuple(item.get("capabilities") or ()),
         )
+        views[tag] = view
+        if tag.endswith(":latest"):
+            views.setdefault(tag.removesuffix(":latest"), view)
+        elif ":" not in tag:
+            views.setdefault(f"{tag}:latest", view)
 
     for item in (ps_payload or {}).get("models", []):
         tag = item.get("name") or item.get("model")
@@ -272,6 +345,7 @@ def build_views(
         view.loaded = True
         view.context = item.get("context_length")
         view.vram_gb = parse_size_gb(item.get("size_vram")) or None
+        view.runner = str(item.get("runner") or "")
 
     if include_missing:
         for tag, spec in CATALOG.items():
@@ -302,12 +376,20 @@ def preferred_tags(task: str) -> tuple[str, ...]:
 
 
 REMOTE_CATALOG: dict[str, tuple[str, float]] = {
+    # fast agentic MoE models (best speed/capability on 24 GB)
+    "glm4": ("GLM-4 9B; fast multilingual coding, agentic tool use & reasoning", 5.5),
+    "qwen3-coder:30b": ("best agentic coder; 30B MoE, ~3B active — fast", 19.0),
+    "glm-4.7-flash": ("GLM Flash; agentic tool use + reasoning, 198k ctx", 19.0),
+    "gpt-oss:20b": ("fastest reliable tool-caller; low memory", 14.0),
+    "qwen3.5:9b": ("fast current-gen general/chat model", 6.6),
+    "qwen3.5:4b": ("smallest current-gen model; fastest", 3.3),
     # coding specialists
     "qwen2.5-coder:1.5b": ("tiny coder; fast, low RAM", 0.9),
     "qwen2.5-coder:3b": ("small coder; quick edits and iteration", 1.9),
     "qwen2.5-coder:7b": ("solid coder", 4.7),
     "qwen2.5-coder:14b": ("best coder that fits 24 GB", 9.0),
     "qwen2.5-coder:32b": ("stronger coder; tight on 24 GB", 20.0),
+    "deepseek-coder:6.7b": ("dedicated fast coding model", 3.8),
     "deepseek-coder-v2:16b": ("strong coding model", 9.0),
     "deepseek-coder-v2:236b": ("max-capability coder; needs far more than 24 GB", 134.0),
     # reasoning / chain-of-thought
@@ -343,33 +425,42 @@ REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     "snowflake-arctic-embed": ("small embedding model", 0.2),
 }
 
-# Honest offline model stacks for a 24 GB Mac. Models run one or two at a time
-# (Ollama swaps automatically); the numbers are rough installed-size totals.
+# Honest offline model stacks for a 24 GB Mac. Only one ~18 GB model fits at a
+# time; the numbers are rough installed-size totals.
 MODEL_STACKS: dict[str, dict[str, object]] = {
     "lean": {
-        "models": ("qwen2.5-coder:3b", "qwen2.5:0.5b", "nomic-embed-text"),
-        "approx_gb": 4,
-        "note": "Fast edits + tiny chat + embeddings; leaves most RAM free.",
+        "models": ("qwen3.5:4b", "qwen2.5-coder:3b", "nomic-embed-text"),
+        "approx_gb": 7,
+        "note": "Fast chat + small coder + embeddings; leaves most RAM free.",
     },
     "balanced": {
-        "models": ("qwen2.5-coder:7b", "qwen3:4b", "deepseek-r1:8b", "nomic-embed-text"),
-        "approx_gb": 14,
-        "note": "Solid coder + current-gen chat + reasoning; comfortable on 24 GB.",
+        "models": ("gpt-oss:20b", "qwen3.5:9b", "nomic-embed-text"),
+        "approx_gb": 21,
+        "note": "Fast tool-caller + fast chat; fits beside the OS with room for KV.",
     },
     "capable": {
-        "models": ("qwen2.5-coder:14b", "gemma4:12b", "deepseek-r1:14b", "nomic-embed-text"),
-        "approx_gb": 29,
-        "note": "Best local coder + deep reasoning + strong CoT; tight on 24 GB — "
-        "swap models with `sovereign free` between turns.",
+        "models": ("qwen3-coder:30b", "qwen3.5:9b", "qwen3.5:4b", "nomic-embed-text"),
+        "approx_gb": 33,
+        "note": "Best local coder + fast chat + tiny helper; the 30B wants the "
+        "machine to itself, so swap with `sovereign free` between turns.",
     },
     "max": {
-        "models": ("qwen2.5-coder:32b", "deepseek-r1:32b", "codestral:22b"),
-        "approx_gb": 53,
-        "note": "Maximum capability but will not fit comfortably on 24 GB; only pull "
-        "what you need, one at a time.",
+        "models": ("qwen3-coder:30b", "glm-4.7-flash", "gpt-oss:20b", "deepseek-r1:8b"),
+        "approx_gb": 59,
+        "note": "Everything worth keeping; the 18-19 GB models are strictly one at "
+        "a time on 24 GB.",
     },
 }
 
-# Models asked about by name that are NOT published on Ollama's library as far as
-# this project can verify. We deliberately do not add them as one-click downloads.
-NOT_ON_OLLAMA = ("GLM", "deepseek-v4.1-flash", "kimi k3", "kimi-k3")
+# Models that exist on Ollama only as CLOUD (routed) entries — verified
+# 2026-10-21. They cannot be pulled and run locally, so they are deliberately
+# not offered as one-click downloads. GLM itself *is* local: see glm-4.7-flash.
+NOT_ON_OLLAMA = (
+    "glm-5.3",
+    "glm-5.3-flash",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
+    "kimi-k2.7-code",
+    "kimi k3",
+    "kimi-k3",
+)

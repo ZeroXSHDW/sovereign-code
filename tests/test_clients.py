@@ -83,6 +83,13 @@ def test_claude_launch_stays_local(home, tmp_path):
     assert plan.note
 
 
+def test_opencode_launch(home, tmp_path):
+    plan = clients.plan_launch("opencode", tmp_path, Settings())
+    assert plan.argv == ["opencode", str(tmp_path.resolve())]
+    assert plan.cwd == tmp_path.resolve()
+    assert plan.model == f"ollama/{clients.AGENT_MODEL}"
+
+
 def test_launch_rejects_missing_directory(home, tmp_path):
     with pytest.raises(ValueError, match="not a directory"):
         clients.plan_launch("qwen", tmp_path / "nope", Settings())
@@ -91,11 +98,24 @@ def test_launch_rejects_missing_directory(home, tmp_path):
 def test_wrappers_live_in_documents_and_are_linked(home):
     written = clients.install_client_wrappers()
 
-    assert {path.name for path in written} == {"qwen-local", "codex-local", "claude-local"}
+    assert {path.name for path in written} == {
+        "qwen-local",
+        "codex-local",
+        "claude-local",
+        "opencode-local",
+        "codex-chatgpt",
+    }
     for path in written:
         assert path.parent == home / "local-ai" / "bin"
         assert path.stat().st_mode & 0o111
-        assert "launch" in path.read_text(encoding="utf-8")
+        if path.name == "codex-chatgpt":
+            # Deliberately does NOT go through `sovereign launch`: it must keep
+            # ~/.codex and the real ChatGPT login intact.
+            body = path.read_text(encoding="utf-8")
+            assert "launch" not in body
+            assert "exec codex" in body
+        else:
+            assert "launch" in path.read_text(encoding="utf-8")
         link = home / ".local" / "bin" / path.name
         assert link.is_symlink() and link.readlink() == path
 
@@ -104,5 +124,6 @@ def test_agent_clients_are_marked_agent():
     by_key = {client.key: client for client in clients.local_clients()}
 
     assert by_key["qwen"].capability == "agent"
+    assert by_key["opencode"].capability == "agent"
     assert by_key["codex"].capability == "chat"
     assert by_key["claude"].capability == "chat"

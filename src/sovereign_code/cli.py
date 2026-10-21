@@ -43,7 +43,7 @@ from .config import (
 )
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
-from .models import MODEL_STACKS, sort_views
+from .models import MODEL_STACKS
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .router import Task, choose
@@ -65,7 +65,14 @@ from .skills import list_skills, read_skill, render_skill
 from .stats import collect_stats, human_size
 from .status import Snapshot, collect
 from .summarize import SourceError, complete, read_text_source, summarize_text
-from .system import command_exists, login_agent_installed, qwen_memory_path
+from .system import (
+    command_exists,
+    login_agent_installed,
+    ollama_runner_models,
+    qwen_memory_path,
+    swap_usage_gb,
+    wired_limit_gb,
+)
 from .verify import CORE_ALIASES, EXPECTED_ALIASES, check_embedding, probe_aliases
 
 LABEL = "com.user.sovereign-code"
@@ -110,6 +117,7 @@ def _status(snap: Snapshot) -> None:
         f"{snap.settings.gateway_url}  [{'green' if snap.gateway.up else 'yellow'}]{gateway}[/]",
     )
     table.add_row("Memory", snap.memory.label)
+    table.add_row("GPU budget", f"{wired_limit_gb(snap.memory.total_gb):.1f} GB wired")
     table.add_row("Disk free", f"{snap.disk_free_gb:.0f} GB")
     table.add_row("Loopback", "yes" if snap.loopback else "[red]NO[/]")
     table.add_row("Login terminal", "installed" if snap.login_installed else "not installed")
@@ -119,8 +127,10 @@ def _status(snap: Snapshot) -> None:
     if snap.loaded:
         console.print("\n[bold]Loaded[/]")
         for view in snap.loaded:
+            engine = f" · [cyan]{view.runner}[/]" if view.runner else ""
             console.print(
-                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · {view.size_gb:.1f} GB"
+                f"  [green]{view.tag}[/]  ctx {view.context or '?'} · "
+                f"{view.size_gb:.1f} GB{engine}"
             )
 
     coder = snap.recommended_coder or snap.best_coder
@@ -312,15 +322,23 @@ def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
     table.add_column("Size", justify="right")
     missing = []
     for alias, tag in aliases:
-        view = snap.views.get(tag)
+        clean_tag = tag.strip('"\'')
+        if clean_tag.startswith("openai/"):
+            table.add_row(alias, "OpenAI cloud passthrough", "[dim]passthrough[/]", "-")
+            continue
+        view = snap.views.get(clean_tag) or (
+            snap.views.get(f"{clean_tag}:latest")
+            if ":" not in clean_tag
+            else snap.views.get(clean_tag.removesuffix(":latest"))
+        )
         if view and view.installed:
             inst = "[green]yes[/]"
             size = f"{view.size_gb:.1f} GB"
         else:
             inst = "[yellow]no[/]"
             size = "-"
-            missing.append((alias, tag))
-        table.add_row(alias, tag, inst, size)
+            missing.append((alias, clean_tag))
+        table.add_row(alias, clean_tag, inst, size)
     console.print(table)
     if missing:
         console.print("\n[yellow]Aliases pointing to missing models:[/]")
@@ -392,7 +410,7 @@ def _models(snap: Snapshot) -> None:
     table.add_column("Context", justify="right")
     table.add_column("Status")
     table.add_column("Notes", overflow="fold")
-    for view in sort_views(snap.views.values()):
+    for view in snap.all_models:
         marker = "▶" if view.loaded else ("●" if view.installed else "↓")
         status = "loaded" if view.loaded else ("installed" if view.installed else "missing")
         style = "green" if view.installed else "yellow"
@@ -1001,6 +1019,71 @@ def _doctor(snap: Snapshot) -> int:
         "Agent model",
         f"{agent.tag} · {agent_sel.context} ctx" if agent else "no agent-capable model",
         "ollama pull gemma4:12b" if not agent else "",
+        warn=True,
+    )
+
+    # --- hardware guardrails -------------------------------------------------
+    # Apple silicon reserves ~75% of unified memory for the GPU. A model that
+    # fills that budget never leaves room for KV cache or a second model, and
+    # Ollama *hangs* rather than erroring, blocking every later request until
+    # it is restarted. Judge by weights + a small KV allowance, not by RAM.
+    wired = wired_limit_gb(snap.memory.total_gb)
+    coder_sel = snap.code_selection or agent_sel
+    coder = coder_sel.model
+    weights = max(coder.size_gb, coder.spec.size_gb) if coder else 0.0
+    headroom = round(wired - weights, 1) if coder else wired
+    fits = not coder or headroom >= 2.0
+    add(
+        fits,
+        "GPU memory budget",
+        f"{wired:.1f} GB wired of {snap.memory.total_gb:.0f} GB"
+        + (f" · {coder.tag} uses {weights:.1f} GB" if coder else ""),
+        (
+            f"{coder.tag} needs the machine to itself; unload other models and lower "
+            f"max_context ({coder_sel.context} now)"
+            if not fits
+            else ""
+        ),
+        warn=True,
+    )
+
+    swap_used, swap_total = swap_usage_gb()
+    # macOS swaps routinely; only flag real thrash, not a 1 GB baseline.
+    swapping = swap_used >= 4.0 or (
+        swap_total >= 4.0 and swap_used / swap_total >= 0.85
+    )
+    add(
+        not swapping,
+        "Swap pressure",
+        f"{swap_used:.1f} GB of {swap_total:.1f} GB used",
+        "another app may be holding a large model; quit it or restart Ollama",
+        warn=True,
+    )
+
+    runners = ollama_runner_models()
+    loaded_tags = {view.tag for view in snap.loaded}
+    orphans = [name for name in runners if name not in loaded_tags]
+    add(
+        not orphans,
+        "Model runners",
+        f"{len(runners)} live · {len(loaded_tags)} loaded" if runners else "none running",
+        f"stale runner for {orphans[0]}; restart Ollama" if orphans else "",
+        warn=True,
+    )
+
+    config_path = LOCAL_AI_ROOT / "gateway" / "config.yaml"
+    reviewed_path = LOCAL_AI_ROOT / "gateway" / "config.sovereign-recommended.yaml"
+    drifted = False
+    if config_path.is_file() and reviewed_path.is_file():
+        try:
+            drifted = config_path.read_bytes() != reviewed_path.read_bytes()
+        except OSError:
+            drifted = False
+    add(
+        not drifted,
+        "Gateway config",
+        "matches reviewed config" if not drifted else "differs from reviewed config",
+        f"diff {config_path.name} {reviewed_path.name}; another agent may have rewritten it",
         warn=True,
     )
     add(
@@ -1851,7 +1934,7 @@ def build_parser() -> argparse.ArgumentParser:
     clone.add_argument("--name", default=None)
 
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
-    launch.add_argument("client", choices=("qwen", "codex", "claude"))
+    launch.add_argument("client", choices=("qwen", "codex", "claude", "opencode"))
     launch.add_argument("path", nargs="?", default=".")
     launch.add_argument("--yolo", action="store_true", help="auto-approve Qwen Code tool calls")
     sub.add_parser("pull-recommended", help="pull qwen2.5-coder:14b")

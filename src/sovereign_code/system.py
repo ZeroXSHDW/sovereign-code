@@ -74,6 +74,59 @@ def disk_free_gb(path: Path | None = None) -> float:
         return 0.0
 
 
+def wired_limit_gb(total_gb: float) -> float:
+    """Apple-silicon GPU-wired memory ceiling.
+
+    macOS reports 0 for `iogpu.wired_limit_mb` when the default policy applies,
+    which reserves roughly 75% of unified memory for the GPU. A model larger
+    than this cannot be loaded no matter how much "free" RAM the OS reports —
+    and with parallel requests disabled Ollama will hang waiting rather than
+    returning an error, which takes the whole server down for later callers.
+    """
+    out = _run(["sysctl", "-n", "iogpu.wired_limit_mb"]).strip()
+    try:
+        mb = int(out)
+    except ValueError:
+        mb = 0
+    if mb > 0:
+        return round(mb / 1024, 1)
+    return round(max(total_gb, 0.0) * 0.75, 1)
+
+
+def _to_gb(number: str, unit: str) -> float:
+    try:
+        value = float(number)
+    except ValueError:
+        return 0.0
+    return round(value / 1024, 2) if unit.upper().startswith("M") else round(value, 2)
+
+
+def swap_usage_gb() -> tuple[float, float]:
+    """(used_gb, total_gb) from `sysctl vm.swapusage`; (0, 0) when unknown."""
+    out = _run(["sysctl", "-n", "vm.swapusage"])
+    used = re.search(r"used = ([0-9.]+)([MG])", out)
+    total = re.search(r"total = ([0-9.]+)([MG])", out)
+    if not used or not total:
+        return (0.0, 0.0)
+    return (
+        _to_gb(used.group(1), used.group(2)),
+        _to_gb(total.group(1), total.group(2)),
+    )
+
+
+def ollama_runner_models() -> list[str]:
+    """Models with a live `ollama runner` process (may outlive /api/ps)."""
+    out = _run(["/bin/ps", "-Ao", "command"], timeout=4.0)
+    models: list[str] = []
+    for line in out.splitlines():
+        marker = "ollama runner --model "
+        if marker in line:
+            name = line.split(marker, 1)[1].split()[0]
+            if name not in models:
+                models.append(name)
+    return models
+
+
 def port_open(host: str, port: int, timeout: float = 0.4) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):

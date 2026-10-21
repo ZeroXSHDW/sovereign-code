@@ -1,9 +1,16 @@
 """Tests for the hardware-aware router."""
 
-from sovereign_code.models import CATALOG, build_views
+from sovereign_code.models import CATALOG, CODING, ModelSpec, ModelView, build_views
 from sovereign_code.router import Task, choose, context_for, estimated_total_gb
 
 GIB = 1024**3
+
+
+def _bare_view(tag: str, size_gb: float, max_context: int = 32768) -> ModelView:
+    spec = ModelSpec(
+        tag=tag, role=CODING, params_b=0.0, size_gb=size_gb, max_context=max_context
+    )
+    return ModelView(spec=spec, installed=True, size_gb=size_gb)
 
 
 def views(*names, loaded=None):
@@ -56,7 +63,7 @@ def test_preferred_override_wins():
 def test_empty_machine_requests_pull():
     selection = choose(Task.CODE, build_views({"models": []}, None), free_gb=20)
     assert selection.model is None
-    assert selection.needs_pull == "qwen2.5-coder:14b"
+    assert selection.needs_pull == "qwen3-coder:30b"
 
 
 def test_context_respects_model_ceiling():
@@ -64,8 +71,17 @@ def test_context_respects_model_ceiling():
     assert context_for(all_views["phi:latest"], free_gb=20) == 2048
 
 
-def test_agent_prefers_tool_capable_gemma():
-    selection = choose(Task.AGENT, views("gemma4:12b", "qwen3.5:4b"), free_gb=20)
+def test_agent_prefers_the_agentic_coder():
+    selection = choose(
+        Task.AGENT, views("gemma4:12b", "qwen3.5:4b", "qwen3-coder:30b"), free_gb=20
+    )
+    assert selection.tag == "qwen3-coder:30b"
+
+
+def test_agent_falls_back_to_gemma_without_the_coder():
+    # qwen3-coder/gpt-oss absent: gemma4:12b is the next tool-capable choice and
+    # outranks the older dense coder in the measured ranking.
+    selection = choose(Task.AGENT, views("gemma4:12b", "qwen2.5-coder:14b"), free_gb=20)
     assert selection.tag == "gemma4:12b"
 
 
@@ -82,3 +98,15 @@ def test_reason_prefers_deepseek_when_gemma_missing():
 def test_fast_prefers_gemma3_4b():
     selection = choose(Task.FAST, views("gemma3:4b", "phi:latest"), free_gb=20)
     assert selection.tag == "gemma3:4b"
+
+
+def test_large_model_keeps_a_usable_context():
+    # 19 GB of weights against 17 GB of free RAM: the weights alone exceed the
+    # budget, but the model still runs on this Mac, so the router must not
+    # collapse it to 2048 and make it useless for coding.
+    assert context_for(_bare_view("big", 19.0), free_gb=17.0) == 16384
+
+
+def test_impossible_model_falls_back_to_minimum():
+    # Far beyond what the machine can hold: no point reserving a context.
+    assert context_for(_bare_view("huge", 43.0), free_gb=17.0) == 2048

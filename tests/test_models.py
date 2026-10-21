@@ -61,6 +61,8 @@ def test_recommended_model_is_shown_when_missing():
     views = build_views(tags("phi:latest"), None)
     assert views["qwen2.5-coder:14b"].installed is False
     assert views["qwen2.5-coder:14b"].spec.recommended is True
+    # Only one model carries the recommendation marker.
+    assert [t for t, v in views.items() if v.spec.recommended] == ["qwen2.5-coder:14b"]
 
 
 def test_sort_puts_loaded_first():
@@ -74,3 +76,51 @@ def test_new_models_in_catalog():
     assert CATALOG["deepseek-r1:8b"].thinking is True
     assert CATALOG["qwen3:8b"].role == "reason"
     assert CATALOG["gemma3:4b"].role == "fast"
+
+
+def test_aliased_views_are_counted_once():
+    """`foo` and `foo:latest` are one model, not two.
+
+    build_views registers both spellings for the same ModelView, which used to
+    double the installed count, duplicate dashboard rows and double-count
+    resident memory in potential_free_gb.
+    """
+    from sovereign_code.config import Settings
+    from sovereign_code.status import Snapshot
+    from sovereign_code.system import Memory
+
+    payload = {
+        "models": [
+            {
+                "name": "nomic-embed-text:latest",
+                "size": int(7.1 * GIB),
+                "details": {},
+            }
+        ]
+    }
+    views = build_views(payload, {"models": [dict(payload["models"][0], context_length=2048)]})
+    snap = Snapshot(settings=Settings(), views=views, memory=Memory(24.0, 5.0, 21.0))
+
+    assert len(snap.installed) == 1
+    assert len(snap.loaded) == 1
+    # 5 GB free + 7.1 GB reclaimable — counted once, not twice.
+    assert snap.potential_free_gb == 12.1
+
+
+def test_ps_reports_the_inference_runner():
+    """/api/ps says which engine serves a model; MLX is much faster on Apple silicon."""
+    views = build_views(
+        tags("qwen3.5:4b"),
+        {
+            "models": [
+                {
+                    "name": "qwen3.5:4b",
+                    "context_length": 16384,
+                    "runner": "mlx",
+                    "size": 4 * GIB,
+                }
+            ]
+        },
+    )
+    assert views["qwen3.5:4b"].runner == "mlx"
+    assert views["qwen3.5:4b"].loaded is True

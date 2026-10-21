@@ -43,6 +43,13 @@ def estimated_total_gb(view: ModelView, context: int) -> float:
     return round(max(view.size_gb, view.spec.size_gb) + estimated_kv_gb(view, context), 2)
 
 
+# A model whose weights alone exceed the free-RAM budget still runs: macOS
+# reclaims file cache and Ollama spills to shared memory. Returning 2048 in that
+# case made coding models useless (measured: qwen3-coder:30b, 19 GB, runs fine at
+# 16k and 32k on this 24 GB Mac). Keep a working floor instead of collapsing.
+TIGHT_CONTEXT = 16384
+
+
 def context_for(view: ModelView, free_gb: float | None, max_context: int = 32768) -> int:
     ceiling = min(view.spec.max_context or max_context, max_context)
     choices = [c for c in CONTEXT_CHOICES if c <= ceiling] or [2048]
@@ -52,9 +59,17 @@ def context_for(view: ModelView, free_gb: float | None, max_context: int = 32768
         return min(int(view.context), ceiling)
     if free_gb is None:
         return min(choices[0], 16384)
+    budget = max(1.0, free_gb) * 0.85
+    weights = max(view.size_gb, view.spec.size_gb, 1.0)
     for context in choices:
-        if estimated_total_gb(view, context) <= max(1.0, free_gb) * 0.85:
+        if estimated_total_gb(view, context) <= budget:
             return context
+    if weights >= budget:
+        # Slightly over budget: allow a usable window. macOS reclaims several GB
+        # of cache and compressible memory under load, so a model up to ~1.5x the
+        # "potential free" figure still runs (verified with a 19 GB model at 16k
+        # and 32k). Beyond that it cannot fit and we fall back to the minimum.
+        return min(TIGHT_CONTEXT, ceiling) if weights <= max(1.0, free_gb) * 1.5 else choices[-1]
     return choices[-1]
 
 

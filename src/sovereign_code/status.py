@@ -11,7 +11,7 @@ from .gateway import GatewayStatus
 from .gateway import check as check_gateway
 from .models import ModelView, build_views, sort_views
 from .ollama import OllamaClient
-from .router import Selection, Task, choose
+from .router import Selection, Task, choose, recommend_pull
 from .system import (
     Memory,
     disk_free_gb,
@@ -41,17 +41,39 @@ class Snapshot:
     chat_selection: Selection | None = None
     error: str = ""
 
+    def _unique(self, predicate: Any) -> list[ModelView]:
+        """Views matching `predicate`, de-duplicated by object identity.
+
+        build_views registers both `foo` and `foo:latest` as aliases for the
+        *same* ModelView, so a naive `views.values()` yields every aliased model
+        twice — which double-counted resident memory and duplicated dashboard
+        rows.
+        """
+        seen: set[int] = set()
+        found: list[ModelView] = []
+        for view in self.views.values():
+            if not predicate(view) or id(view) in seen:
+                continue
+            seen.add(id(view))
+            found.append(view)
+        return found
+
     @property
     def loaded(self) -> list[ModelView]:
-        return [v for v in self.views.values() if v.loaded]
+        return self._unique(lambda view: view.loaded)
 
     @property
     def installed(self) -> list[ModelView]:
-        return [v for v in self.views.values() if v.installed]
+        return self._unique(lambda view: view.installed)
 
     @property
     def sorted_models(self) -> list[ModelView]:
-        return sort_views(self.views.values())
+        return sort_views(self.installed)
+
+    @property
+    def all_models(self) -> list[ModelView]:
+        """Every known model (installed, loaded or missing), de-aliased."""
+        return sort_views(self._unique(lambda view: True))
 
     @property
     def potential_free_gb(self) -> float:
@@ -64,7 +86,8 @@ class Snapshot:
 
     @property
     def recommended_coder(self) -> ModelView | None:
-        return self.views.get("qwen2.5-coder:14b")
+        """The coder the router would recommend, not a hard-coded tag."""
+        return self.views.get(recommend_pull(Task.CODE))
 
     def model(self, tag: str | None) -> ModelView | None:
         return self.views.get(tag) if tag else None

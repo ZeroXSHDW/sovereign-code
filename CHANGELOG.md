@@ -2,6 +2,23 @@
 
 All notable changes to Sovereign Code.
 
+## [Unreleased]
+
+### Added
+- Hardware guardrails in `doctor`: Apple-silicon GPU-wired budget, swap pressure, stale model
+  runners, and gateway-config drift (16 → 19 checks). These catch the failure mode where a model
+  larger than the GPU budget makes Ollama **hang** instead of erroring.
+- `status` shows the GPU-wired budget and the engine serving each loaded model (`mlx` / `llamacpp`).
+- `sovereign models` de-aliases `foo` and `foo:latest` so no model is listed twice.
+
+### Fixed
+- Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM
+  estimate; the router keeps a 16k working floor (verified with a 19 GB coder at 16k and 32k).
+- Aliased model views were counted twice, inflating installed/loaded totals and double-counting
+  resident memory in `potential_free_gb`.
+- `doctor` "Best coder" now follows the router instead of a hard-coded 14B tag.
+- Model ranking and stacks updated for the measured 2026-10-21 benchmark set.
+
 ## [0.1.0] - 2026-10-20
 
 ### Added

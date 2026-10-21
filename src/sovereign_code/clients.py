@@ -11,7 +11,7 @@ from .config import LOCAL_AI_ROOT, PROJECT_ROOT, Settings
 from .router import Task, choose
 from .system import command_exists
 
-AGENT_MODEL = "gemma4:12b"
+AGENT_MODEL = "qwen2.5-coder:14b"
 CODE_MODEL = "qwen2.5-coder:14b"
 CLAUDE_ALIAS = "local-claude"
 CODEX_ALIAS = "local-code"
@@ -96,6 +96,10 @@ CODEX_PROFILE = """\
 model = "local-code"
 model_provider = "sovereign-local"
 model_context_window = 32768
+# NOTE: model_max_output_tokens is NOT recognised by codex-cli 0.163 — adding it
+# only produces an "unrecognized configuration setting" warning. Codex prints a
+# cosmetic "Model metadata for `local-code` not found" line for any custom model
+# id; it falls back to the context window above and works correctly.
 
 [model_providers.sovereign-local]
 name = "Sovereign local gateway"
@@ -130,7 +134,7 @@ def local_clients() -> list[ClientInfo]:
             command="opencode",
             capability="agent",
             model=f"ollama/{AGENT_MODEL}",
-            detail="Choose the Ollama model in the TUI, or run with -m ollama/gemma4:12b.",
+            detail="Local agentic coder; fully configured for fast Ollama models.",
         ),
         ClientInfo(
             key="codex",
@@ -214,6 +218,16 @@ def plan_launch(
             "Claude local chat; use Qwen Code for reliable local file edits.",
         )
 
+    if client == "opencode":
+        argv = ["opencode", str(target)]
+        return LaunchPlan(
+            argv,
+            target,
+            env,
+            f"ollama/{agent_model}",
+            "OpenCode local coding agent",
+        )
+
     raise ValueError(f"unsupported client: {client}")
 
 
@@ -229,7 +243,7 @@ def install_client_wrappers() -> list[Path]:
     link_dir.mkdir(parents=True, exist_ok=True)
     launcher = PROJECT_ROOT / "bin" / "sovereign"
     written: list[Path] = []
-    for client in ("qwen", "codex", "claude"):
+    for client in ("qwen", "codex", "claude", "opencode"):
         path = wrapper_path(client)
         path.write_text(
             f'#!/bin/bash\nset -euo pipefail\nexec "{launcher}" launch {client} "$@"\n',
@@ -241,4 +255,21 @@ def install_client_wrappers() -> list[Path]:
             link.unlink()
         link.symlink_to(path)
         written.append(path)
+
+    # ChatGPT-native Codex: no CODEX_HOME override, no gateway, no fake key, so
+    # it uses the real ChatGPT login in ~/.codex. This is the other half of the
+    # hybrid setup — `codex-local` for Ollama, `codex-chatgpt` for ChatGPT.
+    cloud = bin_dir / "codex-chatgpt"
+    cloud.write_text(
+        "#!/bin/bash\nset -euo pipefail\n"
+        "# Uses ~/.codex and your ChatGPT subscription login (no local overrides).\n"
+        'exec codex "$@"\n',
+        encoding="utf-8",
+    )
+    cloud.chmod(0o755)
+    cloud_link = link_dir / cloud.name
+    if cloud_link.is_symlink() or cloud_link.exists():
+        cloud_link.unlink()
+    cloud_link.symlink_to(cloud)
+    written.append(cloud)
     return written

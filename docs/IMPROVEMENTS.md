@@ -115,6 +115,13 @@ Sovereign Code keeps the idea and changes the foundation.
   review) runs with `sovereign skill`; per-project memory is injected into chat;
   and `sovereign clone` bootstraps a GitHub repo. Offline stacks are documented
   in README.md.
+- **Automatic client model resolution.** `resolve_client_models` maps each local
+  client (Codex, ChatGPT, Claude Code, Qwen, OpenCode) to its best installed
+  model through the router. `sovereign env` now emits the resolved OpenAI- and
+  Anthropic-compatible environment (`eval "$(sovereign env)"` points ChatGPT,
+  Codex, and Claude Code at the loopback gateway with the right aliases), and
+  `sovereign clients` prints the auto-resolved best model per client, so the
+  three clients always follow the strongest model you have downloaded.
 - **End-to-end multi-model pipeline.** `sovereign pipeline` chains a planner,
   the Qwen Code agent, and a reviewer into one coding pass, so a prompt becomes
   a plan, then real file changes, then a critique. `sovereign verify --embedding`
@@ -136,7 +143,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 107 pytest tests cover model merging, router context behaviour, config,
+- 109 pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

@@ -4,6 +4,32 @@ import pytest
 
 from sovereign_code import clients
 from sovereign_code.config import Settings
+from sovereign_code.models import CATALOG, build_views
+
+GIB = 1024**3
+
+
+def _views(*names):
+    tags = {
+        "models": [
+            {"name": name, "size": int(CATALOG[name].size_gb * GIB), "details": {}}
+            for name in names
+        ]
+    }
+    return build_views(tags, None)
+
+
+def test_resolve_client_models_picks_best_installed():
+    resolved = clients.resolve_client_models(_views("qwen2.5-coder:14b", "qwen3.5:4b"), free_gb=20)
+    assert resolved["codex"] == ("local-code", "qwen2.5-coder:14b")
+    assert resolved["chatgpt"] == ("local-chat", "qwen3.5:4b")
+    assert resolved["claude"] == ("local-claude", "qwen3.5:4b")
+
+
+def test_resolve_client_models_empty_machine():
+    resolved = clients.resolve_client_models(build_views({"models": []}, None), free_gb=20)
+    assert resolved["codex"] == ("local-code", "")
+    assert resolved["qwen"] == ("local-agent", "")
 
 
 @pytest.fixture

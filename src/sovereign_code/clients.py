@@ -5,14 +5,53 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import LOCAL_AI_ROOT, PROJECT_ROOT, Settings
+from .router import Task, choose
 from .system import command_exists
 
 AGENT_MODEL = "gemma4:12b"
 CODE_MODEL = "qwen2.5-coder:14b"
 CLAUDE_ALIAS = "local-claude"
 CODEX_ALIAS = "local-code"
+
+# Role alias each client uses through the LiteLLM gateway. The alias is stable;
+# the gateway config maps the alias to the best installed model for that role.
+CLIENT_ROLE_ALIAS: dict[str, tuple[str, str]] = {
+    "codex": ("code", CODEX_ALIAS),
+    "chatgpt": ("chat", "local-chat"),
+    "claude": ("claude", CLAUDE_ALIAS),
+    "qwen": ("agent", "local-agent"),
+    "opencode": ("agent", "local-agent"),
+}
+
+_ROLE_TASK: dict[str, Task] = {
+    "code": Task.CODE,
+    "chat": Task.CHAT,
+    # Claude Code is chat-only locally (its streamed tool calls are unreliable
+    # through LiteLLM + Ollama), so its best model is the 64k chat model behind
+    # local-claude, not the agent model.
+    "claude": Task.CHAT,
+    "agent": Task.AGENT,
+}
+
+
+def resolve_client_models(
+    views: dict[str, Any],
+    free_gb: float | None = None,
+    max_context: int = 32768,
+) -> dict[str, tuple[str, str]]:
+    """Map each client to (gateway alias, best installed tag) via the router.
+
+    The alias is what the client sends to the gateway; the tag is the concrete
+    Ollama model the router picked as best for that role given what is installed.
+    """
+    resolved: dict[str, tuple[str, str]] = {}
+    for client, (role, alias) in CLIENT_ROLE_ALIAS.items():
+        selection = choose(_ROLE_TASK[role], views, free_gb, max_context=max_context)
+        resolved[client] = (alias, selection.tag or "")
+    return resolved
 
 
 def qwen_home_path() -> Path:

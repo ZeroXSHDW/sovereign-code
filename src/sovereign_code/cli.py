@@ -29,6 +29,7 @@ from .clients import (
     install_client_wrappers,
     local_clients,
     plan_launch,
+    resolve_client_models,
     wrapper_path,
 )
 from .config import (
@@ -1330,6 +1331,7 @@ def _gateway_restart(settings: Settings) -> int:
 
 
 def _clients(snap: Snapshot) -> None:
+    resolved = resolve_client_models(snap.views, snap.potential_free_gb, snap.settings.max_context)
     table = Table(title="Local coding clients", header_style="bold #b794f4")
     table.add_column("Client", style="bold")
     table.add_column("Status")
@@ -1351,6 +1353,14 @@ def _clients(snap: Snapshot) -> None:
         "[dim]Agent clients can write files. Chat clients are verified for local "
         "conversation; use Qwen Code for reliable local edits.[/]"
     )
+    if any(tag for _alias, tag in resolved.values()):
+        console.print(
+            "[dim]Auto-resolved best models now:[/] "
+            + ", ".join(f"{key} → {tag}" for key, (_alias, tag) in resolved.items() if tag)
+        )
+        console.print(
+            '[dim]Point any OpenAI/Anthropic client at the gateway with: eval "$(sovereign env)"[/]'
+        )
 
 
 def _launch(client: str, path: str, yolo: bool = False) -> int:
@@ -1642,19 +1652,31 @@ def _free(settings: Settings) -> int:
 
 def _env(settings: Settings) -> None:
     snap = _snapshot(settings)
-    tag = snap.chat_selection.tag if snap.chat_selection else "qwen3.5:4b"
+    resolved = resolve_client_models(snap.views, snap.potential_free_gb, snap.settings.max_context)
+    chat_alias, chat_tag = resolved["chatgpt"]
+    code_alias, _code_tag = resolved["codex"]
+    claude_alias, _claude_tag = resolved["claude"]
+    fallback_tag = snap.chat_selection.tag if snap.chat_selection else "qwen3.5:4b"
     lines = [
         f'export OLLAMA_HOST="{settings.ollama_host}"',
+        f'export SOVEREIGN_OLLAMA_HOST="{settings.ollama_host}"',
+        f'export SOVEREIGN_MODEL="{chat_tag or fallback_tag}"',
+        # OpenAI-compatible — ChatGPT / Codex CLI / any OpenAI SDK
         f'export OPENAI_BASE_URL="{settings.gateway_url}/v1"',
         'export OPENAI_API_KEY="local"',
-        f'export SOVEREIGN_MODEL="{tag}"',
-        f'export SOVEREIGN_OLLAMA_HOST="{settings.ollama_host}"',
+        f'export OPENAI_MODEL="{chat_alias}"',
+        f'export SOVEREIGN_CODE_MODEL="{code_alias}"',  # best local coder alias
+        # Anthropic-compatible — Claude Code
         f'export ANTHROPIC_BASE_URL="{settings.gateway_url}"',
         'export ANTHROPIC_AUTH_TOKEN="local"',
         'export ANTHROPIC_API_KEY="local"',
-        'export ANTHROPIC_MODEL="local-claude"',
-        'export ANTHROPIC_SMALL_FAST_MODEL="local-chat"',
+        f'export ANTHROPIC_MODEL="{claude_alias}"',
+        f'export ANTHROPIC_SMALL_FAST_MODEL="{chat_alias}"',
+        f'export ANTHROPIC_DEFAULT_SONNET_MODEL="{claude_alias}"',
+        f'export ANTHROPIC_DEFAULT_HAIKU_MODEL="{chat_alias}"',
         'export CLAUDE_CODE_MAX_CONTEXT_TOKENS="65536"',
+        'export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"',
+        'export DISABLE_TELEMETRY="1"',
     ]
     print("\n".join(lines))
 

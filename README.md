@@ -214,6 +214,17 @@ Claude Code are useful local chat clients, not reliable local editors. The
 limitation is in how Ollama streams tool calls through LiteLLM, not in the
 models themselves.
 
+Model selection is automatic: `resolve_client_models` runs the router against
+whatever is installed and points each client at its strongest available model.
+`sovereign clients` prints the auto-resolved pick, and `eval "$(sovereign env)"`
+exports the full OpenAI- and Anthropic-compatible environment so ChatGPT, Codex,
+and Claude Code all follow the best local model without hardcoding:
+
+```sh
+eval "$(sovereign env)"        # OPENAI_* and ANTHROPIC_* point at the loopback gateway
+sovereign clients              # shows the auto-resolved best model per client
+```
+
 ## Commands
 
 ```sh

@@ -13,6 +13,11 @@ All notable changes to Sovereign Code.
 - `sovereign launch` frees GPU memory automatically: when the chosen model needs nearly the whole
   wired budget, resident models are unloaded first instead of letting Ollama hang.
 - `sovereign launch --dry-run` shows the model, planned eviction and argv without launching.
+- `sovereign tune` applies and verifies Ollama runtime tuning end-to-end: flash attention, q8 KV
+  cache, keep-alive, and the app's stored context length, then fully restarts the app (the hidden UI
+  process has to die too) and confirms the server inherited it. `--dry-run` shows the diff first.
+- `sovereign verify --all` now reads the alias list from `gateway/config.yaml` instead of a
+  hard-coded tuple, so it cannot go stale.
 
 ### Fixed
 - Large models no longer collapse to a 2048-token context when their weights exceed the free-RAM

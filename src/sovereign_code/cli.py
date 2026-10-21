@@ -70,10 +70,12 @@ from .system import (
     login_agent_installed,
     models_to_evict,
     ollama_runner_models,
+    port_open,
     qwen_memory_path,
     swap_usage_gb,
     wired_limit_gb,
 )
+from .tune import DEFAULT_CONTEXT, desired_env, env_drift, read_context_length, write_context_length
 from .verify import (
     CORE_ALIASES,
     EXPECTED_ALIASES,
@@ -995,6 +997,66 @@ def _summarize(
     return 0
 
 
+def _tune(context: int, dry_run: bool = False) -> int:
+    """Apply and verify Ollama runtime tuning. macOS only."""
+    from .tune import current_server_env, restart_ollama, set_session_env, supported
+
+    if not supported():
+        console.print("[red]tune is macOS-only.[/]")
+        return 1
+
+    target = max(2048, int(context))
+    current = current_server_env()
+    desired = desired_env(target)
+    drift = env_drift(current, desired)
+    db_context = read_context_length()
+    db_change = db_context is not None and db_context != target
+
+    if not current:
+        console.print("[yellow]Ollama is not running.[/] Start it, then re-run tune.")
+        return 1
+    if not drift and not db_change:
+        console.print(
+            f"[green]Already tuned[/] · context {target} · q8 KV · flash attention active"
+        )
+        return 0
+
+    table = Table(title="Planned changes", header_style="bold #b794f4")
+    table.add_column("Setting")
+    table.add_column("Now")
+    table.add_column("Wanted")
+    for key, old_value, wanted in drift:
+        table.add_row(key, old_value or "[dim]unset[/]", wanted)
+    if db_change:
+        table.add_row("app context_length", str(db_context), str(target))
+    console.print(table)
+
+    if dry_run:
+        console.print("[dim]Dry run: nothing applied.[/]")
+        return 0
+
+    set_session_env(desired)
+    if db_change:
+        write_context_length(target)
+    console.print("[dim]Restarting Ollama so the server inherits the new env…[/]")
+    restart_ollama()
+    for _ in range(30):
+        if port_open("127.0.0.1", 11434):
+            break
+        time.sleep(1)
+
+    after = current_server_env()
+    remaining = env_drift(after, desired)
+    if remaining:
+        console.print("[yellow]Still differs after restart:[/]")
+        for key, now, wanted in remaining:
+            console.print(f"  {key}: {now or 'unset'} -> {wanted}")
+        console.print("[dim]The app may hold a cached value; quit Ollama fully and retry.[/]")
+        return 1
+    console.print(f"[green]Tuned[/] · context {target} · q8 KV · flash attention active")
+    return 0
+
+
 def _doctor(snap: Snapshot) -> int:
     checks: list[tuple[str, str, str, str]] = []  # status, name, detail, hint
 
@@ -1819,6 +1881,9 @@ def build_parser() -> argparse.ArgumentParser:
     models = sub.add_parser("models", help="list installed and recommended models")
     models.add_argument("--remote", action="store_true", help="list downloadable models")
     models.add_argument("query", nargs="?", default=None, help="filter by name")
+    tune = sub.add_parser("tune", help="apply/verify Ollama context, flash attention and q8 KV")
+    tune.add_argument("--context", type=int, default=DEFAULT_CONTEXT)
+    tune.add_argument("--dry-run", action="store_true", help="show changes without applying")
     doctor = sub.add_parser("doctor", help="check the local stack and print fixes")
     doctor.add_argument("--fix", action="store_true", help="apply the safe fixes automatically")
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
@@ -2036,6 +2101,8 @@ def main(argv: list[str] | None = None) -> int:
             return _models_remote(snap, args.query)
         _models(snap)
         return 0
+    if command == "tune":
+        return _tune(args.context, dry_run=args.dry_run)
     if command == "doctor":
         snap = _snapshot(settings)
         if args.fix:

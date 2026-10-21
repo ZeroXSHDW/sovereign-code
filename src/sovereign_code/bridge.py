@@ -159,7 +159,7 @@ def convert_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 messages.append(
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": "\n".join(user_text)}] + parts,
+                        "content": [{"type": "text", "text": "\n".join(user_text)}, *parts],
                     }
                 )
             else:
@@ -197,7 +197,9 @@ def convert_tools(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
     return tools, None
 
 
-def to_openai_request(payload: dict[str, Any], default_model: str = DEFAULT_ALIAS) -> dict[str, Any]:
+def to_openai_request(
+    payload: dict[str, Any], default_model: str = DEFAULT_ALIAS
+) -> dict[str, Any]:
     """The non-streaming gateway request that corresponds to an Anthropic call."""
     model = resolve_model(payload.get("model"), default_model)
     request: dict[str, Any] = {

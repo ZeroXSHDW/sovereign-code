@@ -229,18 +229,23 @@ def plan_launch(
                 "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
                 "ANTHROPIC_AUTH_TOKEN": "local",
                 "ANTHROPIC_API_KEY": "local",
-                "ANTHROPIC_MODEL": "local-agent",
+                # Claude Code's own prompt is ~34k tokens, so a 32k coder is
+                # rejected before the first turn. `local-claude` is 64k and
+                # tool-capable; the bridge handles its tool calls.
+                "ANTHROPIC_MODEL": "local-claude",
                 "ANTHROPIC_SMALL_FAST_MODEL": "local-chat",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "local-agent",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "local-agent",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "local-claude",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "local-claude",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "local-chat",
-                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+                "CLAUDE_CODE_ALLOW_OTHER_MODELS": "1",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "API_TIMEOUT_MS": "600000",
+                "API_TIMEOUT_MS": "900000",
                 "DISABLE_TELEMETRY": "1",
             }
         )
-        argv = ["claude", "--model", "local-agent"]
+        argv = ["claude", "--model", "local-claude"]
         return LaunchPlan(
             argv,
             target,

@@ -58,6 +58,11 @@ All notable changes to Sovereign Code.
   implementer for bounded repair rounds (`--fix`, `--checks`, `--no-verify`, `--agent-timeout`).
   The reviewer sees the real `git diff` and the check output, and every run is archived under
   `~/Documents/local-ai/data/runs/<timestamp>/` with a summary and an explicit verdict.
+- **Direct mode** (`pipeline --mode direct|auto`, now the default): one request returns whole files in
+  `<<<FILE: path>>> … <<<END>>>` blocks, which are parsed, path-checked (no `..`, no absolute
+  paths, inside the project only) and written. Implement time dropped from **250–300 s to 17 s**
+  on the same task, with the same verification and review. `auto` falls back to the agent loop when
+  no blocks are produced; `--mode agent` keeps the old behaviour for complex multi-step refactors.
 - `checks` prefer the project's venv interpreter (`.venv/bin/python`) when detecting pytest; the
   system python usually has no pytest, which made auto-detection fail on real projects.
 - `pipeline` gained `--dry-run` (resolved models, checks and limits in under a second, no side

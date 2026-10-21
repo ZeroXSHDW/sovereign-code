@@ -60,6 +60,7 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
+from .direct import apply_writes, build_messages, parse_blocks, relevant_files
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
@@ -2399,20 +2400,72 @@ def _domains(detect: str | None = None) -> int:
     return 0
 
 
-def _skills(settings: Settings) -> int:
-    rows = list_skills()
-    if not rows:
-        console.print(
-            "[yellow]No skills yet.[/] Add Markdown files to ~/Documents/local-ai/config/skills/"
+def _skills(
+    settings: Settings,
+    action: str = "list",
+    target: str = "all",
+    project: str | None = None,
+    include_all: bool = False,
+    names: list[str] | None = None,
+    dry_run: bool = False,
+) -> int:
+    from .skills_install import TARGETS, install, installed_counts, load_curated
+
+    if action == "install":
+        targets = (
+            "all"
+            if target == "all"
+            else [part.strip() for part in target.split(",") if part.strip()]
         )
+        try:
+            written = install(
+                targets=targets,
+                names=names or [],
+                include_all=include_all,
+                project=Path(project).expanduser() if project else None,
+                dry_run=dry_run,
+            )
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Skill install failed:[/] {exc}")
+            return 1
+        table = Table(title="Installed skills", header_style="bold #b794f4")
+        table.add_column("Target", style="bold")
+        table.add_column("Count", justify="right")
+        for key, paths in written.items():
+            table.add_row(key, str(len(paths)))
+        console.print(table)
+        if dry_run:
+            console.print("[dim]Dry run: nothing was written.[/]")
+        else:
+            console.print("[dim]Clients read SKILL.md; Continue reads prompt files.[/]")
         return 0
+
+    rows = list_skills()
     table = Table(title="Skills", header_style="bold #b794f4")
     table.add_column("Name", style="bold")
     table.add_column("Description")
     for name, description in rows:
         table.add_row(name, description)
-    console.print(table)
-    console.print("[dim]Run one: sovereign skill <name> --prompt '…'[/]")
+    if rows:
+        console.print(table)
+    else:
+        console.print("[yellow]No prompt skills in config/skills yet.[/]")
+
+    curated = load_curated()
+    counts = installed_counts()
+    itable = Table(title="Curated library", header_style="bold #b794f4")
+    itable.add_column("Target", style="bold")
+    itable.add_column("Installed", justify="right")
+    itable.add_column("Source")
+    for key in ("claude", "codex", "qwen", "opencode", "continue"):
+        source = str(TARGETS[key]()) if key in TARGETS else "~/.continue/prompts"
+        itable.add_row(key, str(counts.get(key, 0)), source)
+    console.print(itable)
+    console.print(
+        f"[dim]{len(curated)} curated skills available. Install:[/] "
+        "sovereign skills install --target all"
+    )
+    console.print("[dim]Run one prompt skill: sovereign skill <name> --prompt '…'[/]")
     return 0
 
 
@@ -2529,6 +2582,8 @@ def _pipeline(
     agent_client: str = "qwen",
     agent_timeout: float = 900.0,
     dry_run: bool = False,
+    mode: str = "auto",
+    direct_tokens: int = 4000,
 ) -> int:
     import httpx
 
@@ -2604,7 +2659,44 @@ def _pipeline(
             max_tokens=tokens,
         )
 
-    def implement_fn(prompt_text: str, plan_text: str, failure: str = "") -> tuple[bool, str]:
+    def _direct_implementation(
+        prompt_text: str, plan_text: str, failure: str
+    ) -> tuple[bool, str]:
+        """One request, whole files, no agent loop (seconds instead of minutes)."""
+        files = relevant_files(target, prompt_text)
+        messages = build_messages(prompt_text, plan_text, files, failure)
+        # Ollama can restart underneath us (app restart, memory pressure). A
+        # transport blip should not throw away the run.
+        last_error = ""
+        raw = ""
+        for attempt in range(2):
+            try:
+                raw = complete(
+                    settings.ollama_url,
+                    agent,
+                    messages,
+                    max_tokens=direct_tokens,
+                    timeout=max(120.0, agent_timeout),
+                )
+                break
+            except SourceError as exc:
+                last_error = str(exc)
+                if attempt == 0:
+                    time.sleep(2.0)
+        if not raw:
+            return False, f"direct request failed: {last_error}"
+        writes = parse_blocks(raw)
+        if not writes:
+            return False, raw[-2000:] or "model returned no file blocks"
+        written, rejected = apply_writes(target, writes)
+        lines = [f"wrote {len(written)} file(s): " + ", ".join(written)]
+        if rejected:
+            lines.append("rejected (unsafe path or too large): " + ", ".join(rejected))
+        return bool(written), "\n".join(lines)
+
+    def _agent_implementation(
+        prompt_text: str, plan_text: str, failure: str
+    ) -> tuple[bool, str]:
         context = project_context(target)
         combined = (
             f"{prompt_text}\n\nImplementation plan:\n{plan_text}\n\n"
@@ -2617,19 +2709,7 @@ def _pipeline(
             )
         if context:
             combined = context + "\n\n" + combined
-        clear_gpu("implementation")
 
-        # Load the coder before the agent starts. An 18 GB cold load inside the
-        # agent's first provider call looks like a provider failure and makes
-        # Qwen retry instead of work.
-        async def _preload() -> None:
-            client = OllamaClient(settings.ollama_url)
-            try:
-                await client.preload(agent, 16384)
-            except OllamaError:
-                pass
-
-        asyncio.run(_preload())
         try:
             plan = build_headless(
                 agent_client,
@@ -2658,6 +2738,29 @@ def _pipeline(
                     "handing the result to verification."
                 )
         return ok, output
+
+    def implement_fn(prompt_text: str, plan_text: str, failure: str = "") -> tuple[bool, str]:
+        clear_gpu("implementation")
+
+        # Load the coder before either path starts: an 18 GB cold load inside the
+        # first provider call looks like a provider failure and triggers retries.
+        async def _preload() -> None:
+            client = OllamaClient(settings.ollama_url)
+            try:
+                await client.preload(agent, 16384)
+            except OllamaError:
+                pass
+
+        asyncio.run(_preload())
+
+        if mode in ("direct", "auto"):
+            ok, output = _direct_implementation(prompt_text, plan_text, failure)
+            if ok or mode == "direct":
+                return ok, output
+            note = "Direct mode produced no file blocks; falling back to the agent.\n\n"
+            ok, agent_output = _agent_implementation(prompt_text, plan_text, failure)
+            return ok, note + agent_output
+        return _agent_implementation(prompt_text, plan_text, failure)
 
     def review_fn(plan_text: str, implementation: str) -> str:
         clear_gpu("review")
@@ -2720,7 +2823,7 @@ def _pipeline(
     if dry_run:
         console.print(
             f"[bold]Dry run[/] · dir={target} · plan={plan_model} · "
-            f"implement={agent_client}({agent}) · review={review_model}"
+            f"implement={agent_client}({agent}, {mode}) · review={review_model}"
         )
         console.print(f"checks: {shown}")
         console.print(
@@ -3017,6 +3120,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="show the resolved models and checks only"
     )
     pipeline.add_argument(
+        "--mode",
+        choices=("auto", "direct", "agent"),
+        default="auto",
+        help="direct = one request writes whole files; agent = CLI loop; auto = direct then agent",
+    )
+    pipeline.add_argument(
+        "--direct-tokens", type=int, default=4000, help="output budget for direct mode"
+    )
+    pipeline.add_argument(
         "--review-tokens",
         type=int,
         default=1600,
@@ -3104,7 +3216,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="show which domain a prompt would be routed to",
     )
 
-    sub.add_parser("skills", help="list saved skill prompts")
+    skills = sub.add_parser("skills", help="list or install the curated skill library")
+    skills.add_argument(
+        "action", nargs="?", default="list", choices=("list", "install"), help="default: list"
+    )
+    skills.add_argument(
+        "--target",
+        default="all",
+        help="all, or claude,codex,qwen,opencode,continue",
+    )
+    skills.add_argument("--project", default=None, help="also install project-level skills here")
+    skills.add_argument(
+        "--all", dest="include_all", action="store_true", help="install the entire library"
+    )
+    skills.add_argument("--name", action="append", default=[], help="install only these names")
+    skills.add_argument("--dry-run", action="store_true")
 
     skill = sub.add_parser("skill", help="show or run a saved skill prompt")
     skill.add_argument("name", nargs="?", default=None)
@@ -3333,7 +3459,15 @@ def main(argv: list[str] | None = None) -> int:
     if command == "domains":
         return _domains(args.detect)
     if command == "skills":
-        return _skills(settings)
+        return _skills(
+            settings,
+            action=args.action,
+            target=args.target,
+            project=args.project,
+            include_all=args.include_all,
+            names=args.name,
+            dry_run=args.dry_run,
+        )
     if command == "skill":
         return _skill(settings, args.name, args.prompt, args.model, args.tokens)
     if command == "memory":
@@ -3359,6 +3493,8 @@ def main(argv: list[str] | None = None) -> int:
             agent_client=args.agent_client,
             agent_timeout=args.agent_timeout,
             dry_run=args.dry_run,
+            mode=args.mode,
+            direct_tokens=args.direct_tokens,
         )
     if command == "pull-recommended":
         return _pull_recommended(settings)

@@ -79,12 +79,19 @@ so the project routes edits to Qwen Code rather than pretending otherwise.
 
 ### Login monitor (`tui/monitor.py`)
 
-- `on_mount` collects once, then refreshes every 5 s.
+- `on_mount` collects once, then refreshes every 5 s. `p` pauses the timer; `r`
+  or `F5` still refreshes once. `y` copies a text snapshot.
 - The refresh runs `status.collect()` and `monitor.collect_live()`; bank and
   project lookups are cached (30 s / 10 s) because the skill tree has >20k files.
+  A 60-sample in-memory ring buffer supplies the RAM/load/VRAM sparklines without
+  touching disk.
+- `monitor.assess()` turns memory, swap, disk, service, and resident-model facts
+  into an `ok`/`warn`/`critical` verdict with the reasons shown in the header.
 - There is no prompt input, no chat worker, and no guardian tick. `F9` unloads
   resident models on demand; `F2`/`F4`/`F6` suspend the monitor and hand the
   terminal to an agent client.
+- `sovereign monitor --json` calls the same collectors once and serialises
+  `LiveReport`; `--demo` uses the fixed report for screenshots and tests.
 - The monitor never writes to `skills.db`, `skills_index.db`, or `prompts.db`.
 
 ### Opt-in chat (`tui/app.py`, `sovereign chat`)

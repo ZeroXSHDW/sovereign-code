@@ -63,9 +63,21 @@ Footer {
     min-height: 4;
 }
 
-#help-panel {
+#hint-line {
+    margin: 1 2 0 2;
+}
+
+MonitorHelp {
+    align: center middle;
+    background: #000000 60%;
+}
+
+#help-dialog {
+    width: 74;
     height: auto;
-    margin: 1 2;
+    padding: 1 2;
+    border: round #7c5cff;
+    background: #101018;
 }
 
 #chat-scroll {

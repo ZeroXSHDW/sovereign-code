@@ -3575,6 +3575,10 @@ def _hf(args) -> int:
             return _hf_download(args, hub)
         if action == "list":
             return _hf_list(args, hub)
+        if action == "import":
+            return _hf_import(args, hub)
+        if action == "remove":
+            return _hf_remove(args, hub)
         raise hub.HFError(f"unknown action: {action}")
     except hub.HFError as exc:
         console.print(f"[red]Hugging Face:[/] {exc}")

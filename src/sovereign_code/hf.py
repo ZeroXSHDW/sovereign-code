@@ -958,6 +958,12 @@ def ollama_model_name(repo_id: str, gguf_path: Path | str) -> str:
     """Derive an Ollama-safe ``name:tag`` from a repository and file name."""
     base = str(repo_id).split("/")[-1]
     base = re.sub(r"[-_.]?gguf$", "", base, flags=re.IGNORECASE)
+    base = re.sub(
+        r"[-_.](?:iq|q)\d+(?:_[a-z0-9]+)*$",
+        "",
+        base,
+        flags=re.IGNORECASE,
+    )
     base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-_.")
     if not base:
         base = "hf-model"

@@ -244,7 +244,13 @@ def skill_bank() -> BankStats:
             conn.close()
 
     rows = [(name, _category(name), 0, 0) for name in sorted(files)]
-    size_mb = round(sum(path.stat().st_size for path in files.values()) / (1024 * 1024), 1)
+    total_bytes = 0
+    for path in files.values():
+        try:
+            total_bytes += path.stat().st_size
+        except OSError:
+            continue
+    size_mb = round(total_bytes / (1024 * 1024), 1)
     return _bank_from_rows(
         "skill bank",
         len(files),
@@ -412,7 +418,8 @@ def _running_agents(limit: int = 8) -> list[LiveProject]:
         low = command.lower()
         if "sovereign_code" in low or "ollama runner" in low:
             continue
-        if not any(marker in low for marker in _AGENT_MARKERS):
+        tokens = [Path(token).name for token in command.split()]
+        if not any(token.startswith(marker) for token in tokens for marker in _AGENT_MARKERS):
             continue
         path = _cwd_for(pid)
         if not path:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
+import getpass
 import html
+import json
 import os
 import re
 import shutil
@@ -4568,7 +4571,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skilldb.add_argument("name", nargs="?", default=None, help="skill name")
     skilldb.add_argument("--content", default=None, help="skill content (for add)")
-    skilldb.add_argument("--category", default="general", help="category (default: general)")
+    skilldb.add_argument("--category", default=None, help="category filter (default: no filter)")
     skilldb.add_argument("--tags", default="", help="comma-separated tags")
     skilldb.add_argument("--description", default="", help="one-line description")
     skilldb.add_argument("--rating", type=float, default=0.0, help="rating 0-5")
@@ -4692,7 +4695,7 @@ def _prompts(args) -> int:
                 p = db.add(
                     args.name,
                     args.content,
-                    category=args.category,
+                    category=args.category or "general",
                     tags=args.tags,
                     replace=args.replace,
                 )
@@ -4854,7 +4857,7 @@ def _skill_db(args) -> int:
                 s = db.add(
                     args.name,
                     args.content,
-                    category=args.category,
+                    category=args.category or "general",
                     tags=args.tags,
                     description=args.description,
                     rating=args.rating,

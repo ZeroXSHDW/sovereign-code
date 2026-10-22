@@ -21,10 +21,10 @@ import json
 import sqlite3
 import threading
 import time
+from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-
 from .config import DATA_DIR
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
@@ -63,8 +63,7 @@ class MemoryCache:
     def __init__(self, max_entries: int = 512, ttl: float = TTL_DEFAULT) -> None:
         self.max_entries = max_entries
         self.ttl = ttl
-        self._data: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._order: list[str] = []
+        self._data: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
@@ -78,21 +77,18 @@ class MemoryCache:
             expires, value = item
             if expires < time.monotonic():
                 self._data.pop(key, None)
-                self._order.remove(key) if key in self._order else None
                 self.misses += 1
                 return None
+            self._data.move_to_end(key)
             self.hits += 1
             return deepcopy(value)
 
     def put(self, key: str, value: dict[str, Any]) -> None:
         with self._lock:
             self._data[key] = (time.monotonic() + self.ttl, deepcopy(value))
-            if key in self._order:
-                self._order.remove(key)
-            self._order.append(key)
+            self._data.move_to_end(key)
             while len(self._data) > self.max_entries:
-                oldest = self._order.pop(0)
-                self._data.pop(oldest, None)
+                self._data.popitem(last=False)
 
     def stats(self) -> dict[str, int]:
         with self._lock:
@@ -107,8 +103,6 @@ class MemoryCache:
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
-            self._order.clear()
-
 
 class DiskCache:
     """SQLite-backed persistent cache.

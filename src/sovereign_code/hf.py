@@ -603,9 +603,10 @@ def search_models(
     needle = str(query or "").strip()
     if needle:
         params["search"] = needle
-    wanted = [str(item).strip() for item in (filters or []) if str(item).strip()]
+    wanted: list[str] = []
     if gguf_only:
         wanted.append("gguf")
+    wanted.extend(str(item).strip() for item in (filters or []) if str(item).strip())
     if wanted:
         params["filter"] = wanted
     if pipeline_tag and repo_type == "model":

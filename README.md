@@ -69,6 +69,7 @@ Everything the system owns lives in `~/Documents/local-ai`:
 | `F9` / `f` | unload every resident model (free RAM) |
 | `p` | pause or resume the 5-second refresh |
 | `y` | copy the current snapshot to the clipboard |
+| `?` | open the help overlay |
 | `Ctrl+Q` | quit |
 
 The monitor also shows a health verdict with the reasons behind it, five-minute
@@ -654,24 +655,49 @@ sovereign hf status                    # token, account, cache, download paths
 sovereign hf login                     # hidden prompt; stores the standard 0600 token
 pbpaste | sovereign hf login --token-stdin
 sovereign hf login --browser           # `hf auth login` OAuth flow
-sovereign hf search "qwen coder" --gguf --limit 10
-sovereign hf info Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --files
+
+sovereign hf search "qwen coder" --gguf --license apache-2.0 --limit 10
+sovereign hf search "ultrachat" --dataset --format parquet --limit 5
+sovereign hf info Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --files --readme
+sovereign hf info HuggingFaceH4/ultrachat_200k --dataset --files
+
 sovereign hf download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
   --include "*Q4_K_M.gguf"
-sovereign hf list                      # downloads + Hub cache, with sizes
+sovereign hf download HuggingFaceH4/ultrachat_200k --dataset \
+  --include "data/test_gen-*.parquet"
+
+sovereign hf import Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
+  --include "*Q4_K_M.gguf" --name qwen-coder:7b
+sovereign hf remove Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --yes
+sovereign hf list                      # models, datasets, and Hub cache
 ```
+
+Search the Hub for models or datasets with `--dataset`, then narrow results
+with `--filter TAG` (repeatable), `--license`, `--language`, `--format`, and
+`--pipeline`. `hf info` shows licence, languages, formats, task, base models,
+GGUF context, storage, and an optional README; `--json` is available on every
+read command.
 
 Downloads are file-selective by default; `--all` is required to take every
 file in a repository, and downloads over 20 GB ask for confirmation. The
-default destination is
-`~/Documents/local-ai/models/huggingface/<org>--<repo>`. Use `--local-dir` to
-change it, `--dry-run` to inspect the command, and `--revision` to pin a
-branch, tag, or commit. A GGUF can be imported into Ollama with
-`ollama create <name> -f <(printf 'FROM /path/model.gguf\n')`.
+default destinations are
+`~/Documents/local-ai/models/huggingface/<org>--<repo>` for models and
+`~/Documents/local-ai/datasets/huggingface/<org>--<repo>` for datasets. Use
+`--local-dir` to change it, `--exclude` to omit files, `--max-workers` to tune
+parallelism, `--dry-run` to inspect the command, and `--revision` to pin a
+branch, tag, or commit.
+
+`sovereign hf import` downloads one GGUF if necessary and registers it with
+Ollama using a generated Modelfile; `--context` sets `num_ctx`, and split GGUFs
+are rejected because Ollama needs a single file. `sovereign hf remove` deletes
+only that repository's local download and Hub cache paths, after showing the
+size and asking for confirmation unless `--yes` is passed.
 
 The token is never written to `config.toml` or printed. `HF_TOKEN` takes
 precedence over the saved file when it is exported. Gated repositories still
-require accepting their licence on the model page.
+require accepting their licence on the model page. MCP exposes discovery only:
+`hf_status`, `search_hf_models`, `hf_model_info`, `search_hf_datasets`,
+`hf_dataset_info`, and `list_hf_local`; downloads remain an explicit CLI action.
 
 ### Model selection
 
@@ -709,8 +735,11 @@ sovereign gateway-aliases          # show which aliases route to installed model
 sovereign rm <model>               # remove an installed model
 sovereign models --remote          # list downloadable models (--remote coder)
 sovereign hf status                # Hugging Face token, cache, and download paths
-sovereign hf search "qwen" --gguf  # search the Hub
+sovereign hf search "qwen" --gguf  # search models
+sovereign hf search DATA --dataset # search datasets
 sovereign hf download ORG/REPO --include "*.gguf"
+sovereign hf import ORG/REPO --include "*Q4_K_M.gguf" --name NAME
+sovereign hf remove ORG/REPO --yes # remove download + cache paths
 sovereign consult "…"      # run one prompt across several models
 sovereign skills           # prompt templates + installed counts
 sovereign skills install --target all       # SKILL.md in every client

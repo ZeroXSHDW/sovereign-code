@@ -50,9 +50,10 @@ F6        open Claude Code against the local gateway
 ?         this help
 Ctrl+Q    quit
 
-The monitor is read-only: no chat prompt, no model load, and no service
-restarts. Sparklines cover the last five minutes. For a chat turn run
-`sovereign chat`; for coding press F2 or run `sovereign code`.
+The monitor is read-only: no chat prompt, no model load, and no
+service restarts. Sparklines cover the last five minutes.
+For a chat turn run `sovereign chat`; for coding press F2 or
+run `sovereign code`.
 """
 
 

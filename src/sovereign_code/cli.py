@@ -5602,6 +5602,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to agent-connect.sh (default: scripts/agent-connect.sh)",
     )
 
+    # --- cache ------------------------------------------------------------
+    cache = sub.add_parser("cache", help="response cache: stats, clear, warm")
+    cache.add_argument("action", nargs="?", default="stats", choices=("stats", "clear"))
+    cache.add_argument("--older-than", type=float, default=None, help="clear entries older than seconds")
+
+    # --- warm -------------------------------------------------------------
+    warm = sub.add_parser("warm", help="model warm pool: status, load, touch, start, stop")
+    warm.add_argument("action", nargs="?", default="status", choices=("status", "load", "touch", "start", "stop"))
+    warm.add_argument("model", nargs="?", default=None, help="model tag to load/touch")
+
+    # --- knowledge --------------------------------------------------------
+    knowledge = sub.add_parser("knowledge", help=".md knowledge base: index, search, roots")
+    knowledge.add_argument("action", nargs="?", default="roots", choices=("roots", "index", "search"))
+    knowledge.add_argument("query", nargs="?", default=None, help="search words (for search) or root path (for index)")
+    knowledge.add_argument("--root", default=None, help="directory to index (for index)")
+    knowledge.add_argument("--model", default="nomic-embed-text", help="embedding model")
+    knowledge.add_argument("--top", type=int, default=10, help="top results (for search)")
+
     return parser
 
 
@@ -5969,14 +5987,11 @@ def _skill_db(args) -> int:
 
 
 def _gateway_config(args) -> int:
-    from .cloud import gateway_block
-
-    cloud_block = gateway_block()
     if args.show or args.write is False:
-        print(render_gateway_config(cloud_block))
+        print(render_gateway_config())
         return 0
     path = Path(args.path) if args.path else gateway_config_path()
-    written = write_gateway_config(cloud_block, path=path)
+    written = write_gateway_config(path=path)
     console.print(f"[green]Wrote[/] {written}")
     console.print(
         "[dim]Restart the LiteLLM gateway so it picks up the new model list: "
@@ -6033,10 +6048,10 @@ def main(argv: list[str] | None = None) -> int:
         from .monitor import collect_live
         from .tui.monitor import MonitorApp
 
-        if args.demo:
+        if getattr(args, "demo", False):
             MonitorApp(settings=settings, demo=True).run()
             return 0
-        if args.json:
+        if getattr(args, "json", False):
             snapshot = asyncio.run(collect(settings))
             report = collect_live(settings, snapshot)
             print(json.dumps(report.to_dict(), indent=2, default=str))
@@ -6372,6 +6387,12 @@ def main(argv: list[str] | None = None) -> int:
         return _gateway_config(args)
     if command == "connect":
         return _connect(args.script)
+    if command == "cache":
+        return _cache(args)
+    if command == "warm":
+        return _warm(args)
+    if command == "knowledge":
+        return _knowledge(args)
     parser.print_help()
     return 2
 

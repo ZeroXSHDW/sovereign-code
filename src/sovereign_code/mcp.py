@@ -109,6 +109,44 @@ TOOLS: list[dict[str, Any]] = [
         ["repo_id"],
     ),
     _tool(
+        "search_hf_datasets",
+        "Search Hugging Face Hub datasets. Results include licence, languages, "
+        "formats, task, and size metadata. A token adds private and gated datasets.",
+        {
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "default": 20},
+            "author": {"type": "string"},
+            "sort": {
+                "type": "string",
+                "enum": ["downloads", "likes", "last_modified", "created_at", "trending_score"],
+                "default": "downloads",
+            },
+        },
+        ["query"],
+    ),
+    _tool(
+        "hf_dataset_info",
+        "Inspect one Hugging Face dataset: gated status, storage, licence, "
+        "languages, formats, and files. Set files=true to list every file.",
+        {
+            "repo_id": {"type": "string"},
+            "files": {"type": "boolean", "default": False},
+        },
+        ["repo_id"],
+    ),
+    _tool(
+        "list_hf_local",
+        "List Hugging Face repositories already on this Mac: downloaded models, "
+        "downloaded datasets, and the shared Hub cache, with sizes and paths.",
+        {
+            "repo_type": {
+                "type": "string",
+                "enum": ["all", "model", "dataset"],
+                "default": "all",
+            }
+        },
+    ),
+    _tool(
         "project_context",
         "Return the saved project memory and a short file index for a directory.",
         {"path": {"type": "string"}},
@@ -239,11 +277,19 @@ def _hf_status_payload() -> dict[str, Any]:
     from . import hf
 
     status = hf.token_status(verify=False)
+    token_mode = ""
+    if status.present:
+        try:
+            token_mode = oct(status.path.stat().st_mode & 0o777)
+        except OSError:
+            token_mode = ""
     return {
         "token": status.to_dict(),
+        "token_mode": token_mode,
         "cli": {"path": hf.hf_cli_path() or "", "version": hf.hf_cli_version()},
         "cache_dir": str(hf.hub_cache_dir()),
         "download_dir": str(hf.DOWNLOAD_ROOT),
+        "dataset_dir": str(hf.DATASET_DOWNLOAD_ROOT),
     }
 
 
@@ -253,6 +299,7 @@ def _hf_search_payload(
     gguf_only: bool,
     author: str | None,
     sort: str,
+    repo_type: str = "model",
 ) -> list[dict[str, Any]]:
     from . import hf
 
@@ -263,15 +310,31 @@ def _hf_search_payload(
         author=author,
         sort=sort,
         token=hf.resolve_token()[0] or None,
+        repo_type=repo_type,
     )
     return [row.to_dict() for row in rows]
 
 
-def _hf_info_payload(repo_id: str, include_files: bool) -> dict[str, Any]:
+def _hf_info_payload(
+    repo_id: str,
+    include_files: bool,
+    repo_type: str = "model",
+) -> dict[str, Any]:
     from . import hf
 
-    info = hf.info_model(repo_id, token=hf.resolve_token()[0] or None)
+    info = hf.info_model(
+        repo_id,
+        token=hf.resolve_token()[0] or None,
+        repo_type=repo_type,
+    )
     return info.to_dict(include_files=include_files)
+
+
+def _hf_local_payload(repo_type: str = "all") -> list[dict[str, Any]]:
+    from . import hf
+
+    kind = None if repo_type in {"", "all"} else repo_type
+    return [row.to_dict() for row in hf.local_repos(kind)]
 
 
 def _models_payload() -> dict[str, Any]:
@@ -610,6 +673,27 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 bool(args.get("files", False)),
             )
         )
+    if name == "search_hf_datasets":
+        return _text(
+            _hf_search_payload(
+                str(args.get("query") or ""),
+                int(args.get("limit") or 20),
+                False,
+                str(args.get("author") or "") or None,
+                str(args.get("sort") or "downloads"),
+                "dataset",
+            )
+        )
+    if name == "hf_dataset_info":
+        return _text(
+            _hf_info_payload(
+                str(args.get("repo_id") or ""),
+                bool(args.get("files", False)),
+                "dataset",
+            )
+        )
+    if name == "list_hf_local":
+        return _text(_hf_local_payload(str(args.get("repo_type") or "all")))
     if name == "project_context":
         return _project_context(str(args.get("path") or "."))
     if name == "local_status":
@@ -739,9 +823,11 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "list_skills/get_skill for workflows, run_checks to verify, and "
                     "delegate to run a real local Codex/Claude agent on a project "
                     "(read-only unless write=true). Browser control is available via "
-                    "browser_open/observe/act/screenshot/close. Use hf_status and "
-                    "search_hf_models/hf_model_info to discover Hugging Face models; "
-                    "downloads are an explicit CLI action (`sovereign hf download`). "
+                    "browser_open/observe/act/screenshot/close. Use hf_status, "
+                    "search_hf_models/hf_model_info, and search_hf_datasets/"
+                    "hf_dataset_info to discover Hugging Face repositories; use "
+                    "list_hf_local to see what is already cached. Downloads are an "
+                    "explicit CLI action (`sovereign hf download`). "
                     "Do not claim a local model ran if ask fails."
                 ),
             }

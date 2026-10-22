@@ -26,6 +26,9 @@ def test_initialize_and_tools_list() -> None:
         "hf_status",
         "search_hf_models",
         "hf_model_info",
+        "search_hf_datasets",
+        "hf_dataset_info",
+        "list_hf_local",
         "ask",
         "delegate",
         "browser_open",
@@ -67,6 +70,17 @@ def test_get_skill_body_and_unknown_skill() -> None:
         }
     )
     assert "error" in error
+
+
+def test_hf_local_tool_returns_repository_rows() -> None:
+    response = _result(
+        "tools/call",
+        {"name": "list_hf_local", "arguments": {"repo_type": "all"}},
+    )
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert isinstance(payload, list)
+    for row in payload:
+        assert {"repo_id", "repo_type", "path", "kind"} <= set(row)
 
 
 def test_resources_and_prompts() -> None:

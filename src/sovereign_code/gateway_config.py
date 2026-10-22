@@ -287,7 +287,7 @@ def _direct_model_entries() -> list[ModelEntry]:
     return entries
 
 
-def render() -> str:
+def render(cloud_block: str | None = None) -> str:
     """Render the local-only model_list YAML document."""
     lines: list[str] = [
         BLOCK_START,
@@ -304,6 +304,8 @@ def render() -> str:
         lines.append(f"      api_base: {entry.api_base}")
         if entry.num_ctx:
             lines.append(f"      num_ctx: {entry.num_ctx}")
+    if cloud_block:
+        lines.append(cloud_block.rstrip("\n"))
     lines.append(f"  {BLOCK_END}")
     return "\n".join(lines) + "\n"
 

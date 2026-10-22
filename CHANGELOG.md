@@ -6,11 +6,15 @@ All notable changes to Sovereign Code.
 
 ### Added
 - **Hugging Face Hub integration** (`sovereign hf`): secure token login in the
-  standard `~/.cache/huggingface/token` (mode 0600), public/private model
-  search, repository inspection with GGUF metadata and file sizes, and
-  file-selective, resumable downloads through the `hf` CLI. MCP adds
-  `hf_status`, `search_hf_models`, and `hf_model_info`; the `sovereign-huggingface`
-  skill documents the workflow and the on-disk layout.
+  standard `~/.cache/huggingface/token` (mode 0600); model and dataset search
+  with licence/language/format/pipeline filters; repository inspection with
+  README, GGUF metadata, licence, languages, formats, base models, and file
+  sizes; file-selective, resumable downloads through the `hf` CLI; one-step
+  `hf import` into Ollama with a generated Modelfile; and `hf remove` for
+  download/cache cleanup. MCP adds `hf_status`, `search_hf_models`,
+  `hf_model_info`, `search_hf_datasets`, `hf_dataset_info`, and `list_hf_local`.
+  The `sovereign-huggingface` skill documents the workflow, datasets, Ollama
+  import, cleanup, and the on-disk layout.
 - **Live monitor v2**: a health verdict with reasons, five-minute RAM/load/VRAM
   sparklines, model inventory with resident and potential-free memory, aggregate
   gateway throughput (tokens, p50/p95 latency, tool calls, streams, requests per

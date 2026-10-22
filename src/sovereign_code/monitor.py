@@ -424,6 +424,11 @@ def _running_agents(limit: int = 8) -> list[LiveProject]:
         path = _cwd_for(pid)
         if not path:
             continue
+        # GUI helpers and shell daemons sit in the home folder or in
+        # /Applications; they are not a project using a model.
+        home = str(Path.home().resolve())
+        if path in {home, "/"} or path.startswith("/Applications"):
+            continue
         found.append(
             LiveProject(
                 name=Path(path).name or path,

@@ -531,7 +531,7 @@ def retire_services() -> list[tuple[str, str]]:
 
 def repair_services(settings: Settings | None = None) -> list[tuple[str, str]]:
     """Rewrite the plists and reload the jobs."""
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str]] = retire_services()
     for service in service_definitions(settings):
         write_plist(service)
         if load_service(service):

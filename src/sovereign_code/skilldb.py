@@ -411,7 +411,8 @@ class SkillDB:
                         self._conn.execute(
                             "UPDATE skills SET content = ?, description = ?, tags = ?, "
                             "category = ?, source = ?, installed = 1, updated_at = ? "
-                            "WHERE name = ? ORDER BY version DESC LIMIT 1",
+                            "WHERE id = (SELECT id FROM skills WHERE name = ? "
+                            "ORDER BY version DESC LIMIT 1)",
                             (text, description, tags, category, source, _now(), name),
                         )
                         self._conn.commit()

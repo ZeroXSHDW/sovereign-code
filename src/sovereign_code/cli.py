@@ -104,7 +104,7 @@ from .sessions import (
 )
 from .skilldb import SkillDB
 from .skills import list_skills, read_skill, render_skill
-from .stats import collect_stats, human_size
+from .stats import collect_stats, dir_size, human_size
 from .status import Snapshot, collect
 from .summarize import SourceError, complete, read_text_source, summarize_text
 from .system import (
@@ -3489,6 +3489,363 @@ def _domains(detect: str | None = None) -> int:
         )
     console.print(table)
     console.print("[dim]sovereign consult '…' [--domain KEY][/]")
+    return 0
+
+
+def _hf(args) -> int:
+    from . import hf as hub
+
+    action = args.action or "status"
+    try:
+        if action == "status":
+            return _hf_status(args, hub)
+        if action == "login":
+            return _hf_login(args, hub)
+        if action == "logout":
+            return _hf_logout(hub)
+        if action == "search":
+            return _hf_search(args, hub)
+        if action == "info":
+            return _hf_info(args, hub)
+        if action == "download":
+            return _hf_download(args, hub)
+        if action == "list":
+            return _hf_list(args, hub)
+        raise hub.HFError(f"unknown action: {action}")
+    except hub.HFError as exc:
+        console.print(f"[red]Hugging Face:[/] {exc}")
+        return 1
+
+
+def _hf_status(args, hub) -> int:
+    from .system import disk_free_gb
+
+    status = hub.token_status(verify=not args.no_verify)
+    cache = hub.hub_cache_dir()
+    downloads = hub.DOWNLOAD_ROOT
+    cache_bytes = dir_size(cache) if cache.is_dir() else 0
+    download_bytes = dir_size(downloads) if downloads.is_dir() else 0
+    payload = {
+        "token": status.to_dict(),
+        "cli": {"path": hub.hf_cli_path() or "", "version": hub.hf_cli_version()},
+        "cache_dir": str(cache),
+        "cache_bytes": cache_bytes,
+        "download_dir": str(downloads),
+        "download_bytes": download_bytes,
+        "disk_free_gb": disk_free_gb(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+
+    table = Table(title="Hugging Face Hub", header_style="bold #b794f4", box=None)
+    table.add_column("Setting", style="bold #8a8aa0")
+    table.add_column("Value")
+    if status.present:
+        source = (
+            f"environment ({status.source})"
+            if status.source in hub.TOKEN_ENV_VARS
+            else "token file"
+        )
+        state = "verified" if status.verified else "found (not verified)"
+        if status.account:
+            state += f" · {status.account}"
+        if status.error:
+            state = f"[red]{status.error}[/]"
+        table.add_row("Token", f"{state} · {source}")
+    else:
+        table.add_row("Token", "[yellow]not logged in[/]")
+    table.add_row("Token file", str(status.path))
+    cli_version = hub.hf_cli_version()
+    table.add_row(
+        "HF CLI",
+        f"{hub.hf_cli_path() or '[red]not installed[/]'}"
+        + (f" · {cli_version}" if cli_version else ""),
+    )
+    table.add_row("Hub cache", f"{cache} · {human_size(cache_bytes)}")
+    table.add_row("Downloads", f"{downloads} · {human_size(download_bytes)}")
+    table.add_row("Disk free", f"{disk_free_gb():.1f} GB")
+    console.print(table)
+    if not status.present:
+        console.print("[dim]Public search works without a token. Log in for gated/private models:[/]")
+        console.print("  sovereign hf login")
+    elif status.error:
+        console.print("[dim]Replace the token with:[/] sovereign hf login")
+    return 0
+
+
+def _hf_login(args, hub) -> int:
+    if args.browser:
+        executable = hub.hf_cli_path()
+        if not executable:
+            raise hub.HFError("the `hf` CLI is not installed; run `brew install hf`")
+        result = subprocess.run([executable, "auth", "login"], check=False)
+        return int(result.returncode)
+
+    if args.token_stdin:
+        token = sys.stdin.read()
+    else:
+        if not sys.stdin.isatty():
+            raise hub.HFError(
+                "no terminal for a hidden prompt; pipe a token with "
+                "`pbpaste | sovereign hf login --token-stdin`"
+            )
+        token = getpass.getpass("Hugging Face token (hidden, not echoed): ")
+    status = hub.save_token(token, verify=not args.no_verify)
+    if status.verified:
+        console.print(
+            f"[green]Logged in[/] as {status.account or 'Hugging Face account'}"
+        )
+    else:
+        console.print("[green]Token saved[/] (not verified)")
+    console.print(f"[dim]Stored in[/] {status.path} [dim]mode 0600[/]")
+    env_name = next((name for name in hub.TOKEN_ENV_VARS if os.environ.get(name)), "")
+    if env_name:
+        console.print(
+            f"[yellow]Note:[/] {env_name} is set and takes precedence over the saved token."
+        )
+    return 0
+
+
+def _hf_logout(hub) -> int:
+    removed = hub.forget_token()
+    if removed:
+        console.print("[green]Removed[/] the stored Hugging Face token.")
+    else:
+        console.print("[dim]No stored Hugging Face token.[/]")
+    env_name = next((name for name in hub.TOKEN_ENV_VARS if os.environ.get(name)), "")
+    if env_name:
+        console.print(
+            f"[yellow]Note:[/] {env_name} is still set in the environment and remains active."
+        )
+    return 0
+
+
+def _hf_search(args, hub) -> int:
+    query = args.target or ""
+    if not query.strip():
+        raise hub.HFError("usage: sovereign hf search <words> [--gguf]")
+    token = hub.resolve_token()[0]
+    rows = hub.search_models(
+        query,
+        limit=args.limit,
+        gguf_only=args.gguf,
+        author=args.author,
+        sort=args.sort,
+        token=token or None,
+    )
+    if args.json:
+        print(json.dumps([row.to_dict() for row in rows], indent=2, default=str))
+        return 0
+    if not rows:
+        console.print(f"[yellow]No models match[/] {query!r}")
+        return 1
+    table = Table(title=f"Hugging Face models · {query!r}", header_style="bold #b794f4")
+    table.add_column("Model", style="bold")
+    table.add_column("Downloads", justify="right")
+    table.add_column("Likes", justify="right")
+    table.add_column("Updated")
+    table.add_column("Tags", overflow="fold")
+    for row in rows:
+        name = row.id + (f" [magenta]· {row.gated}[/]" if row.gated else "")
+        tags = ", ".join(tag for tag in row.tags if tag in {"gguf", "mlx", "safetensors"})
+        if row.pipeline_tag and row.pipeline_tag not in tags:
+            tags = f"{row.pipeline_tag}{', ' + tags if tags else ''}"
+        table.add_row(
+            name,
+            f"{row.downloads:,}",
+            f"{row.likes:,}",
+            row.updated or "-",
+            tags[:90] or "-",
+        )
+    console.print(table)
+    console.print("[dim]Inspect with:[/] sovereign hf info <org/model>")
+    return 0
+
+
+def _hf_info(args, hub) -> int:
+    repo = args.target or ""
+    if not repo:
+        raise hub.HFError("usage: sovereign hf info <org/model>")
+    info = hub.info_model(repo, token=hub.resolve_token()[0] or None)
+    if args.json:
+        print(json.dumps(info.to_dict(), indent=2, default=str))
+        return 0
+
+    table = Table(title=f"Hugging Face · {info.id}", header_style="bold #b794f4", box=None)
+    table.add_column("Field", style="bold #8a8aa0")
+    table.add_column("Value")
+    table.add_row("Downloads", f"{info.downloads:,}")
+    table.add_row("Likes", f"{info.likes:,}")
+    table.add_row("Pipeline", info.pipeline_tag or "-")
+    table.add_row("Updated", info.updated or "-")
+    if info.gated:
+        table.add_row("Gated", info.gated)
+    if info.private:
+        table.add_row("Private", "yes")
+    table.add_row("Repository storage", human_size(info.used_storage or info.total_file_size))
+    if info.gguf:
+        context = info.gguf.get("context_length")
+        architecture = info.gguf.get("architecture")
+        if context:
+            table.add_row("GGUF context", f"{int(context):,} tokens")
+        if architecture:
+            table.add_row("GGUF architecture", str(architecture))
+    console.print(table)
+
+    if info.gguf_files:
+        _hf_file_table("GGUF files", info.gguf_files, limit=None if args.files else 20)
+    else:
+        files = sorted(info.files, key=lambda item: item.size, reverse=True)
+        _hf_file_table(
+            "Files" if args.files else "Largest files",
+            files,
+            limit=None if args.files else 15,
+        )
+    console.print(
+        "[dim]Download a subset:[/] sovereign hf download "
+        f"{info.id} --include \"*Q4_K_M.gguf\""
+    )
+    return 0
+
+
+def _hf_file_table(title: str, files, limit: int | None = 15) -> None:
+    rows = list(files)
+    if limit is not None:
+        rows = rows[:limit]
+    if not rows:
+        return
+    table = Table(title=title, header_style="bold #b794f4")
+    table.add_column("File", overflow="fold")
+    table.add_column("Size", justify="right")
+    for item in rows:
+        table.add_row(item.path, human_size(item.size) if item.size else "-")
+    console.print(table)
+    if limit is not None and len(files) > limit:
+        console.print(f"[dim]… {len(files) - limit} more files; use --files to list all.[/]")
+
+
+def _hf_selected_files(info, patterns: list[str], all_files: bool):
+    if all_files:
+        return list(info.files)
+    return [
+        item
+        for item in info.files
+        if any(fnmatch.fnmatch(item.path, pattern) for pattern in patterns)
+    ]
+
+
+def _hf_download(args, hub) -> int:
+    import shlex
+
+    repo = args.target or ""
+    if not repo:
+        raise hub.HFError("usage: sovereign hf download <org/model> --include PATTERN")
+    token = hub.resolve_token()[0] or None
+    info = None
+    try:
+        info = hub.info_model(repo, token=token)
+    except hub.HFError as exc:
+        if not args.include and not args.download_all:
+            raise
+        console.print(f"[yellow]Could not inspect the repository first:[/] {exc}")
+
+    if not args.include and not args.download_all:
+        if info is not None:
+            if info.gguf_files:
+                _hf_file_table("GGUF files", info.gguf_files, limit=None)
+            else:
+                _hf_file_table("Files", info.files, limit=30)
+        console.print(
+            "[yellow]Pick files explicitly.[/] Add --include PATTERN (repeatable) "
+            "or --all for the whole repository."
+        )
+        console.print(
+            "[dim]Example:[/] sovereign hf download "
+            f"{repo} --include \"*Q4_K_M.gguf\""
+        )
+        return 1
+
+    selected = _hf_selected_files(info, args.include, args.download_all) if info else []
+    if info is not None and not selected:
+        raise hub.HFError("no files matched the include patterns; check `sovereign hf info`")
+    total = sum(item.size for item in selected)
+    if info is not None:
+        console.print(
+            f"[dim]Selected[/] {len(selected)} file(s), {human_size(total)}"
+        )
+        if total > 20 * 1024**3 and not args.yes:
+            if not sys.stdin.isatty():
+                raise hub.HFError("large download; re-run with --yes to confirm")
+            answer = input(f"Download {human_size(total)}? [y/N] ").strip().lower()
+            if answer not in {"y", "yes"}:
+                console.print("[dim]Cancelled.[/]")
+                return 1
+
+    destination = (
+        Path(args.local_dir).expanduser()
+        if args.local_dir
+        else hub.default_download_dir(repo)
+    )
+    command = hub.build_download_command(
+        repo,
+        include=args.include,
+        all_files=args.download_all,
+        revision=args.revision,
+        local_dir=destination,
+        cache_dir=args.cache_dir,
+        dry_run=args.dry_run,
+    )
+    console.print(f"[bold]Hugging Face[/] {repo}")
+    console.print(f"[dim]Destination:[/] {destination}")
+    console.print(f"[dim]Command:[/] {shlex.join(command)}")
+    if args.dry_run:
+        console.print("[dim]Dry run: nothing was downloaded.[/]")
+        return 0
+    destination, command = hub.download_model(
+        repo,
+        include=args.include,
+        all_files=args.download_all,
+        revision=args.revision,
+        local_dir=destination,
+        cache_dir=args.cache_dir,
+        dry_run=False,
+        token=token,
+    )
+    console.print(f"[green]Downloaded[/] {repo} → {destination}")
+    if info is not None and info.gguf_files:
+        console.print(
+            "[dim]Import a GGUF into Ollama with:[/] "
+            f"ollama create <name> -f <(printf 'FROM {destination}/<file>.gguf\\n')"
+        )
+    return 0
+
+
+def _hf_list(args, hub) -> int:
+    rows = hub.local_models()
+    if args.json:
+        print(json.dumps([row.to_dict() for row in rows], indent=2, default=str))
+        return 0
+    if not rows:
+        console.print("[dim]No Hugging Face downloads or cache entries.[/]")
+        return 0
+    table = Table(title="Local Hugging Face models", header_style="bold #b794f4")
+    table.add_column("Kind")
+    table.add_column("Repository", style="bold")
+    table.add_column("Size", justify="right")
+    table.add_column("Modified")
+    table.add_column("Path", overflow="fold")
+    for row in rows:
+        table.add_row(
+            row.kind,
+            row.repo_id,
+            human_size(row.bytes),
+            row.modified or "-",
+            str(row.path),
+        )
+    console.print(table)
+    console.print(f"[dim]{len(rows)} entr{'y' if len(rows) == 1 else 'ies'} · "
+                  f"total {human_size(sum(row.bytes for row in rows))}[/]")
     return 0
 
 

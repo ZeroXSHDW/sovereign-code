@@ -33,9 +33,7 @@ os.environ["SOVEREIGN_DATA_DIR"] = str(_SESSION_ROOT / "home" / "data")
 
 # The project root still points at the checkout, so the skills corpus and
 # the docs are found; only the writable state is redirected.
-os.environ.setdefault(
-    "SOVEREIGN_PROJECT_ROOT", str(Path(__file__).resolve().parents[1])
-)
+os.environ.setdefault("SOVEREIGN_PROJECT_ROOT", str(Path(__file__).resolve().parents[1]))
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:

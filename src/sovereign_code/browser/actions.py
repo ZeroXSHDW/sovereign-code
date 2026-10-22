@@ -37,18 +37,33 @@ ACTION_KINDS = {
     "done",
 }
 
+# Curated list of labels that name an action the user cannot take back, or
+# that commits them to something: spending money, sending data, destroying an
+# account, or confirming a dialog whose contents the model never read.
+# The list errs towards asking, because a confirmation prompt is cheap while
+# an unwanted purchase, message, or deletion is not.
 DESTRUCTIVE = re.compile(
     r"\b(buy|purchase|pay|checkout|order|delete|remove|send|submit|confirm|"
     r"subscribe|unsubscribe|transfer|withdraw|book|reserve|accept|agree|post|"
-    r"publish|delete account|close account)\b",
+    r"publish|revoke|reset|terminate|uninstall|destroy|drop|cancel|continue|"
+    r"upgrade|apply|yes|delete account|close account|sign out)\b",
     re.IGNORECASE,
 )
+
+# A bare "OK" confirms whatever dialog happens to be open, so it counts as
+# destructive on its own. It is kept out of the word list above because the
+# letters "ok" also show up inside harmless labels such as "OK Google".
+OK_LABEL = re.compile(r"^ok[\s.!?]*$", re.IGNORECASE)
+
+# Keys that can activate the control the browser is on: Enter submits the
+# form around the focused field, Space presses the focused button.
+SUBMIT_KEYS = frozenset({"Enter", "Space"})
 
 PRIVATE_HOSTS = {
     "localhost",
     "localhost.localdomain",
     "127.0.0.1",
-    "0.0.0.0",
+    "0.0.0.0",  # noqa: S104 - listed so it is treated as a private address
     "::1",
 }
 
@@ -230,4 +245,37 @@ def check_url(url: str, policy: BrowserPolicy, base: str | None = None) -> str:
 
 
 def is_destructive(text: str) -> bool:
-    return bool(DESTRUCTIVE.search(text or ""))
+    """True when a visible label names an irreversible or committing action."""
+    label = (text or "").strip()
+    if not label:
+        return False
+    return bool(OK_LABEL.match(label) or DESTRUCTIVE.search(label))
+
+
+def is_submit_control(tag: str, control_type: str = "") -> bool:
+    """True when a control can submit the form it belongs to.
+
+    A bare ``<button>`` defaults to ``type="submit"``, so an icon-only
+    button inside a form submits it just as a labelled one would.
+    """
+    tag = (tag or "").strip().lower()
+    control_type = (control_type or "").strip().lower()
+    if tag == "button":
+        return control_type in {"", "submit"}
+    if tag == "input":
+        return control_type in {"submit", "image"}
+    return False
+
+
+def needs_confirmation(label: str, tag: str = "", control_type: str = "") -> bool:
+    """True when a click on this control has to be confirmed by the user.
+
+    A control with a readable label is destructive when that label names an
+    irreversible action. A control without a label (an icon-only button) is
+    destructive when it can submit a form, because the label is exactly the
+    thing the model cannot read.
+    """
+    text = (label or "").strip()
+    if text:
+        return is_destructive(text)
+    return is_submit_control(tag, control_type)

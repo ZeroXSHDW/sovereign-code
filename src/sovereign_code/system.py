@@ -7,6 +7,7 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
@@ -174,8 +175,25 @@ def listening_addresses(port: int) -> list[str]:
     points at loopback, so "loopback only" has to be checked against the
     socket, not the config.
 
+    The answer is cached for a few seconds: the dashboard asks several times
+    a minute, and each answer costs an ``lsof`` subprocess.
+
     Returns an empty list when nothing is listening or the probe fails.
     """
+    cached = _LISTENING_CACHE.get(port)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < LISTENING_CACHE_SECONDS:
+        return cached[1]
+    addresses = _probe_listening(port)
+    _LISTENING_CACHE[port] = (now, addresses)
+    return addresses
+
+
+_LISTENING_CACHE: dict[int, tuple[float, list[str]]] = {}
+LISTENING_CACHE_SECONDS = 5.0
+
+
+def _probe_listening(port: int) -> list[str]:
     if os.uname().sysname != "Darwin":
         return []
     try:

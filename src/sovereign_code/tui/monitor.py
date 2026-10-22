@@ -492,7 +492,7 @@ class MonitorApp(App[None]):
         self._render_status()
         try:
             with self.suspend():
-                subprocess.call(plan.argv, cwd=str(plan.cwd), env=plan.env)
+                await asyncio.to_thread(subprocess.call, plan.argv, cwd=str(plan.cwd), env=plan.env)
         finally:
             await self.refresh_all()
 

@@ -7,8 +7,16 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .actions import Action, BrowserPolicy, check_url, is_destructive
+from .actions import (
+    SUBMIT_KEYS,
+    Action,
+    BrowserPolicy,
+    PolicyError,
+    check_url,
+    needs_confirmation,
+)
 
 CAPTCHA_MARKERS = (
     "captcha",
@@ -23,11 +31,21 @@ CAPTCHA_MARKERS = (
     "challenge-platform",
 )
 
-SENSITIVE = re.compile(
-    r"password|passcode|otp|one-time|cvv|cvc|card.?number|iban|ssn", re.IGNORECASE
+# One pattern drives both the observation JavaScript and the fill refusal, so
+# the two can never drift apart. The terms name the fields that carry a
+# one-time secret or payment data; they are matched with lookarounds rather
+# than ``\b`` so that an underscore still separates words ("otp_code").
+SENSITIVE_PATTERN = (
+    r"password|pass[-_ ]?phrase|pass[-_ ]?code|one[-_ ]?time|"
+    r"(?<![a-z0-9])otp(?![a-z0-9])|(?<![a-z0-9])pin(?![a-z0-9])|"
+    r"(?<![a-z0-9])cvv(?![a-z0-9])|(?<![a-z0-9])cvc(?![a-z0-9])|"
+    r"(?<![a-z0-9])card(?![a-z0-9])|card[-_ ]?number|"
+    r"(?<![a-z0-9])iban(?![a-z0-9])|(?<![a-z0-9])ssn(?![a-z0-9])|"
+    r"security[-_ ]?code|verification[-_ ]?code"
 )
+SENSITIVE = re.compile(SENSITIVE_PATTERN, re.IGNORECASE)
 
-OBSERVE_JS = """
+_OBSERVE_JS_TEMPLATE = """
 () => {
   document.querySelectorAll('[data-sovereign-id]').forEach(
     (el) => el.removeAttribute('data-sovereign-id')
@@ -46,6 +64,7 @@ OBSERVE_JS = """
     );
   }).slice(0, 60);
   visible.forEach((el, i) => el.setAttribute('data-sovereign-id', String(i)));
+  const sensitivePattern = /__SENSITIVE__/i;
   const elements = visible.map((el, i) => {
     const type = (el.getAttribute('type') || '').toLowerCase();
     const tag = el.tagName.toLowerCase();
@@ -54,13 +73,21 @@ OBSERVE_JS = """
       el.name,
       el.id,
       el.getAttribute('autocomplete'),
-      el.getAttribute('placeholder'),
+      el.getAttribute('placeholder')
     ].join(' ');
-    const name = (
+    // A secret field holds a password, a one-time code, or card data. It is
+    // flagged so the agent refuses to fill it, and its value is never read
+    // out: the observation goes straight to the planner model.
+    const sensitive = sensitivePattern.test(blob);
+    const label = (
       el.getAttribute('aria-label') ||
       el.getAttribute('placeholder') ||
       el.innerText ||
-      el.value ||
+      ''
+    );
+    const name = (
+      label ||
+      (sensitive ? '' : String(el.value || '')) ||
       el.getAttribute('name') ||
       el.id ||
       ''
@@ -71,12 +98,10 @@ OBSERVE_JS = """
       type: type || null,
       role: el.getAttribute('role') || null,
       name: name,
-      value: type === 'password' ? '' : String(el.value || '').slice(0, 80),
+      value: sensitive ? '' : String(el.value || '').slice(0, 80),
       href: tag === 'a' ? String(el.href || '').slice(0, 200) : null,
       disabled: Boolean(el.disabled),
-      sensitive:
-        type === 'password' ||
-        /password|passcode|otp|one-time|cvv|cvc|card.?number|iban|ssn/i.test(blob),
+      sensitive: sensitive
     };
   });
   const bodyText = document.body ? document.body.innerText : '';
@@ -84,7 +109,76 @@ OBSERVE_JS = """
     url: location.href,
     title: document.title,
     text: bodyText.slice(0, 4000),
-    elements: elements,
+    elements: elements
+  };
+}
+"""
+
+# The pattern is injected so the page and the harness agree on what a secret
+# field is; a stale copy here would leak a value the harness refuses to fill.
+OBSERVE_JS = _OBSERVE_JS_TEMPLATE.replace("__SENSITIVE__", SENSITIVE_PATTERN)
+
+_PRESS_RISK_JS_TEMPLATE = """
+() => {
+  const sensitivePattern = /__SENSITIVE__/i;
+  const isSubmitControl = (el) => {
+    if (!el || !el.tagName) {
+      return false;
+    }
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'button') {
+      return type === '' || type === 'submit';
+    }
+    if (tag === 'input') {
+      return type === 'submit' || type === 'image';
+    }
+    return false;
+  };
+  const focusedSubmit = isSubmitControl(document.activeElement);
+  const forms = Array.from(document.forms || []);
+  for (const form of forms) {
+    const fields = Array.from(form.querySelectorAll('input, textarea'));
+    for (const field of fields) {
+      const blob = [
+        field.getAttribute('type') || '',
+        field.name || '',
+        field.id || '',
+        field.getAttribute('autocomplete') || '',
+        field.getAttribute('placeholder') || ''
+      ].join(' ');
+      if (!sensitivePattern.test(blob)) {
+        continue;
+      }
+      // The value is still sitting in the form, so the form has not been
+      // submitted yet and pressing Enter would send the secret.
+      if (String(field.value || '').length > 0) {
+        return {credential: true, focusedSubmit: focusedSubmit};
+      }
+    }
+  }
+  return {credential: false, focusedSubmit: focusedSubmit};
+}
+"""
+
+PRESS_RISK_JS = _PRESS_RISK_JS_TEMPLATE.replace("__SENSITIVE__", SENSITIVE_PATTERN)
+
+_CONTROL_INFO_JS = """
+(el) => {
+  const tag = (el.tagName || '').toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const text = (el.innerText || '').trim();
+  const label = (
+    text ||
+    el.getAttribute('aria-label') ||
+    el.getAttribute('value') ||
+    el.getAttribute('title') ||
+    ''
+  );
+  return {
+    tag: tag,
+    type: type,
+    label: label.replace(/\\s+/g, ' ').trim().slice(0, 120)
   };
 }
 """
@@ -138,6 +232,8 @@ class BrowserSession:
         self._playwright = None
         self.context = None
         self.page = None
+        self._blocked_url: str | None = None
+        self._last_allowed_url: str | None = None
 
     def __enter__(self) -> BrowserSession:
         return self
@@ -164,21 +260,112 @@ class BrowserSession:
             )
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_timeout(self.timeout_ms)
+            self._install_policy_guard()
             if url:
                 self.goto(url)
         except Exception:
             self.close()
             raise
 
+    def _install_policy_guard(self) -> None:
+        """Abort top-level navigations that would leave the policy.
+
+        Checking the URL after the fact is too late: the request already told
+        the off-policy host that the visit happened. Aborting the request is
+        what actually keeps the browsing inside the allowlist.
+        """
+        if self.context is None:
+            return
+
+        def guard(route, request=None) -> None:
+            target = ""
+            try:
+                req = request if request is not None else route.request
+                target = str(req.url)
+                if self._is_main_frame_navigation(req):
+                    check_url(target, self.policy)
+            except PolicyError:
+                self._blocked_url = target or None
+                try:
+                    route.abort()
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
+            try:
+                route.continue_()
+            except Exception:
+                pass
+
+        try:
+            self.context.route("**/*", guard)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_main_frame_navigation(request) -> bool:
+        """True for a top-level page load, false for a frame or a subresource."""
+        try:
+            if not request.is_navigation_request():
+                return False
+            frame = request.frame
+        except Exception:
+            return False
+        try:
+            return frame.parent_frame is None
+        except Exception:
+            return True
+
+    def _failure(self, message: str, exc: Exception) -> Exception:
+        """Turn a Playwright error into a policy error when policy blocked it."""
+        if self._blocked_url:
+            blocked = self._blocked_url
+            self._blocked_url = None
+            return PolicyError(f"navigation to {blocked} was blocked by the policy")
+        return BrowserError(f"{message}: {exc}")
+
+    def _enforce_policy(self, url: str) -> str:
+        """Re-check the URL the browser actually reached against the policy.
+
+        The allowlist has to hold for the final URL: a redirect, a link, or a
+        form submission all end up somewhere the model never chose.
+        """
+        if self._blocked_url:
+            blocked = self._blocked_url
+            self._blocked_url = None
+            raise PolicyError(f"navigation to {blocked} was blocked by the policy")
+        try:
+            checked = check_url(url, self.policy)
+        except PolicyError:
+            self._restore_last_allowed()
+            raise
+        self._last_allowed_url = checked
+        return checked
+
+    def _restore_last_allowed(self) -> None:
+        """Best effort: go back to the last page that was inside the policy."""
+        target = self._last_allowed_url
+        if not target or self.page is None:
+            return
+        try:
+            self.page.goto(target, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            self.page.wait_for_timeout(200)
+        except Exception:
+            pass
+
     def goto(self, url: str, base: str | None = None) -> str:
+        """Navigate to a URL, then re-check the policy on the page we land on."""
         if self.page is None:
             raise BrowserError("browser is not running")
         target = check_url(url, self.policy, base=base or self.page.url)
+        self._blocked_url = None
         try:
             self.page.goto(target, wait_until="domcontentloaded", timeout=self.timeout_ms)
         except Exception as exc:  # Playwright's error types vary by version
-            raise BrowserError(f"navigation failed: {exc}") from exc
+            raise self._failure("navigation failed", exc) from exc
         self.page.wait_for_timeout(400)
+        self._enforce_policy(self.page.url)
         return target
 
     def observe(self) -> dict:
@@ -195,7 +382,19 @@ class BrowserSession:
         if not isinstance(observation, dict):
             raise BrowserError("page observation returned no data")
         observation["captcha"] = detect_captcha(observation)
+        self._blank_sensitive_values(observation)
         return observation
+
+    @staticmethod
+    def _blank_sensitive_values(observation: dict) -> None:
+        """Second line of defence: never hand a secret to the caller.
+
+        The observation script already blanks sensitive fields; this keeps
+        that promise even if a page reports a value for a field it flagged.
+        """
+        for element in observation.get("elements") or []:
+            if isinstance(element, dict) and element.get("sensitive") and element.get("value"):
+                element["value"] = ""
 
     def _element(self, target: int):
         locator = self.page.locator(f'[data-sovereign-id="{target}"]')
@@ -207,20 +406,35 @@ class BrowserSession:
             raise BrowserError(f"element {target} is stale; observe the page again")
         return locator.first
 
-    def _label(self, locator) -> str:
+    def _control_info(self, locator) -> tuple[str, str, str]:
+        """Return (tag, type, visible label) for the control behind a locator."""
         try:
-            text = locator.inner_text(timeout=1000)
+            info = locator.evaluate(_CONTROL_INFO_JS)
         except Exception:
-            text = ""
-        if not text.strip():
-            for attribute in ("aria-label", "value", "name", "placeholder"):
-                try:
-                    text = locator.get_attribute(attribute) or ""
-                except Exception:
-                    text = ""
-                if text.strip():
-                    break
-        return text.replace("\n", " ").strip()[:120]
+            return "", "", ""
+        if not isinstance(info, dict):
+            return "", "", ""
+        tag = str(info.get("tag") or "")
+        control_type = str(info.get("type") or "")
+        label = str(info.get("label") or "").strip()[:120]
+        return tag, control_type, label
+
+    def _fallback_label(self, locator) -> str:
+        """Last resort label for a control with no visible text."""
+        for attribute in ("name", "placeholder"):
+            try:
+                value = locator.get_attribute(attribute) or ""
+            except Exception:
+                value = ""
+            if value.strip():
+                return value.replace("\n", " ").strip()[:120]
+        return ""
+
+    def _label(self, locator, visible: str = "") -> str:
+        """Human readable label used in messages and confirmations."""
+        if not visible:
+            _tag, _control_type, visible = self._control_info(locator)
+        return visible or self._fallback_label(locator)
 
     def _sensitive(self, locator) -> bool:
         try:
@@ -237,6 +451,46 @@ class BrowserSession:
             return False
         return bool(SENSITIVE.search(str(blob)))
 
+    def _check_click_target(self, locator, base: str) -> None:
+        """Reject a click whose link points straight outside the policy."""
+        try:
+            href = locator.get_attribute("href")
+        except Exception:
+            return
+        if not href:
+            return
+        try:
+            scheme = urlsplit(href).scheme.lower()
+            base_scheme = urlsplit(base).scheme.lower()
+        except ValueError:
+            return
+        if scheme and scheme not in {"http", "https"}:
+            # javascript:, mailto:, and tel: never leave the current page.
+            return
+        if base_scheme not in {"http", "https"}:
+            # Nothing to resolve a relative link against.
+            return
+        check_url(href, self.policy, base=base)
+
+    def _press_risk(self, key: str) -> str:
+        """Describe the risk of pressing a key that can submit a form."""
+        if key not in SUBMIT_KEYS or self.page is None:
+            return ""
+        try:
+            info = self.page.evaluate(PRESS_RISK_JS)
+        except Exception:
+            return ""
+        if not isinstance(info, dict):
+            return ""
+        if info.get("credential"):
+            return (
+                f"Pressing {key} may submit a form that holds a credential "
+                "(password, one-time code, or card data)."
+            )
+        if info.get("focusedSubmit"):
+            return f"Pressing {key} may submit the focused form."
+        return ""
+
     def perform(
         self,
         action: Action,
@@ -244,6 +498,7 @@ class BrowserSession:
     ) -> dict:
         if self.page is None:
             raise BrowserError("browser is not running")
+        self._blocked_url = None
 
         if action.kind == "navigate":
             target = self.goto(action.url)
@@ -251,19 +506,29 @@ class BrowserSession:
 
         if action.kind == "click":
             locator = self._element(action.target or 0)
-            label = self._label(locator)
-            if is_destructive(label):
-                if confirm is None or not confirm(
+            tag, control_type, visible = self._control_info(locator)
+            label = self._label(locator, visible)
+            if needs_confirmation(visible, tag, control_type):
+                question = (
                     f'Click "{label}"? This may submit, buy, or delete something.'
-                ):
+                    if label
+                    else "Click an unnamed control? It may submit a form, "
+                    "buy something, or delete something."
+                )
+                if confirm is None or not confirm(question):
                     return {
                         "ok": False,
                         "cancelled": True,
-                        "detail": f'cancelled click on "{label}"',
+                        "detail": f'cancelled click on "{label}"' if label else "cancelled click",
                     }
+            self._check_click_target(locator, self.page.url)
             locator.scroll_into_view_if_needed()
-            locator.click(timeout=self.timeout_ms)
+            try:
+                locator.click(timeout=self.timeout_ms)
+            except Exception as exc:
+                raise self._failure("click failed", exc) from exc
             self.page.wait_for_timeout(700)
+            self._enforce_policy(self.page.url)
             return {"ok": True, "detail": f'clicked "{label}"'}
 
         if action.kind == "fill":
@@ -272,17 +537,36 @@ class BrowserSession:
                 raise SensitiveFieldError(
                     "refusing to fill a password, OTP, or payment field; use handoff"
                 )
-            locator.fill(action.text)
+            try:
+                locator.fill(action.text)
+            except Exception as exc:
+                raise BrowserError(f"fill failed: {exc}") from exc
             return {"ok": True, "detail": f"filled {action.target} with {len(action.text)} chars"}
 
         if action.kind == "select":
             locator = self._element(action.target or 0)
-            locator.select_option(value=action.value)
-            return {"ok": True, "detail": f"selected {action.value}"}
+            try:
+                locator.select_option(value=action.value)
+            except Exception as exc:
+                raise BrowserError(f"select failed: {exc}") from exc
+            # The chosen value is not echoed: it can be an account or a token.
+            return {"ok": True, "detail": f"selected an option in element {action.target}"}
 
         if action.kind == "press":
-            self.page.keyboard.press(action.key)
+            risk = self._press_risk(action.key)
+            if risk:
+                if confirm is None or not confirm(risk):
+                    return {
+                        "ok": False,
+                        "cancelled": True,
+                        "detail": f"cancelled press of {action.key}",
+                    }
+            try:
+                self.page.keyboard.press(action.key)
+            except Exception as exc:
+                raise BrowserError(f"press failed: {exc}") from exc
             self.page.wait_for_timeout(400)
+            self._enforce_policy(self.page.url)
             return {"ok": True, "detail": f"pressed {action.key}"}
 
         if action.kind == "scroll":

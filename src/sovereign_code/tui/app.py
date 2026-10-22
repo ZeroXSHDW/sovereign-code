@@ -560,7 +560,9 @@ class SovereignApp(App[None]):
     async def _run_cli(self, *args: str) -> None:
         try:
             with self.suspend():
-                subprocess.call([sys.executable, "-m", "sovereign_code", *args])
+                await asyncio.to_thread(
+                    subprocess.call, [sys.executable, "-m", "sovereign_code", *args]
+                )
         finally:
             await self.refresh_snapshot()
 
@@ -580,7 +582,7 @@ class SovereignApp(App[None]):
         )
         try:
             with self.suspend():
-                subprocess.call(command)
+                await asyncio.to_thread(subprocess.call, command)
         finally:
             await self.refresh_snapshot()
 
@@ -677,7 +679,8 @@ class SovereignApp(App[None]):
         )
         try:
             with self.suspend():
-                subprocess.call(
+                await asyncio.to_thread(
+                    subprocess.call,
                     plan.argv,
                     cwd=str(plan.cwd),
                     env=plan.env,

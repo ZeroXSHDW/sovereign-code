@@ -138,17 +138,46 @@ def _host_port(url: str, default_port: int) -> tuple[str, int]:
     return (parts.hostname or "127.0.0.1", parts.port or default_port)
 
 
+def _port_flags(settings: Settings) -> tuple[bool, bool, bool]:
+    """Whether Ollama, the gateway and the tier gateway are listening."""
+    return (
+        port_open(*_host_port(settings.ollama_url, 11434)),
+        port_open(*_host_port(settings.gateway_url, 4000)),
+        port_open(*_host_port(settings.router_url, 4010)),
+    )
+
+
+def _exposed_ports(settings: Settings) -> dict[int, list[str]]:
+    """The service ports that have a listener bound off loopback."""
+    return exposed_ports(
+        _host_port(settings.ollama_url, 11434)[1],
+        _host_port(settings.gateway_url, 4000)[1],
+        _host_port(settings.router_url, 4010)[1],
+    )
+
+
 async def collect(settings: Settings) -> Snapshot:
     client = OllamaClient(settings.ollama_url)
     snapshot = Snapshot(settings=settings)
-    snapshot.memory = read_memory()
-    snapshot.disk_free_gb = disk_free_gb()
-    snapshot.login_installed = login_agent_installed()
-    snapshot.login_loaded = login_agent_loaded()
-    snapshot.cloud_enabled = cloud_enabled()
-    snapshot.ollama_port = port_open(*_host_port(settings.ollama_url, 11434))
-    snapshot.gateway_port = port_open(*_host_port(settings.gateway_url, 4000))
-    snapshot.router_up = port_open(*_host_port(settings.router_url, 4010))
+
+    # These probes read memory and disk through subprocesses and open
+    # sockets. They run off the event loop so a chat turn is never waiting
+    # behind a `sysctl`.
+    memory, disk, installed, loaded, cloud, ports, exposed = await asyncio.gather(
+        asyncio.to_thread(read_memory),
+        asyncio.to_thread(disk_free_gb),
+        asyncio.to_thread(login_agent_installed),
+        asyncio.to_thread(login_agent_loaded),
+        asyncio.to_thread(cloud_enabled),
+        asyncio.to_thread(_port_flags, settings),
+        asyncio.to_thread(_exposed_ports, settings),
+    )
+    snapshot.memory = memory
+    snapshot.disk_free_gb = disk
+    snapshot.login_installed = installed
+    snapshot.login_loaded = loaded
+    snapshot.cloud_enabled = cloud
+    snapshot.ollama_port, snapshot.gateway_port, snapshot.router_up = ports
     snapshot.loopback = (
         is_loopback(settings.ollama_url)
         and is_loopback(settings.gateway_url)
@@ -157,11 +186,7 @@ async def collect(settings: Settings) -> Snapshot:
     # The URLs only say where the clients dial. The sockets say what the
     # servers actually bound, and a server on 0.0.0.0 is reachable from the
     # network even when every config file points at loopback.
-    snapshot.exposed_ports = exposed_ports(
-        _host_port(settings.ollama_url, 11434)[1],
-        _host_port(settings.gateway_url, 4000)[1],
-        _host_port(settings.router_url, 4010)[1],
-    )
+    snapshot.exposed_ports = exposed
 
     version, tags, ps, gateway = await asyncio.gather(
         _safe(client.version()),

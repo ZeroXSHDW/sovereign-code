@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from ..config import DATA_DIR
 from .actions import Action, ActionError, BrowserPolicy, PolicyError, parse_action
-from .executor import BrowserError, BrowserSession, SensitiveFieldError
+from .executor import SENSITIVE, BrowserError, BrowserSession, SensitiveFieldError
 
 SYSTEM_PROMPT = """\
 You are a careful browser operator driving a visible Chromium browser for the user.
@@ -42,6 +44,7 @@ Rules:
 - Never solve, click, or interact with CAPTCHAs or bot checks. Use handoff.
 - Never enter passwords, OTPs, card numbers, or other secrets. Use handoff.
 - Do not buy, pay, delete, post, or submit forms on your own; the harness asks first.
+- Buttons that only read "OK", "Yes", "Continue", "Upgrade", or "Apply" also ask first.
 - Read the page before acting. Do not guess URLs or invent element ids.
 - Use extract only when you need text that is not already in PAGE.text; then return done.
 - If the task is complete, return done. If blocked, return handoff with a reason.
@@ -53,6 +56,18 @@ Reply: {"action":"done","summary":"The heading is Example Domain."}
 
 class PlannerError(RuntimeError):
     """The local model could not produce a usable plan."""
+
+
+def _is_secret_element(element: dict) -> bool:
+    """True when an observed element looks like a password or one-time field.
+
+    The executor already flags these; repeating the check here means a
+    secret cannot reach the model even if the flag is missing.
+    """
+    blob = " ".join(
+        str(element.get(key) or "") for key in ("type", "name", "placeholder", "autocomplete")
+    )
+    return bool(SENSITIVE.search(blob))
 
 
 @dataclass
@@ -77,21 +92,26 @@ class ModelPlanner:
     def _observation(self, observation: dict) -> dict:
         elements = []
         for element in observation.get("elements", [])[:40]:
-            item = {
-                key: element.get(key)
-                for key in (
-                    "id",
-                    "tag",
-                    "type",
-                    "role",
-                    "name",
-                    "value",
-                    "href",
-                    "disabled",
-                    "sensitive",
-                )
-                if element.get(key) not in (None, "", False)
-            }
+            item: dict = {}
+            for key in (
+                "id",
+                "tag",
+                "type",
+                "role",
+                "name",
+                "value",
+                "href",
+                "disabled",
+                "sensitive",
+            ):
+                value = element.get(key)
+                if value is None or value == "" or value is False:
+                    continue
+                item[key] = value
+            if element.get("sensitive") or _is_secret_element(element):
+                # A field the executor flagged as secret never reaches the
+                # model, not even if a page reported a value for it.
+                item.pop("value", None)
             elements.append(item)
         return {
             "url": observation.get("url"),
@@ -181,10 +201,47 @@ class AuditLog:
             pass
 
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def _redact_url(url: str) -> str:
+    """Keep the host and path, hide query values and the fragment.
+
+    A URL is a classic exfiltration channel, so the audit log keeps only the
+    part that is needed to work out where a run went.
+    """
+    text = str(url or "")
+    if not text:
+        return text
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return "<redacted>"
+    if not parts.query and not parts.fragment:
+        return text
+    pairs = []
+    for chunk in parts.query.split("&"):
+        if not chunk:
+            continue
+        key, separator, _value = chunk.partition("=")
+        pairs.append(f"{key}=<redacted>" if separator else key)
+    fragment = "<redacted>" if parts.fragment else ""
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "&".join(pairs), fragment))
+
+
+def _redact_text(text: str) -> str:
+    """Redact every URL that appears inside a free-text field."""
+    return _URL_RE.sub(lambda match: _redact_url(match.group(0)), str(text or ""))
+
+
 def _action_record(action: Action) -> dict:
     data = action.as_dict()
     if action.kind == "fill":
         data["text"] = f"<{len(action.text)} chars>"
+    if action.kind == "select":
+        data["value"] = "<redacted>"
+    if action.kind == "navigate" and action.url:
+        data["url"] = _redact_url(action.url)
     return data
 
 
@@ -238,7 +295,7 @@ class BrowserAgent:
             self._log(
                 "observe",
                 step=step + 1,
-                url=observation.get("url"),
+                url=_redact_url(str(observation.get("url") or "")),
                 title=observation.get("title"),
                 captcha=observation.get("captcha"),
             )
@@ -315,14 +372,16 @@ class BrowserAgent:
                 "result",
                 step=step,
                 ok=result.get("ok"),
-                detail=result.get("detail"),
+                detail=_redact_text(str(result.get("detail") or "")),
                 cancelled=result.get("cancelled", False),
             )
             if result.get("extract"):
                 self.extracts.append(str(result["extract"]))
             if result.get("cancelled"):
                 return self._finish("cancelled", "Action cancelled by the user.", step)
-            history.append(f"{step}. {action.kind}: {result.get('detail', 'ok')}")
+            history.append(
+                f"{step}. {action.kind}: {_redact_text(str(result.get('detail', 'ok')))}"
+            )
 
         self._log("limit", steps=step)
         return self._finish(

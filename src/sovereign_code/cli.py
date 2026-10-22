@@ -81,6 +81,7 @@ from .gateway_config import (
 from .gateway_config import (
     write as write_gateway_config,
 )
+from .harness import log_download
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
@@ -599,6 +600,41 @@ def _setup_stack(settings: Settings, name: str, yes: bool = False) -> int:
         return code
     snap = _snapshot(settings)
     return _gateway_aliases(settings, snap)
+
+
+def _setup(
+    settings: Settings,
+    *,
+    models: str = "recommended",
+    yes: bool = False,
+    clients: bool = True,
+    services: bool = True,
+    login: bool = True,
+    migrate: bool = True,
+    dry_run: bool = False,
+) -> int:
+    from . import setup as setup_mod
+
+    steps = setup_mod.run_setup(
+        settings,
+        models=models,
+        yes=yes,
+        clients=clients,
+        services=services,
+        login=login,
+        migrate=migrate,
+        dry_run=dry_run,
+    )
+    for step in steps:
+        mark = {"ok": "[green]OK[/]", "fail": "[red]FAIL[/]", "skip": "[dim]SKIP[/]"}.get(
+            step.mark, step.mark
+        )
+        console.print(f"{mark}  {step.name:<14} {step.detail}")
+    if any((not step.ok) and (not step.skipped) for step in steps):
+        return 1
+    for line in setup_mod.ready_summary(settings):
+        console.print(line)
+    return 0
 
 
 def _context_label(tokens: int | None) -> str:
@@ -1774,8 +1810,12 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
             )
         console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
     client = OllamaClient(settings.ollama_url)
+    log_download(tag, status="starting")
 
     async def run() -> None:
+        last_log = 0.0
+        final_total = 0
+        final_completed = 0
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1787,6 +1827,8 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
                 total = event.get("total")
                 completed = event.get("completed")
                 if total and completed is not None:
+                    final_total = int(total)
+                    final_completed = int(completed)
                     if progress.tasks[task].total != float(total):
                         progress.update(task, total=float(total))
                     progress.update(task, completed=float(completed))
@@ -1794,11 +1836,28 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
                 if status:
                     # A colon after `:cloud` would make Rich render an emoji.
                     progress.update(task, description=f"{tag} — {status}")
+                    now = time.monotonic()
+                    if now - last_log > 1.0:
+                        last_log = now
+                        log_download(
+                            tag,
+                            status=str(status),
+                            completed=final_completed,
+                            total=final_total,
+                        )
             progress.update(task, description=f"{tag} — done")
+        log_download(
+            tag,
+            status="done",
+            completed=final_completed,
+            total=final_total,
+            done=True,
+        )
 
     try:
         asyncio.run(run())
     except OllamaError as exc:
+        log_download(tag, error=str(exc))
         console.print(f"[red]{exc}[/]")
         if spec and spec.cloud:
             console.print("[dim]Cloud models also need a one-time login:[/] ollama signin")
@@ -3795,15 +3854,28 @@ def _hf_download(args, hub) -> int:
     if args.dry_run:
         console.print("[dim]Dry run: nothing was downloaded.[/]")
         return 0
-    destination, command = hub.download_model(
+    log_download(repo, source="huggingface", status="starting", total=int(total))
+    try:
+        destination, command = hub.download_model(
+            repo,
+            include=args.include,
+            all_files=args.download_all,
+            revision=args.revision,
+            local_dir=destination,
+            cache_dir=args.cache_dir,
+            dry_run=False,
+            token=token,
+        )
+    except Exception as exc:
+        log_download(repo, source="huggingface", error=str(exc))
+        raise
+    log_download(
         repo,
-        include=args.include,
-        all_files=args.download_all,
-        revision=args.revision,
-        local_dir=destination,
-        cache_dir=args.cache_dir,
-        dry_run=False,
-        token=token,
+        source="huggingface",
+        status="done",
+        completed=int(total),
+        total=int(total),
+        done=True,
     )
     console.print(f"[green]Downloaded[/] {repo} → {destination}")
     if info is not None and info.gguf_files:
@@ -4056,6 +4128,7 @@ def _pipeline(
     dry_run: bool = False,
     mode: str = "auto",
     direct_tokens: int = 4000,
+    fix_model: str | None = None,
 ) -> int:
     import httpx
 
@@ -4072,8 +4145,9 @@ def _pipeline(
         console.print(f"[red]Unknown agent client:[/] {agent_client}")
         console.print(f"[dim]Choose one of: {', '.join(AGENT_CLIENTS)}[/]")
         return 1
-    if not command_exists(AGENT_CLIENTS[agent_client]):
+    if not command_exists(AGENT_CLIENTS[agent_client]) and mode != "direct":
         console.print(f"[red]{agent_client} CLI is not installed.[/]")
+        console.print("[dim]Direct mode needs only Ollama: rerun with --mode direct[/]")
         return 1
 
     # The pipeline cycles through several large models; start from a clean GPU
@@ -4131,7 +4205,9 @@ def _pipeline(
             max_tokens=tokens,
         )
 
-    def _direct_implementation(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
+    def _direct_implementation(
+        prompt_text: str, plan_text: str, failure: str, model: str | None = None
+    ) -> tuple[bool, str]:
         """One request, whole files, no agent loop (seconds instead of minutes)."""
         files = relevant_files(target, prompt_text)
         messages = build_messages(prompt_text, plan_text, files, failure)
@@ -4143,7 +4219,7 @@ def _pipeline(
             try:
                 raw = complete(
                     settings.ollama_url,
-                    agent,
+                    model or agent,
                     messages,
                     max_tokens=direct_tokens,
                     timeout=max(120.0, agent_timeout),
@@ -4270,15 +4346,39 @@ def _pipeline(
         return outcome.ok, outcome.log
 
     def fix_fn(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
+        """Repair with the small model first; a narrow fix should be cheap.
+
+        A failed check usually means a typo, an import, or one wrong branch —
+        work a 4B model does well and much faster than reloading the 18 GB
+        planner. If the small model cannot produce a file block, the regular
+        implementer still gets the round.
+        """
+        if fix_model and mode in ("direct", "auto"):
+            clear_gpu("repair")
+            ok, output = _direct_implementation(prompt_text, plan_text, failure, model=fix_model)
+            if ok:
+                return ok, output
+            if mode == "direct":
+                return ok, output
+            return implement_fn(prompt_text, plan_text, failure)
         return implement_fn(prompt_text, plan_text, failure)
 
     timings: dict[str, float] = {}
+    stage_info = {
+        "plan": ("plan", plan_model),
+        "implement": ("edit", agent),
+        "verify": ("checks", ""),
+        "fix": ("fix", fix_model or agent),
+        "review": ("review", review_model),
+    }
 
     def timed(label: str, fn):
         """Record wall time per stage so the summary explains where it went."""
 
         def wrapper(*args, **kwargs):
             started = time.monotonic()
+            role, model = stage_info.get(label, ("", ""))
+            recorder.stage_start(label, role=role, model=model)
             try:
                 return fn(*args, **kwargs)
             finally:
@@ -4291,7 +4391,8 @@ def _pipeline(
     if dry_run:
         console.print(
             f"[bold]Dry run[/] · dir={target} · plan={plan_model} · "
-            f"implement={agent_client}({agent}, {mode}) · review={review_model}"
+            f"implement={agent_client}({agent}, {mode}) · review={review_model} · "
+            f"fix={fix_model or agent}"
         )
         console.print(f"checks: {shown}")
         console.print(
@@ -4304,6 +4405,26 @@ def _pipeline(
         f"[bold]Pipeline[/] · plan={plan_model} · implement={agent_client}({agent}) · "
         f"review={review_model} · checks={shown}"
     )
+    if fix_model:
+        console.print(f"[dim]Small repair model:[/] {fix_model}")
+    recorder = RunRecorder(prompt, str(target))
+    recorder.start()
+
+    def on_stage(stage) -> None:
+        """Print and publish each result the moment it exists."""
+        key = stage.name.split()[0]
+        role, model = stage_info.get(key, ("", ""))
+        recorder.stage_end(
+            stage.name,
+            role=role,
+            model=model,
+            ok=stage.ok,
+            ms=timings.get(key, 0.0) * 1000,
+            output=stage.output,
+        )
+        border = "green" if stage.ok else "red"
+        console.print(Panel(Text(stage.output), title=stage.name, border_style=border))
+
     try:
         result = run_pipeline(
             prompt,
@@ -4313,13 +4434,12 @@ def _pipeline(
             verify=None if not check_commands else timed("verify", verify_fn),
             fix=timed("fix", fix_fn) if max_fixes > 0 else None,
             max_fixes=max(0, max_fixes),
+            on_stage=on_stage,
         )
     except SourceError as exc:
+        recorder.finish(False, None, str(exc))
         console.print(f"[red]{exc}[/]")
         return 1
-    for stage in result.stages:
-        border = "green" if stage.ok else "red"
-        console.print(Panel(Text(stage.output), title=stage.name, border_style=border))
 
     # Keep an auditable record of what the models did and what proved it.
     from datetime import datetime
@@ -4348,6 +4468,7 @@ def _pipeline(
 
     state = "complete" if result.succeeded else "incomplete"
     style = "green" if result.succeeded else "red"
+    recorder.finish(result.succeeded, result.verified, f"{state} · verification {verified}")
     console.print(
         f"[{style}]{state}[/] · verification {verified} · "
         f"{len(result.stages)} stages · [dim]{run_dir}[/]"
@@ -4741,6 +4862,18 @@ def build_parser() -> argparse.ArgumentParser:
     setup_stack.add_argument("name", choices=sorted(MODEL_STACKS))
     setup_stack.add_argument("--yes", action="store_true", help="skip confirmation prompt")
 
+    setup = sub.add_parser(
+        "setup", help="one-command self-contained setup of the whole local stack"
+    )
+    setup.add_argument(
+        "--models", default="recommended", help="model set: recommended, a stack name, or none"
+    )
+    setup.add_argument("--yes", action="store_true", help="skip confirmation prompts")
+    setup.add_argument("--no-clients", action="store_true", help="skip client integration")
+    setup.add_argument("--no-services", action="store_true", help="skip launchd services")
+    setup.add_argument("--no-login", action="store_true", help="skip login agent")
+    setup.add_argument("--no-migrate", action="store_true", help="skip legacy migration")
+    setup.add_argument("--dry-run", action="store_true", help="show what would happen")
     sub.add_parser("gateway-aliases", help="show which gateway aliases route to installed models")
 
     rm = sub.add_parser("rm", help="remove an installed model")
@@ -5650,6 +5783,17 @@ def main(argv: list[str] | None = None) -> int:
         return _pull_stack(settings, args.name, yes=args.yes)
     if command == "setup-stack":
         return _setup_stack(settings, args.name, yes=args.yes)
+    if command == "setup":
+        return _setup(
+            settings,
+            models=args.models,
+            yes=args.yes,
+            clients=not args.no_clients,
+            services=not args.no_services,
+            login=not args.no_login,
+            migrate=not args.no_migrate,
+            dry_run=args.dry_run,
+        )
     if command == "gateway-aliases":
         return _gateway_aliases(settings, _snapshot(settings))
     if command == "rm":

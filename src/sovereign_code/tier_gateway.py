@@ -2077,9 +2077,7 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                with httpx.Client(
-                    timeout=httpx.Timeout(stream_idle_timeout(), connect=5)
-                ) as client:
+                with shared_client() as client:
                     with client.stream("POST", target, json=chat) as result:
                         if result.status_code != 200:
                             body = result.read().decode("utf-8", "replace")[:400]
@@ -2116,7 +2114,7 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            with httpx.Client(timeout=httpx.Timeout(request_timeout(), connect=5)) as client:
+            with shared_client() as client:
                 result = client.post(target, json=chat)
             if result.status_code != 200:
                 raise RuntimeError(result.text[:400])

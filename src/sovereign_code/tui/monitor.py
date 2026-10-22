@@ -23,6 +23,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static
 
 from ..clients import local_clients, plan_launch
@@ -34,11 +35,38 @@ from ..status import Snapshot, collect
 
 REFRESH_SECONDS = 5.0
 
+HINT_TEXT = "F5 refresh · p pause · y copy · F9 free RAM · F2/F4/F6 clients · ? help"
+
 HELP_TEXT = """\
-F5/r refresh   p pause   y copy snapshot   F9/f free RAM
-F2 Qwen Code   F4 Codex   F6 Claude   Ctrl+Q quit
-Read-only: no chat, no model load, no service restarts. Sparklines cover 5 min.
+Live monitor keys
+
+F5 / r    refresh now
+p         pause or resume live refresh
+y         copy the current snapshot to the clipboard
+F9 / f    unload every resident model (free RAM)
+F2        open Qwen Code in the workspace
+F4        open the local Codex / ChatGPT profile
+F6        open Claude Code against the local gateway
+?         this help
+Ctrl+Q    quit
+
+The monitor is read-only: no chat prompt, no model load, and no service
+restarts. Sparklines cover the last five minutes. For a chat turn run
+`sovereign chat`; for coding press F2 or run `sovereign code`.
 """
+
+
+class MonitorHelp(ModalScreen[None]):
+    """Keys and read-only guarantees, without taking space in the live view."""
+
+    BINDINGS = [
+        Binding("escape,q,question_mark", "dismiss", "Close"),
+        Binding("ctrl+q", "dismiss", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help-dialog"):
+            yield Static(HELP_TEXT, id="help-body")
 
 
 class MonitorApp(App[None]):
@@ -99,7 +127,7 @@ class MonitorApp(App[None]):
                 yield Static("", id="activity-summary", classes="card compact")
                 yield Static("LIVE ACTIVITY · RECENT GATEWAY REQUESTS", classes="section-title")
                 yield Static("", id="activity-panel", classes="card")
-                yield Static(HELP_TEXT, id="help-panel", classes="hint")
+                yield Static(HINT_TEXT, id="hint-line", classes="hint")
         yield Static("starting…", id="statusbar")
         yield Footer()
 

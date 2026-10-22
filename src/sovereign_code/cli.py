@@ -3587,15 +3587,26 @@ def _hf_status(args, hub) -> int:
     status = hub.token_status(verify=not args.no_verify)
     cache = hub.hub_cache_dir()
     downloads = hub.DOWNLOAD_ROOT
+    datasets = hub.DATASET_DOWNLOAD_ROOT
     cache_bytes = hub.directory_size(cache) if cache.is_dir() else 0
     download_bytes = hub.directory_size(downloads) if downloads.is_dir() else 0
+    dataset_bytes = hub.directory_size(datasets) if datasets.is_dir() else 0
+    token_mode = ""
+    if status.present:
+        try:
+            token_mode = oct(status.path.stat().st_mode & 0o777)
+        except OSError:
+            token_mode = ""
     payload = {
         "token": status.to_dict(),
+        "token_mode": token_mode,
         "cli": {"path": hub.hf_cli_path() or "", "version": hub.hf_cli_version()},
         "cache_dir": str(cache),
         "cache_bytes": cache_bytes,
         "download_dir": str(downloads),
         "download_bytes": download_bytes,
+        "dataset_dir": str(datasets),
+        "dataset_bytes": dataset_bytes,
         "disk_free_gb": disk_free_gb(),
     }
     if args.json:
@@ -3619,7 +3630,10 @@ def _hf_status(args, hub) -> int:
         table.add_row("Token", f"{state} · {source}")
     else:
         table.add_row("Token", "[yellow]not logged in[/]")
-    table.add_row("Token file", str(status.path))
+    table.add_row(
+        "Token file",
+        str(status.path) + (f" · mode {token_mode}" if token_mode else ""),
+    )
     cli_version = hub.hf_cli_version()
     table.add_row(
         "HF CLI",
@@ -3627,9 +3641,14 @@ def _hf_status(args, hub) -> int:
         + (f" · {cli_version}" if cli_version else ""),
     )
     table.add_row("Hub cache", f"{cache} · {human_size(cache_bytes)}")
-    table.add_row("Downloads", f"{downloads} · {human_size(download_bytes)}")
+    table.add_row("Model downloads", f"{downloads} · {human_size(download_bytes)}")
+    table.add_row("Dataset downloads", f"{datasets} · {human_size(dataset_bytes)}")
     table.add_row("Disk free", f"{disk_free_gb():.1f} GB")
     console.print(table)
+    if token_mode and token_mode != "0o600":
+        console.print(
+            f"[yellow]Warning:[/] {status.path} is mode {token_mode}; run `chmod 600` on it."
+        )
     if not status.present:
         console.print(
             "[dim]Public search works without a token. Log in for gated/private models:[/]"
@@ -5346,12 +5365,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="show which domain a prompt would be routed to",
     )
 
-    hf = sub.add_parser("hf", help="Hugging Face Hub: login, search, inspect, download")
+    hf = sub.add_parser("hf", help="Hugging Face Hub: login, search, inspect, download, import")
     hf.add_argument(
         "action",
         nargs="?",
         default="status",
-        choices=("status", "login", "logout", "search", "info", "download", "list"),
+        choices=(
+            "status",
+            "login",
+            "logout",
+            "search",
+            "info",
+            "download",
+            "list",
+            "import",
+            "remove",
+        ),
         help="default: status",
     )
     hf.add_argument("target", nargs="?", default=None, help="search query or repository id")
@@ -5362,8 +5391,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hf.add_argument("--browser", action="store_true", help="use `hf auth login` browser flow")
     hf.add_argument("--no-verify", action="store_true", help="skip the whoami token check")
+    hf.add_argument(
+        "--dataset",
+        action="store_true",
+        help="operate on a dataset repository instead of a model",
+    )
     hf.add_argument("--gguf", action="store_true", help="only show GGUF repositories")
     hf.add_argument("--author", default=None, help="filter by organization or user")
+    hf.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="extra Hub tag filter, repeatable (e.g. license:mit)",
+    )
+    hf.add_argument("--license", default=None, help="license filter (e.g. mit, apache-2.0)")
+    hf.add_argument("--language", default=None, help="language filter (e.g. en, fr)")
+    hf.add_argument("--format", default=None, help="format filter (e.g. parquet, gguf)")
+    hf.add_argument("--pipeline", default=None, help="model pipeline tag (e.g. text-generation)")
     hf.add_argument(
         "--sort",
         default="downloads",
@@ -5371,6 +5415,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hf.add_argument("--limit", type=int, default=20, help="search results (max 100)")
     hf.add_argument("--include", action="append", default=[], help="file glob to download")
+    hf.add_argument("--exclude", action="append", default=[], help="file glob to skip")
     hf.add_argument(
         "--all",
         dest="download_all",
@@ -5380,9 +5425,13 @@ def build_parser() -> argparse.ArgumentParser:
     hf.add_argument("--revision", default=None, help="branch, tag, or commit")
     hf.add_argument("--local-dir", default=None, help="destination (default: local-ai/models)")
     hf.add_argument("--cache-dir", default=None, help="override the Hub cache")
+    hf.add_argument("--max-workers", type=int, default=None, help="parallel download workers")
     hf.add_argument("--dry-run", action="store_true", help="show the download command only")
     hf.add_argument("--files", action="store_true", help="info: list every file")
-    hf.add_argument("--yes", action="store_true", help="skip the large-download confirmation")
+    hf.add_argument("--readme", action="store_true", help="info: show the repository README")
+    hf.add_argument("--name", default=None, help="import: Ollama model name")
+    hf.add_argument("--context", type=int, default=None, help="import: num_ctx override")
+    hf.add_argument("--yes", action="store_true", help="skip confirmations")
     hf.add_argument("--json", action="store_true")
 
     skills = sub.add_parser("skills", help="list or install the curated skill library")

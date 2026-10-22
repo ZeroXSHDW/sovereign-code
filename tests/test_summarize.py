@@ -28,6 +28,41 @@ def test_read_requires_source() -> None:
         read_text_source()
 
 
+def test_read_refuses_private_addresses() -> None:
+    """`--url` must not become an SSRF probe for the machine's own services."""
+    for url in (
+        "http://127.0.0.1:4010/v1/models",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://192.168.1.5/admin",
+        "file:///etc/passwd",
+    ):
+        with pytest.raises(SourceError):
+            read_text_source(url=url)
+
+
+def test_read_refuses_a_redirect_into_a_private_address(monkeypatch) -> None:
+    """A public URL that bounces to loopback is still a private fetch."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "public.example":
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:4010/v1/models"})
+        return httpx.Response(200, text="secret")
+
+    monkeypatch.setattr("sovereign_code.summarize.httpx.get", _fake_get(handler))
+    with pytest.raises(SourceError):
+        read_text_source(url="http://public.example/start")
+    assert seen == ["http://public.example/start"]
+
+
+def _fake_get(handler):
+    def get(url, **kwargs):
+        return handler(httpx.Request("GET", url))
+
+    return get
+
+
 def test_summarize_returns_content() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer local"

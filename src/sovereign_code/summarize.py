@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urljoin
 
 import httpx
 
+from .browser.actions import BrowserPolicy, PolicyError, check_url
+
 MAX_CHARS = 24000
+MAX_REDIRECTS = 5
 
 SYSTEM_PROMPT = (
     "Summarize the following content concisely but completely, preserving the key "
@@ -16,6 +20,37 @@ SYSTEM_PROMPT = (
 
 class SourceError(ValueError):
     """The file or URL could not be read."""
+
+
+def _fetch(url: str, timeout: float) -> httpx.Response:
+    """Fetch a URL, applying the browser's URL policy to every hop.
+
+    Following redirects blindly would let a public URL bounce the fetch to
+    ``http://169.254.169.254/`` and read the machine's metadata, or to a
+    loopback admin page. Each hop is checked before it is requested.
+    """
+    policy = BrowserPolicy()
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            current = check_url(current, policy)
+        except PolicyError as exc:
+            raise SourceError(f"refused to fetch {url}: {exc}") from exc
+        try:
+            response = httpx.get(current, timeout=timeout, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise SourceError(f"could not fetch {url}: {exc.__class__.__name__}") from exc
+        if not response.is_redirect:
+            try:
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise SourceError(f"could not fetch {url}: {exc.__class__.__name__}") from exc
+            return response
+        location = response.headers.get("location")
+        if not location:
+            return response
+        current = urljoin(current, location)
+    raise SourceError(f"too many redirects while fetching {url}")
 
 
 def read_text_source(
@@ -30,12 +65,7 @@ def read_text_source(
         except UnicodeDecodeError:
             text = data.decode("utf-8", errors="replace")
     elif url:
-        try:
-            response = httpx.get(url, timeout=20.0, follow_redirects=True)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise SourceError(f"could not fetch {url}: {exc.__class__.__name__}") from exc
-        text = response.text
+        text = _fetch(url, timeout=20.0).text
     else:
         raise SourceError("give a file path or --url")
     if len(text) > max_chars:

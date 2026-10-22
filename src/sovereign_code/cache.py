@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR
+from .safefile import harden
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
 TTL_DEFAULT = 3600.0  # one hour
@@ -166,6 +167,9 @@ class DiskCache:
         for statement in self._SCHEMA:
             self._conn.execute(statement)
         self._conn.commit()
+        # The cached values are whole completions, which contain the user's
+        # prompt and the model's reply. They are not anybody else's business.
+        harden(self.path)
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0

@@ -75,7 +75,7 @@ HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ChatGPT Local · Sovereign</title>
 <style>
-:root{--bg:#0b0d10;--panel:#12161c;--line:#222a35;--text:#e8edf5;--muted:#8b98a8;--accent:#7c9cff;--user:#1c2a44;--ok:#48d597}
+:root{--bg:#0b0d10;--panel:#12161c;--line:#5a6d8a;--text:#e8edf5;--muted:#8b98a8;--accent:#7c9cff;--user:#1c2a44;--ok:#48d597}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
 aside{background:var(--panel);border-right:1px solid var(--line);padding:18px;display:flex;flex-direction:column;gap:14px}
@@ -83,10 +83,13 @@ h1{font-size:16px;margin:0;letter-spacing:.2px}h1 span{color:var(--accent)}
 .badge{font-size:12px;color:var(--ok);border:1px solid #234;border-radius:999px;padding:4px 8px;display:inline-flex;gap:6px;align-items:center}
 .badge:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok)}
 label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-select,input,textarea,button{font:inherit;color:var(--text);background:#0f141a;border:1px solid var(--line);border-radius:10px;padding:10px;outline:none}
+select,input,textarea,button{font:inherit;color:var(--text);background:#0f141a;border:1px solid var(--line);border-radius:10px;padding:10px}
 select,input{width:100%}button{cursor:pointer;background:#182233;border-color:#26344a}button:hover{border-color:var(--accent)}
+/* The focus ring was removed, which left keyboard users with no indication
+   of where they were. WCAG 2.4.7 wants a visible focus indicator. */
+select:focus-visible,input:focus-visible,textarea:focus-visible,button:focus-visible,.skill:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ghost{background:transparent}.skills{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;min-height:80px}
-.skill{font-size:12px;padding:8px;border:1px solid var(--line);border-radius:8px;cursor:pointer}.skill b{display:block;font-size:12px;color:#cfd9e6}.skill small{color:var(--muted)}
+.skill{font-size:12px;padding:8px;border:1px solid var(--line);border-radius:8px;cursor:pointer;text-align:left;background:transparent;color:inherit;width:100%}.skill b{display:block;font-size:12px;color:#cfd9e6}.skill small{color:var(--muted)}
 main{display:flex;flex-direction:column;min-width:0}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
 #chat{flex:1;overflow:auto;padding:24px 20px;display:flex;flex-direction:column;gap:16px}
@@ -97,8 +100,14 @@ header{display:flex;justify-content:space-between;align-items:center;padding:14p
 form{display:flex;gap:10px;padding:16px 20px 20px;border-top:1px solid var(--line);max-width:860px;width:100%;margin:0 auto}
 textarea{flex:1;resize:none;min-height:52px;max-height:180px}#send{width:92px;background:var(--accent);color:#08101f;border:0;font-weight:650}
 .hint{font-size:11px;color:var(--muted);text-align:center;padding:0 20px 10px}
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 code{background:#0a0e13;padding:2px 4px;border-radius:4px}pre{background:#0a0e13;padding:10px;border-radius:8px;overflow:auto}
-@media(max-width:760px){.app{grid-template-columns:1fr}aside{display:none}}
+@media(max-width:760px){.app{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+ /* Hiding the sidebar took the model picker, the browser controls and the
+    whole skill list with it. The panel now stacks above the chat instead,
+    so the page reflows without losing function (WCAG 1.4.10). */
+ aside{border-right:0;border-bottom:1px solid var(--line);max-height:45vh;overflow:auto}
+}
 </style>
 </head>
 <body>
@@ -113,20 +122,21 @@ code{background:#0a0e13;padding:2px 4px;border-radius:4px}pre{background:#0a0e13
   <button class="ghost" id="new">New chat</button>
   <label for="burl">Browser · visible Chromium</label>
   <input id="burl" placeholder="https://example.com">
+  <label for="btask">Browser task</label>
   <input id="btask" placeholder="what should it do?">
   <label style="display:flex;gap:6px;align-items:center;font-size:11px"><input type="checkbox" id="blocal" style="width:auto"> allow localhost</label>
   <button class="ghost" id="brun">Run browser task</button>
-  <div id="blog" style="font-size:11px;color:var(--muted);white-space:pre-wrap"></div>
-  <img id="bshot" style="width:100%;border-radius:8px;display:none">
+  <div id="blog" style="font-size:11px;color:var(--muted);white-space:pre-wrap" role="status"></div>
+  <img id="bshot" alt="Screenshot of the browser after the last task" style="width:100%;border-radius:8px;display:none">
   <label for="skillq">Skills · all 22k</label>
   <input id="skillq" placeholder="search skills…">
   <div class="skills" id="skills"></div>
 </aside>
 <main>
-  <header><span id="where">127.0.0.1 · no cloud</span><span id="tier">ready</span></header>
-  <div id="chat"></div>
+  <header><span id="where">127.0.0.1 · no cloud</span><span id="tier" role="status">ready</span></header>
+  <div id="chat" role="log" aria-live="polite" aria-relevant="additions text"></div>
   <div class="hint">Enter sends · Shift+Enter newline · everything stays on this Mac</div>
-  <form id="form"><textarea id="input" placeholder="Ask anything, or paste code…" autofocus></textarea><button id="send">Send</button></form>
+  <form id="form"><label for="input" class="visually-hidden">Message</label><textarea id="input" placeholder="Ask anything, or paste code…" autofocus></textarea><button id="send">Send</button></form>
 </main>
 </div>
 <script>
@@ -157,7 +167,7 @@ async function browse(){
   }catch(e){log.textContent='error: '+e.message}
 }
 document.getElementById('brun').onclick=browse;
-async function loadSkills(q){const r=await fetch('/api/skills?q='+encodeURIComponent(q));const rows=await r.json();const box=document.getElementById('skills');box.innerHTML='';for(const s of rows){const el=document.createElement('div');el.className='skill';el.innerHTML='<b>'+esc(s.name)+'</b><small>'+esc((s.description||'').slice(0,90))+'</small>';el.onclick=async()=>{try{const r=await fetch('/api/skill?name='+encodeURIComponent(s.name));const d=await r.json();input.value='Use this skill:\n\n'+(d.body||'');}catch(e){input.value='Use the skill `'+s.name+'`:\n'}input.focus()};box.appendChild(el)}}
+async function loadSkills(q){const r=await fetch('/api/skills?q='+encodeURIComponent(q));const rows=await r.json();const box=document.getElementById('skills');box.innerHTML='';for(const s of rows){const el=document.createElement('button');el.type='button';el.className='skill';el.innerHTML='<b>'+esc(s.name)+'</b><small>'+esc((s.description||'').slice(0,90))+'</small>';el.onclick=async()=>{try{const r=await fetch('/api/skill?name='+encodeURIComponent(s.name));const d=await r.json();input.value='Use this skill:\n\n'+(d.body||'');}catch(e){input.value='Use the skill `'+s.name+'`:\n'}input.focus()};box.appendChild(el)}}
 document.getElementById('skillq').addEventListener('input',e=>loadSkills(e.target.value));
 fetch('/api/health').then(r=>r.json()).then(h=>{status.textContent=h.local_only?'local-only':'cloud allowed';status.style.color=h.local_only?'var(--ok)':'#e0b45c'}).catch(()=>{status.textContent='offline';status.style.color='#e06c6c'});
 render();
@@ -179,11 +189,51 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
 class Handler(BaseHTTPRequestHandler):
     server_version = "SovereignChat/1.0"
     router = DEFAULT_ROUTER
+    port = DEFAULT_PORT
 
     def log_message(self, *_args: object) -> None:
         return
 
+    def _host_is_local(self) -> bool:
+        """True when the request was addressed to this server by name.
+
+        The Host header is what stops DNS rebinding: an attacker's domain
+        that resolves to 127.0.0.1 still arrives here with ``Host:
+        attacker.example``, and the browser then treats the reply as
+        same-origin with the attacker's page.
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            # A request with no Host header is not something a browser sends.
+            return False
+        name = host.rsplit(":", 1)[0] if ":" in host else host
+        name = name.strip("[]")
+        return name in {"127.0.0.1", "localhost", "::1"}
+
+    def _origin_is_local(self) -> bool:
+        """True when the request carries no cross-origin ``Origin``."""
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if not origin:
+            # Same-origin fetches from the bundled page send no Origin.
+            return True
+        name = origin.split("//", 1)[-1].split("/", 1)[0]
+        host = name.rsplit(":", 1)[0] if ":" in name else name
+        return host.strip("[]") in {"127.0.0.1", "localhost", "::1"}
+
+    def _reject_cross_origin(self) -> bool:
+        """Refuse a request that did not come from this page.
+
+        Returns True when the request was rejected and the caller should
+        stop.
+        """
+        if self._host_is_local() and self._origin_is_local():
+            return False
+        _json(self, 403, {"error": "cross-origin requests are not allowed"})
+        return True
+
     def do_GET(self) -> None:
+        if self._reject_cross_origin():
+            return
         path = urlsplit(self.path)
         if path.path == "/":
             body = page().encode()
@@ -307,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
                 session.close()
 
     def do_POST(self) -> None:
+        if self._reject_cross_origin():
+            return
         if urlsplit(self.path).path == "/api/browse":
             self._browse()
             return
@@ -361,6 +413,7 @@ def serve(port: int = DEFAULT_PORT, router: str = DEFAULT_ROUTER) -> None:
     log_path().parent.mkdir(parents=True, exist_ok=True)
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
     Handler.router = router
+    Handler.port = int(port)
     server = ThreadingHTTPServer(("127.0.0.1", int(port)), Handler)
     print(f"ChatGPT Local · http://127.0.0.1:{port}", flush=True)
     try:

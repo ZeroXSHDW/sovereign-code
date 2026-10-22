@@ -6,6 +6,8 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
+from .safefile import ensure_private_dir, harden, open_private
+
 
 def _entries(
     include_dirs: list[Path],
@@ -51,13 +53,20 @@ def create_backup(
     extra_files: dict[Path, str] | None = None,
     root: Path | None = None,
 ) -> Path:
-    """Archive the given directories and extra files into a timestamped .tar.gz."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    """Archive the given directories and extra files into a timestamped .tar.gz.
+
+    The archive holds the sessions, the cached completions and the project
+    notes, so it is created 0600: an unreadable-to-others backup is not much
+    of a backup if the machine is shared.
+    """
+    ensure_private_dir(dest_dir)
     path = dest_dir / f"sovereign-backup-{datetime.now():%Y%m%d-%H%M%S}.tar.gz"
-    with tarfile.open(path, "w:gz") as archive:
-        for file_path, arcname in _entries(include_dirs, exclude or {}, root):
-            archive.add(file_path, arcname=str(arcname))
-        for file_path, arcname in (extra_files or {}).items():
-            if file_path.is_file():
-                archive.add(file_path, arcname=arcname)
+    with open_private(path, "wb") as raw:
+        with tarfile.open(fileobj=raw, mode="w:gz") as archive:
+            for file_path, arcname in _entries(include_dirs, exclude or {}, root):
+                archive.add(file_path, arcname=str(arcname))
+            for file_path, arcname in (extra_files or {}).items():
+                if file_path.is_file():
+                    archive.add(file_path, arcname=arcname)
+    harden(path)
     return path

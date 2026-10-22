@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import LOCAL_AI_ROOT, Settings
+from .safefile import write_private
 from .tier_gateway import CLAUDE_MODEL_ROUTES, CLAUDE_SLOT_MODELS
 
 # A client config is kept beside the live one so `--cloud` can hand it back
@@ -48,9 +49,16 @@ def _backup(path: Path) -> None:
 
 
 def _write(path: Path, text: str) -> Path:
+    """Write one of the user's client config files.
+
+    These files can carry the user's own cloud credentials — the live
+    ``~/.claude/settings.json`` still has ``ANTHROPIC_API_KEY`` in it when
+    the user has been signed in — so they are written 0600 rather than with
+    the process umask.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     _backup(path)
-    path.write_text(text, encoding="utf-8")
+    write_private(path, text)
     return path
 
 
@@ -166,10 +174,17 @@ OPENCODE_MODELS = {
 }
 
 
-def opencode_config() -> dict:
+def opencode_config(include_cloud: bool = False) -> dict:
+    """The OpenCode configuration this project writes.
+
+    The cloud provider block is only included when ``include_cloud`` is set.
+    Writing it unconditionally put an OpenRouter provider and eight remote
+    models into the user's live config, so a prompt typed in OpenCode could
+    leave the machine even though the whole project is local-first. It is now
+    opt-in, the way the README describes it.
+    """
     command = sovereign_argv()
-    return {
-        "$schema": "https://opencode.ai/config.json",
+    config = {        "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/best",
         "small_model": "sovereign/balanced",
         "provider": {
@@ -283,9 +298,12 @@ def opencode_config() -> dict:
             }
         },
     }
+    if not include_cloud:
+        config["provider"].pop("openrouter", None)
+    return config
 
 
-def install_opencode_mcp(path: Path | None = None) -> Path:
+def install_opencode_mcp(path: Path | None = None, include_cloud: bool = False) -> Path:
     target = path or opencode_config_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -294,8 +312,9 @@ def install_opencode_mcp(path: Path | None = None) -> Path:
     if not isinstance(data, dict):
         data = {}
     # Preserve the user's other settings and providers; add the working local
-    # provider, OpenRouter models, and MCP server.
-    merged = opencode_config()
+    # provider, and the MCP server. Cloud providers are only added when the
+    # user asks for them, so a local-first install stays local-first.
+    merged = opencode_config(include_cloud=include_cloud)
     providers = merged["provider"]
     for key, value in (data.get("provider") or {}).items():
         if not isinstance(value, dict):

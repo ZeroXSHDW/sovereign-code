@@ -43,6 +43,7 @@ import httpx
 
 from .cache import MEMORY, cache_key_chat, disk_cache
 from .models import is_cloud_tag
+from .safefile import ensure_private_dir, open_private
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
@@ -1263,10 +1264,10 @@ def metrics_path() -> Path:
 def log_metric(event: dict[str, Any]) -> None:
     path = metrics_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path.parent)
         if path.is_file() and path.stat().st_size > 5 * 1024 * 1024:
             path.replace(path.with_suffix(".jsonl.1"))
-        with _METRICS_LOCK, path.open("a", encoding="utf-8") as handle:
+        with _METRICS_LOCK, open_private(path, "a") as handle:
             handle.write(json.dumps(event, default=str) + "\n")
     except OSError:
         pass

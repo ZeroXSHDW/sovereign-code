@@ -1903,6 +1903,7 @@ def _cloud(
     set_key: str | None = None,
     key: str | None = None,
     prefer: str = "auto",
+    install_opencode: bool = False,
 ) -> int:
     """Show, enable, and wire the frontier models over Ollama Cloud or a provider."""
     if enable and disable:
@@ -1960,6 +1961,16 @@ def _cloud(
             console.print(f"[green]Cloud aliases written[/] {path}")
         if paths:
             console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
+
+    if install_opencode:
+        from .client_setup import install_opencode_mcp
+
+        path = install_opencode_mcp(include_cloud=True)
+        console.print(f"[green]Cloud provider added to OpenCode[/] {path}")
+        console.print(
+            "[yellow]OpenCode can now reach remote models.[/] "
+            "[dim]Prompts sent to them leave this Mac.[/]"
+        )
 
     status = read_cloud_status()
     style = "green" if status.enabled else "yellow"
@@ -5038,6 +5049,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="register every cloud model with Ollama (no weights downloaded)",
     )
     cloud.add_argument("--probe", action="store_true", help="check login/readiness with one model")
+    cloud.add_argument(
+        "--install-opencode",
+        action="store_true",
+        help="add the OpenRouter provider and remote models to OpenCode (opt-in)",
+    )
     cloud.add_argument("--timeout", type=float, default=12.0, help="probe timeout in seconds")
     cloud.add_argument(
         "--set-key",
@@ -6315,6 +6331,7 @@ def main(argv: list[str] | None = None) -> int:
             set_key=args.set_key,
             key=args.key,
             prefer=args.route,
+            install_opencode=args.install_opencode,
         )
     if command == "tune":
         return _tune(args.context, dry_run=args.dry_run)

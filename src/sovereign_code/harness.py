@@ -33,6 +33,7 @@ from typing import Any
 from .config import DATA_DIR
 from .models import ModelView
 from .router import Task, choose
+from .safefile import ensure_private_dir, open_private
 
 ORCHESTRATIONS_LOG = "orchestrations.jsonl"
 DOWNLOADS_LOG = "downloads.jsonl"
@@ -218,14 +219,19 @@ def _log_path(name: str) -> Path:
 
 
 def _append(name: str, payload: dict[str, Any]) -> None:
-    """Append one JSON event, rotating only when the file gets large."""
+    """Append one JSON event, rotating only when the file gets large.
+
+    The log carries the user's prompt and a preview of the model's reply, so
+    it is written 0600: it is created with the right mode rather than
+    chmod-ed afterwards, which would leave a readable window.
+    """
     path = _log_path(name)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path.parent)
         with _LOCK:
             if path.is_file() and path.stat().st_size > LOG_LIMIT_BYTES:
                 path.replace(path.with_suffix(".jsonl.1"))
-            with path.open("a", encoding="utf-8") as handle:
+            with open_private(path, "a") as handle:
                 handle.write(json.dumps(payload, default=str) + "\n")
     except OSError:
         # Observability must never break the work it is observing.

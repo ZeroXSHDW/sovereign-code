@@ -365,6 +365,7 @@ def is_cloud_tag(tag: str) -> bool:
     name = tag.strip().lower()
     return name.endswith(":cloud") or name.endswith("-cloud")
 
+
 # What the eight requested model names map to. Kept here (not only in the CLI)
 # so the mapping is testable and `sovereign cloud` can show exactly where each
 # familiar name goes. "DeepSeek V4 Flash" is the retired `deepseek-v4-flash`

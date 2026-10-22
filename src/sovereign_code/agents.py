@@ -42,7 +42,13 @@ def build_headless(
     max_tool_calls: int | None = 12,
     write: bool = True,
 ) -> HeadlessPlan:
-    """Build a one-shot run. ``unattended`` auto-approves tool calls (opt-in)."""
+    """Build a one-shot run.
+
+    ``unattended`` auto-approves every tool call (qwen "yolo", Claude
+    "bypassPermissions", opencode "--auto"). It is a local, explicit opt-in
+    only: an unattended agent edits and runs commands with no human in the
+    loop, so it must never be reachable from a remote or MCP caller.
+    """
     if client not in CLIENTS:
         raise ValueError(f"unknown client: {client}")
     if mode not in MODES:

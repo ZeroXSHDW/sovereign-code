@@ -7,8 +7,8 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import ClassVar
 from pathlib import Path
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult

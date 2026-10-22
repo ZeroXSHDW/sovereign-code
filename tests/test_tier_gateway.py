@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from typing import ClassVar
 
 import httpx
 
@@ -144,7 +145,7 @@ def test_metrics_summary(tmp_path, monkeypatch) -> None:
 
 def test_tier_headers_are_carried_to_the_responses_reply() -> None:
     class FakeResponse:
-        headers = {
+        headers: ClassVar[dict[str, str]] = {
             "x-sovereign-tier": "fast",
             "x-sovereign-model": "qwen3.5:4b",
             "x-sovereign-reason": "simple short prompt",

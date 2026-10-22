@@ -184,7 +184,8 @@ def opencode_config(include_cloud: bool = False) -> dict:
     opt-in, the way the README describes it.
     """
     command = sovereign_argv()
-    config = {        "$schema": "https://opencode.ai/config.json",
+    config = {
+        "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/best",
         "small_model": "sovereign/balanced",
         "provider": {

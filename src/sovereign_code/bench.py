@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from .http import client_for
+
 DEFAULT_MODELS = ("local-chat", "local-code", "local-agent")
 
 DEFAULT_PROMPT = (
@@ -41,9 +43,7 @@ def bench_alias(
     base = base_url.rstrip("/")
     started = time.monotonic()
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
-        ) as client:
+        with client_for(timeout=timeout, connect=3.0, transport=transport) as client:
             response = client.post(
                 f"{base}/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},

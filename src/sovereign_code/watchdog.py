@@ -19,6 +19,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from .http import client_for
+
 SERVING = "serving"
 BUSY = "busy"
 PROGRESSING = "progressing"
@@ -78,7 +80,7 @@ def runner_count() -> int:
 def sample(base_url: str, timeout: float = 8.0) -> Sample:
     base = base_url.rstrip("/")
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0)) as client:
+        with client_for(timeout=timeout, connect=3.0) as client:
             payload = client.get(f"{base}/api/ps").json()
         models = parse_ps(payload)
     except (httpx.HTTPError, ValueError):

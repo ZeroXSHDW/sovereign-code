@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from .http import shared_client
 
 DEFAULT_STACK = ("qwen3.5:4b", "qwen2.5-coder:14b", "gemma4:12b", "nomic-embed-text")
 # Rough installed size, used before anything is downloaded.
@@ -131,9 +132,8 @@ def migrate_legacy(
 
 def _http_ok(url: str, timeout: float = 2.0) -> bool:
     try:
-        import httpx
-
-        return httpx.get(url.rstrip("/") + "/api/version", timeout=timeout).status_code == 200
+        response = shared_client().get(url.rstrip("/") + "/api/version", timeout=timeout)
+        return response.status_code == 200
     except Exception:
         return False
 
@@ -230,10 +230,10 @@ def ensure_gateway(*, dry_run: bool = False) -> Step:
 
 
 def _installed_tags(settings) -> set[str]:
-    import httpx
 
     try:
-        data = httpx.get(settings.ollama_url.rstrip("/") + "/api/tags", timeout=3.0).json()
+        response = shared_client().get(settings.ollama_url.rstrip("/") + "/api/tags", timeout=3.0)
+        data = response.json()
     except Exception:
         return set()
     return {str(item.get("name") or "") for item in data.get("models", [])}

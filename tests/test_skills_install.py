@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from sovereign_code import skills_install
 from sovereign_code.skills_install import (
     INDEX_END,
@@ -96,3 +98,42 @@ def test_install_skill_twice_does_not_duplicate(tmp_path) -> None:
     second = install_skill(skill, target)
     assert first == second
     assert len(list(target.glob("*/SKILL.md"))) == 1
+
+
+def test_get_skill_refuses_to_leave_the_library(tmp_path, monkeypatch) -> None:
+    """The name is compared by slug but resolved as a path: it must be checked."""
+    library = tmp_path / "skills"
+    library.mkdir()
+    (library / "demo.md").write_text(SOURCE, encoding="utf-8")
+    secret = tmp_path / "secret.md"
+    secret.write_text("# Secret\ns3cr3t\n", encoding="utf-8")
+
+    monkeypatch.setattr(skills_install, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(skills_install, "LOCAL_AI_ROOT", tmp_path / "local")
+
+    assert skills_install.get_skill("demo") is not None
+    assert skills_install.get_skill("../secret") is None
+    assert skills_install.get_skill("../../etc/passwd") is None
+    assert skills_install.get_skill(str(secret)) is None
+    assert skills_install.get_skill("sub/dir") is None
+
+
+def test_install_ignores_a_traversing_name(tmp_path, monkeypatch) -> None:
+    library = tmp_path / "skills"
+    library.mkdir()
+    (library / "demo.md").write_text(SOURCE, encoding="utf-8")
+    monkeypatch.setattr(skills_install, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(skills_install, "LOCAL_AI_ROOT", tmp_path / "local")
+    monkeypatch.setattr(skills_install, "TARGETS", {"claude": lambda: tmp_path / "claude"})
+    monkeypatch.setattr(skills_install, "CONTINUE_PROMPTS", lambda: tmp_path / "continue")
+
+    written = install(targets="claude", names=["../../evil"])
+    assert written["claude"] == []
+    assert not (tmp_path / "evil").exists()
+    assert not (tmp_path.parent / "evil").exists()
+
+
+def test_install_skill_refuses_an_unsafe_name(tmp_path) -> None:
+    skill = Skill("../../evil", "A demo", "Body\n", tmp_path / "demo.md")
+    with pytest.raises(ValueError, match="unsafe skill name"):
+        install_skill(skill, tmp_path / "skills")

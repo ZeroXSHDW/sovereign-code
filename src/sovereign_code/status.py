@@ -149,9 +149,11 @@ async def collect(settings: Settings) -> Snapshot:
     snapshot.ollama_port = port_open(*_host_port(settings.ollama_url, 11434))
     snapshot.gateway_port = port_open(*_host_port(settings.gateway_url, 4000))
     snapshot.router_up = port_open(*_host_port(settings.router_url, 4010))
-    snapshot.loopback = is_loopback(settings.ollama_url) and is_loopback(
-        settings.gateway_url
-    ) and is_loopback(settings.router_url)
+    snapshot.loopback = (
+        is_loopback(settings.ollama_url)
+        and is_loopback(settings.gateway_url)
+        and is_loopback(settings.router_url)
+    )
     # The URLs only say where the clients dial. The sockets say what the
     # servers actually bound, and a server on 0.0.0.0 is reachable from the
     # network even when every config file points at loopback.

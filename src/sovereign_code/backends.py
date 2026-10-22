@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import httpx
 
 from .config import Settings
+from .http import shared_client
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ def known_backends(settings: Settings) -> list[Backend]:
 def probe(backend: Backend, timeout: float = 1.5) -> BackendStatus:
     """List models via the OpenAI-compatible endpoint (Ollama also supports it)."""
     try:
-        response = httpx.get(
+        response = shared_client().get(
             f"{backend.url}/v1/models",
             headers={"Authorization": "Bearer local"},
             timeout=timeout,

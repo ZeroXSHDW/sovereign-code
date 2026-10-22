@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from .http import async_client
+
 
 class OllamaError(RuntimeError):
     pass
@@ -43,6 +45,19 @@ class OllamaClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
+    def _client(self, transport: httpx.AsyncTransport | None = None) -> httpx.AsyncClient:
+        """The pooled client for this Ollama host.
+
+        One client per host per event loop, so the dashboard's two-and-a-half
+        second refresh does not pay a TCP handshake on every probe.
+        """
+        return async_client(
+            f"ollama:{self.base_url}",
+            timeout=self.timeout,
+            connect=self.connect_timeout,
+            transport=transport,
+        )
+
     async def _request(
         self,
         method: str,
@@ -59,12 +74,19 @@ class OllamaClient:
         longer than a health probe and would otherwise be cut off mid-load.
         """
         budget = self.timeout if timeout is None else timeout
+        limits = httpx.Timeout(budget, connect=self.connect_timeout)
+        client = self._client(transport)
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(budget, connect=self.connect_timeout),
-                transport=transport,
-            ) as client:
-                response = await client.request(method, self._url(path), json=payload)
+            if transport is not None:
+                # A caller-supplied transport belongs to the caller.
+                async with client:
+                    response = await client.request(
+                        method, self._url(path), json=payload, timeout=limits
+                    )
+            else:
+                response = await client.request(
+                    method, self._url(path), json=payload, timeout=limits
+                )
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
         if response.status_code >= 400:
@@ -157,39 +179,57 @@ class OllamaClient:
             payload["think"] = bool(think)
 
         timeout = httpx.Timeout(self.timeout, connect=5.0)
+        client = self._client(transport)
         try:
-            async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-                async with client.stream("POST", self._url("/api/chat"), json=payload) as response:
-                    if response.status_code >= 400:
-                        body = (await response.aread()).decode("utf-8", "replace")
-                        from .cloud import ollama_error_hint
-
-                        raise OllamaError(
-                            ollama_error_hint(
-                                f"Ollama chat returned {response.status_code}: {body[:300]}"
-                            )
-                        )
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if "error" in data:
-                            raise OllamaError(str(data["error"]))
-                        message = data.get("message") or {}
-                        yield ChatChunk(
-                            content=message.get("content") or "",
-                            thinking=message.get("thinking") or "",
-                            done=bool(data.get("done")),
-                            model=data.get("model", model),
-                            eval_count=int(data.get("eval_count") or 0),
-                            prompt_eval_count=int(data.get("prompt_eval_count") or 0),
-                            total_duration_ns=int(data.get("total_duration") or 0),
-                        )
+            if transport is not None:
+                async with client:
+                    async for chunk in self._stream_chat(client, payload, timeout):
+                        yield chunk
+            else:
+                async for chunk in self._stream_chat(client, payload, timeout):
+                    yield chunk
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama stream failed: {exc}") from exc
+
+    async def _stream_chat(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        timeout: httpx.Timeout,
+    ) -> AsyncIterator[ChatChunk]:
+        async with client.stream(
+            "POST", self._url("/api/chat"), json=payload, timeout=timeout
+        ) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", "replace")
+                from .cloud import ollama_error_hint
+
+                raise OllamaError(
+                    ollama_error_hint(f"Ollama chat returned {response.status_code}: {body[:300]}")
+                )
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if "error" in data:
+                    raise OllamaError(str(data["error"]))
+                message = data.get("message") or {}
+                yield ChatChunk(
+                    content=message.get("content") or "",
+                    thinking=message.get("thinking") or "",
+                    done=bool(data.get("done")),
+                    model=data.get("model", self._model_of(payload)),
+                    eval_count=int(data.get("eval_count") or 0),
+                    prompt_eval_count=int(data.get("prompt_eval_count") or 0),
+                    total_duration_ns=int(data.get("total_duration") or 0),
+                )
+
+    @staticmethod
+    def _model_of(payload: dict[str, Any]) -> str:
+        return str(payload.get("model") or "")
 
     async def pull(
         self, model: str, transport: httpx.BaseTransport | None = None
@@ -203,25 +243,41 @@ class OllamaClient:
         """
         payload = {"model": model, "stream": True}
         timeout = httpx.Timeout(None, connect=10.0)
+        client = self._client(transport)
         try:
-            async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-                async with client.stream("POST", self._url("/api/pull"), json=payload) as response:
-                    if response.status_code >= 400:
-                        body = (await response.aread()).decode("utf-8", "replace")
-                        from .cloud import ollama_error_hint
-
-                        raise OllamaError(
-                            ollama_error_hint(f"pull failed ({response.status_code}): {body[:300]}")
-                        )
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if "error" in data:
-                            raise OllamaError(str(data["error"]))
-                        yield data
+            if transport is not None:
+                async with client:
+                    async for event in self._stream_pull(client, payload, timeout):
+                        yield event
+            else:
+                async for event in self._stream_pull(client, payload, timeout):
+                    yield event
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama pull failed: {exc}") from exc
+
+    async def _stream_pull(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        timeout: httpx.Timeout,
+    ) -> AsyncIterator[dict[str, Any]]:
+        async with client.stream(
+            "POST", self._url("/api/pull"), json=payload, timeout=timeout
+        ) as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", "replace")
+                from .cloud import ollama_error_hint
+
+                raise OllamaError(
+                    ollama_error_hint(f"pull failed ({response.status_code}): {body[:300]}")
+                )
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if "error" in data:
+                    raise OllamaError(str(data["error"]))
+                yield data

@@ -63,6 +63,7 @@ from .cloud import (
     set_provider_key,
 )
 from .config import (
+    DATA_DIR,
     LOCAL_AI_ROOT,
     PROJECT_ROOT,
     Settings,
@@ -82,6 +83,7 @@ from .gateway_config import (
     write as write_gateway_config,
 )
 from .harness import log_download
+from .http import shared_client
 from .logs import TARGETS, resolve_log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
@@ -783,7 +785,7 @@ def _bench(
 
     base = settings.gateway_url.rstrip("/")
     try:
-        httpx.get(f"{base}/v1/models", timeout=3.0).raise_for_status()
+        shared_client().get(f"{base}/v1/models", timeout=3.0).raise_for_status()
     except httpx.HTTPError:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
         return 1
@@ -1040,7 +1042,7 @@ def _browse(args, settings: Settings) -> int:
     import httpx
 
     try:
-        probe = httpx.get(f"{settings.gateway_url.rstrip('/')}/v1/models", timeout=3.0)
+        probe = shared_client().get(f"{settings.gateway_url.rstrip('/')}/v1/models", timeout=3.0)
         if probe.status_code != 200:
             raise httpx.HTTPError("not ok")
     except httpx.HTTPError:
@@ -1127,6 +1129,23 @@ def _browse(args, settings: Settings) -> int:
     return 0 if result.stopped in {"done", "handoff", "cancelled"} else 1
 
 
+def _ensure_skill_index() -> str:
+    """Open the skill index read-write so its indexes exist.
+
+    The dashboard reads the index read-only, so it can never create the
+    covering index itself. Opening it once here turns a 2.6 second scan on
+    every refresh into a lookup that answers in under a millisecond.
+    """
+    from .skilldb import SkillDB
+
+    path = DATA_DIR / "skills.db"
+    if not path.is_file():
+        return "no skill index yet · run: sovereign skill-db sync"
+    with SkillDB(path) as store:
+        count = store.count()
+    return f"{count} skills indexed"
+
+
 def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
     from .clients import install_client_wrappers, write_codex_profile
     from .config import write_default_config
@@ -1141,6 +1160,11 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
             rows.append(("[red]FAILED[/]", label, str(exc)))
 
     run("config", lambda: write_default_config())
+
+    # The skill index is created read-write, and the dashboard only ever
+    # reads it. Without this the dashboard keeps paying a full scan of a
+    # 400 MB table until something else opens the database.
+    run("skill index", lambda: _ensure_skill_index())
 
     # A hung Ollama answers /api/version, so check that it actually serves and
     # recover it here rather than making the user work out why nothing replies.
@@ -2155,7 +2179,7 @@ def _gateway_restart(settings: Settings) -> int:
 
     def up() -> bool:
         try:
-            return httpx.get(f"{base}/health/liveliness", timeout=1.5).status_code == 200
+            return shared_client().get(f"{base}/health/liveliness", timeout=1.5).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -2262,7 +2286,7 @@ def _router(
             import httpx
 
             try:
-                health = httpx.get(f"http://{host}:{port}/health", timeout=3.0).json()
+                health = shared_client().get(f"http://{host}:{port}/health", timeout=3.0).json()
             except (httpx.HTTPError, ValueError):
                 health = {}
             for tier, model in (health.get("tiers") or {}).items():
@@ -2519,9 +2543,7 @@ def _chatgpt_verify() -> int:
 
     local_only = False
     try:
-        import httpx
-
-        health = httpx.get(f"{router}/health", timeout=3.0).json()
+        health = shared_client().get(f"{router}/health", timeout=3.0).json()
         local_only = bool(health.get("local_only"))
         tiers = health.get("tiers") or {}
         detail = ", ".join(f"{tier}={model}" for tier, model in tiers.items())
@@ -2783,7 +2805,7 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
     try:
         import httpx
 
-        health = httpx.get("http://127.0.0.1:4010/health", timeout=3.0).json()
+        health = shared_client().get("http://127.0.0.1:4010/health", timeout=3.0).json()
         tiers = health.get("tiers") or {}
         enforced = bool(health.get("local_only"))
         gateway_local = (
@@ -3479,7 +3501,9 @@ def _consult(
     )
 
     try:
-        httpx.get(settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0).raise_for_status()
+        shared_client().get(
+            settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0
+        ).raise_for_status()
     except httpx.HTTPError:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
         return 1
@@ -4447,7 +4471,9 @@ def _pipeline(
     import httpx
 
     try:
-        httpx.get(settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0).raise_for_status()
+        shared_client().get(
+            settings.gateway_url.rstrip("/") + "/v1/models", timeout=3.0
+        ).raise_for_status()
     except httpx.HTTPError:
         console.print("[red]Gateway is offline.[/] Start it with: sovereign gateway --restart")
         return 1

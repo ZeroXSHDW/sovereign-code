@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 from .config import DATA_DIR
+from .http import shared_client
 from .models import CATALOG
 from .router import Task
 
@@ -85,7 +86,7 @@ class WarmPool:
         """Load one model with a tiny prompt. Returns load time in seconds."""
         start = time.monotonic()
         try:
-            httpx.post(
+            shared_client().post(
                 f"{self.ollama}/api/generate",
                 json={
                     "model": model.tag,
@@ -132,7 +133,7 @@ class WarmPool:
             if model is None or not model.loaded:
                 continue
             try:
-                httpx.post(
+                shared_client().post(
                     f"{self.ollama}/api/generate",
                     json={
                         "model": tag,

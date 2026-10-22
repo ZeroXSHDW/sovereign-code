@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .http import client_for, shared_client
 from .tier_gateway import CLAUDE_MODEL_ROUTES
 
 DEFAULT_PORT = 4001
@@ -545,7 +546,7 @@ def completion(
     request = to_openai_request(payload, default_model=default_model)
     base = gateway_url.rstrip("/")
     try:
-        response = httpx.post(
+        response = shared_client().post(
             f"{base}/v1/chat/completions",
             headers={"Authorization": "Bearer local"},
             json=request,
@@ -569,10 +570,7 @@ def iter_completion(
     """Yield the OpenAI chunks of a streaming gateway completion."""
     request = to_openai_request(payload, default_model=default_model, stream=True)
     base = gateway_url.rstrip("/")
-    with httpx.Client(
-        timeout=httpx.Timeout(timeout, connect=5.0),
-        transport=transport,
-    ) as client:
+    with client_for(timeout=timeout, connect=5.0, transport=transport) as client:
         with client.stream(
             "POST",
             f"{base}/v1/chat/completions",

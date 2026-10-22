@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from sovereign_code.mcp import handle
 
@@ -109,3 +110,100 @@ def test_local_status_reports_the_stack_and_the_apps() -> None:
     assert "local_only" in payload
     assert "tiers" in payload["gateway"]
     assert "signin_required" in payload["apps"]["chatgpt"]
+
+
+def test_run_checks_tool_has_no_commands_parameter() -> None:
+    """A client must not be able to choose what runs on this Mac."""
+    tools = {tool["name"]: tool for tool in _result("tools/list")["result"]["tools"]}
+    assert "commands" not in tools["run_checks"]["inputSchema"]["properties"]
+
+
+def test_run_checks_tool_ignores_a_client_supplied_command(monkeypatch, tmp_path: Path) -> None:
+    from sovereign_code import checks
+
+    monkeypatch.setattr(checks, "detect_checks", lambda _directory: ["echo detected"])
+    response = _result(
+        "tools/call",
+        {
+            "name": "run_checks",
+            "arguments": {"path": str(tmp_path), "commands": ["curl https://evil.example"]},
+        },
+    )
+    payload = json.loads(response["result"]["content"][0]["text"])
+    assert payload["commands"] == ["echo detected"]
+    assert "evil.example" not in payload["log"]
+
+
+def test_delegate_never_disables_the_approval_prompts(monkeypatch, tmp_path: Path) -> None:
+    """write=true allows edits, but the human still gets asked."""
+    from sovereign_code import agents
+
+    captured: dict[str, object] = {}
+
+    def fake_build(client, mode, target, _prompt, _settings, _agent_model, **kwargs):
+        captured.update(kwargs)
+        return agents.HeadlessPlan(client, mode, ["true"], Path(target), {})
+
+    monkeypatch.setattr(agents, "build_headless", fake_build)
+    monkeypatch.setattr(agents, "run_headless", lambda _plan, **_kwargs: (True, "ok"))
+
+    response = _result(
+        "tools/call",
+        {
+            "name": "delegate",
+            "arguments": {"prompt": "fix it", "path": str(tmp_path), "write": True},
+        },
+    )
+    assert json.loads(response["result"]["content"][0]["text"])["ok"] is True
+    assert captured["unattended"] is False
+    assert captured["write"] is True
+
+
+def test_the_claude_delegate_keeps_its_normal_approval_mode(tmp_path: Path) -> None:
+    from sovereign_code.agents import build_headless
+    from sovereign_code.config import Settings
+
+    plan = build_headless(
+        "claude",
+        "cloud",
+        tmp_path,
+        "make it faster",
+        Settings(),
+        "auto",
+        unattended=False,
+        write=True,
+    )
+    mode = plan.argv[plan.argv.index("--permission-mode") + 1]
+    assert mode == "acceptEdits"
+    assert "bypassPermissions" not in plan.argv
+
+
+def test_the_cli_can_still_run_an_unattended_agent(tmp_path: Path) -> None:
+    """`sovereign run --yolo` keeps working: only the MCP path is fenced in."""
+    from sovereign_code.agents import build_headless
+    from sovereign_code.config import Settings
+
+    plan = build_headless(
+        "claude",
+        "cloud",
+        tmp_path,
+        "make it faster",
+        Settings(),
+        "auto",
+        unattended=True,
+        write=True,
+    )
+    assert plan.argv[plan.argv.index("--permission-mode") + 1] == "bypassPermissions"
+
+
+def test_get_skill_refuses_to_leave_the_library() -> None:
+    response = handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "get_skill", "arguments": {"name": "../../../../etc/passwd"}},
+        }
+    )
+    assert response is not None
+    assert "error" in response

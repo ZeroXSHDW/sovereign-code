@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import LOCAL_AI_ROOT
+from .http import shared_client
 from .models import CATALOG, CLOUD_PREFERENCE, REQUESTED_CLOUD_MODELS
 from .models import is_cloud_tag as _is_cloud_tag
 
@@ -713,7 +714,7 @@ def provider_chat(
             f"{provider.name}: no {env_var} (sovereign cloud --set-key {provider.key})"
         )
     try:
-        response = httpx.post(
+        response = shared_client().post(
             f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {secret}"},
             json={
@@ -758,7 +759,7 @@ def _probe_provider(route: tuple[str, str, str, str], timeout: float) -> CloudPr
     if not secret:
         return CloudProbe(False, f"{provider.name}: no {env_var}")
     try:
-        response = httpx.post(
+        response = shared_client().post(
             f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {secret}"},
             json={
@@ -820,7 +821,7 @@ def probe_cloud(settings: Any, tag: str = "kimi-k3:cloud", timeout: float = 12.0
     # Metadata can be listed even when generation is blocked by the account's
     # plan, so send one tiny completion: that is what actually returns 402.
     try:
-        response = httpx.post(
+        response = shared_client().post(
             f"{settings.ollama_url.rstrip('/')}/api/chat",
             json={
                 "model": tag,

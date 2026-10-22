@@ -128,6 +128,9 @@ ignore = [
     "S105",   # test fixtures use obvious fake secrets
     "S106",   # test fixtures use obvious fake secrets
     "S108",   # tests may use a fixed temp path
+    "ARG001", # httpx handlers and fixtures must accept the arguments the API gives them
+    "ARG002", # httpx handlers and fixtures must accept the arguments the API gives them
+    "ARG005", # httpx handlers and fixtures must accept the arguments the API gives them
 ]
 "src/sovereign_code/browser/executor.py" = ["E501"]  # embedded JS
 "src/sovereign_code/cli.py" = ["E501"]               # plist template lines

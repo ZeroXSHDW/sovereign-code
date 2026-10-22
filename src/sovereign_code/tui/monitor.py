@@ -17,8 +17,8 @@ import asyncio
 import subprocess
 import time
 from collections import deque
-from typing import ClassVar
 from pathlib import Path
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult

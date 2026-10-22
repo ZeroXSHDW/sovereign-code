@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 from .config import LOCAL_AI_ROOT
+from .http import client_for
 from .tier_gateway import local_only, port_open
 
 DEFAULT_PORT = 4020
@@ -383,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
-            with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
+            with client_for(timeout=600, connect=5) as client:
                 with client.stream(
                     "POST",
                     f"{self.router}/v1/chat/completions",

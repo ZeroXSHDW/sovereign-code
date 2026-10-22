@@ -24,7 +24,7 @@ async def test_request_uses_the_client_timeout(monkeypatch) -> None:
 
     class FakeClient:
         def __init__(self, **kwargs) -> None:
-            seen["timeout"] = kwargs.get("timeout")
+            seen["constructor_timeout"] = kwargs.get("timeout")
 
         async def __aenter__(self):
             return self
@@ -32,7 +32,8 @@ async def test_request_uses_the_client_timeout(monkeypatch) -> None:
         async def __aexit__(self, *args):
             return False
 
-        async def request(self, method, url, json=None):
+        async def request(self, method, url, json=None, timeout=None):
+            seen["timeout"] = timeout
             return httpx.Response(200, json={"version": "0.1"})
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
@@ -49,7 +50,7 @@ async def test_preload_gets_its_own_generous_budget(monkeypatch) -> None:
 
     class FakeClient:
         def __init__(self, **kwargs) -> None:
-            seen["timeout"] = kwargs.get("timeout")
+            seen["constructor_timeout"] = kwargs.get("timeout")
 
         async def __aenter__(self):
             return self
@@ -57,7 +58,8 @@ async def test_preload_gets_its_own_generous_budget(monkeypatch) -> None:
         async def __aexit__(self, *args):
             return False
 
-        async def request(self, method, url, json=None):
+        async def request(self, method, url, json=None, timeout=None):
+            seen["timeout"] = timeout
             return httpx.Response(200, json={})
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)

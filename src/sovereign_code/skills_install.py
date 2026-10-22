@@ -14,10 +14,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import LOCAL_AI_ROOT, PROJECT_ROOT
+from .skills import resolve_skill_path
 
 SKILL_DIR = "skills"
 INDEX_START = "<!-- sovereign-skills:start -->"
 INDEX_END = "<!-- sovereign-skills:end -->"
+
+
+def skill_roots() -> tuple[Path, ...]:
+    """The directories a skill name may resolve into.
+
+    A name is never allowed to reach outside them, whatever the caller
+    passed in.
+    """
+    return (PROJECT_ROOT / SKILL_DIR, LOCAL_AI_ROOT / "config" / "skills")
+
 
 # A deliberately small set: 22k skills would overwhelm every client's context.
 CURATED_PATTERNS = (
@@ -117,8 +128,23 @@ def render_skill(skill: Skill) -> str:
     return f"---\nname: {skill.name}\ndescription: {skill.description}\n---\n\n{skill.body}"
 
 
+def safe_skill_name(name: str) -> str:
+    """Refuse a skill name that would escape the directory it is written to."""
+    candidate = Path(name)
+    if (
+        not name
+        or "\x00" in name
+        or "/" in name
+        or "\\" in name
+        or candidate.is_absolute()
+        or ".." in candidate.parts
+    ):
+        raise ValueError(f"unsafe skill name: {name!r}")
+    return name
+
+
 def install_skill(skill: Skill, target: Path) -> Path:
-    folder = target / skill.name
+    folder = target / safe_skill_name(skill.name)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "SKILL.md"
     path.write_text(render_skill(skill), encoding="utf-8")
@@ -128,7 +154,7 @@ def install_skill(skill: Skill, target: Path) -> Path:
 def install_continue_prompt(skill: Skill, target: Path | None = None) -> Path:
     folder = target or CONTINUE_PROMPTS()
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{skill.name}.prompt"
+    path = folder / f"{safe_skill_name(skill.name)}.prompt"
     path.write_text(render_skill(skill), encoding="utf-8")
     return path
 
@@ -156,14 +182,10 @@ def install(
             slug = slugify(name)
             if slug in found:
                 continue
-            for candidate in (
-                PROJECT_ROOT / SKILL_DIR / f"{name}.md",
-                PROJECT_ROOT / SKILL_DIR / f"{slug}.md",
-            ):
-                if candidate.is_file():
-                    skills.append(load_skill(candidate))
-                    found.add(slug)
-                    break
+            candidate = _find_skill_file(name, slug)
+            if candidate is not None:
+                skills.append(load_skill(candidate))
+                found.add(slug)
 
     selected = (
         ["continue", *TARGETS]
@@ -257,16 +279,26 @@ def installed_counts() -> dict[str, int]:
     return counts
 
 
+def _find_skill_file(name: str, slug: str) -> Path | None:
+    """The library file for a name, checked against the skill roots.
+
+    The name is compared by slug but resolved as a path, so it has to be
+    checked first: "../../../../tmp/secret" must not read a file outside the
+    library.
+    """
+    for root in skill_roots():
+        for candidate_name in (name, slug):
+            candidate = resolve_skill_path(root, candidate_name)
+            if candidate is not None and candidate.is_file():
+                return candidate
+    return None
+
+
 def get_skill(name: str) -> Skill | None:
     """Find a skill in the curated set or anywhere in the 22k library."""
     wanted = slugify(name)
     for skill in load_curated():
         if skill.name == wanted or skill.name == name:
             return skill
-    for candidate in (
-        PROJECT_ROOT / SKILL_DIR / f"{name}.md",
-        PROJECT_ROOT / SKILL_DIR / f"{wanted}.md",
-    ):
-        if candidate.is_file():
-            return load_skill(candidate)
-    return None
+    candidate = _find_skill_file(name, wanted)
+    return load_skill(candidate) if candidate is not None else None

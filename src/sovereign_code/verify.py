@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from .gateway import alias_names
+from .http import client_for
 
 CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
 
@@ -73,9 +74,7 @@ def probe_alias(
     budget = TOKEN_BUDGETS.get(alias, DEFAULT_BUDGET)
     started = time.monotonic()
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
-        ) as client:
+        with client_for(timeout=timeout, connect=3.0, transport=transport) as client:
             response = client.post(
                 f"{base}/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},
@@ -114,9 +113,7 @@ def check_embedding(
     if not base.startswith("http"):
         base = f"http://{base}"
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
-        ) as client:
+        with client_for(timeout=timeout, connect=3.0, transport=transport) as client:
             response = client.post(f"{base}/api/embed", json={"model": model, "input": ["ok"]})
         if response.status_code != 200:
             return False, f"HTTP {response.status_code}"
@@ -157,9 +154,7 @@ def probe_liveness(
     base = base_url.rstrip("/")
     started = time.monotonic()
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
-        ) as client:
+        with client_for(timeout=timeout, connect=3.0, transport=transport) as client:
             response = client.post(f"{base}/api/embed", json={"model": model, "input": "ping"})
     except httpx.HTTPError as exc:
         return LivenessResult(False, f"no response in {timeout:.0f}s ({type(exc).__name__})")

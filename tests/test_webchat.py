@@ -48,9 +48,7 @@ def test_webchat_border_colour_meets_non_text_contrast() -> None:
     def luminance(colour: str) -> float:
         raw = colour.lstrip("#")
         channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
-        adjusted = [
-            c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
-        ]
+        adjusted = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
         return 0.2126 * adjusted[0] + 0.7152 * adjusted[1] + 0.0722 * adjusted[2]
 
     def ratio(a: str, b: str) -> float:
@@ -125,9 +123,7 @@ def _request(server, path: str, method: str = "GET", headers: dict[str, str] | N
 
 def test_webchat_rejects_a_rebinding_host_header(server) -> None:
     """A page on another origin that resolves to 127.0.0.1 sends its own Host."""
-    status, body = _request(
-        server, "/api/health", headers={"Host": "attacker.example"}
-    )
+    status, body = _request(server, "/api/health", headers={"Host": "attacker.example"})
     assert status == 403
     assert b"cross-origin" in body
 

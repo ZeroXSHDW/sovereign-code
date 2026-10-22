@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from .config import DATA_DIR
+from .http import shared_client
 
 DEFAULT_EMBED = "nomic-embed-text"
 CHUNK_CHARS = 1200
@@ -96,7 +97,7 @@ def embed(
     timeout: float = 120.0,
 ) -> list[list[float]]:
     try:
-        response = httpx.post(
+        response = shared_client().post(
             f"{_base(ollama_url).rstrip('/')}/api/embed",
             json={"model": model, "input": texts},
             timeout=timeout,

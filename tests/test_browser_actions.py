@@ -11,6 +11,8 @@ from sovereign_code.browser.actions import (
     PolicyError,
     check_url,
     is_destructive,
+    is_submit_control,
+    needs_confirmation,
     parse_action,
 )
 
@@ -76,6 +78,74 @@ def test_destructive_labels() -> None:
     assert is_destructive("Delete account")
     assert is_destructive("Buy now")
     assert not is_destructive("Read more")
+
+
+def test_destructive_word_list_covers_the_obvious_bypasses() -> None:
+    for label in (
+        "OK",
+        "ok",
+        "Yes",
+        "Continue",
+        "Upgrade",
+        "Apply",
+        "Submit",
+        "Confirm",
+        "Purchase",
+        "Pay",
+        "Subscribe",
+        "Remove",
+        "Uninstall",
+        "Terminate",
+        "Send",
+        "Post",
+        "Publish",
+        "Revoke",
+        "Reset",
+        "Delete",
+        "Drop",
+        "Destroy",
+        "Cancel",
+        "Close account",
+        "Sign out",
+    ):
+        assert is_destructive(label), label
+
+
+def test_bare_ok_is_destructive_but_ok_inside_a_label_is_not() -> None:
+    assert is_destructive("OK")
+    assert is_destructive("  OK!  ")
+    # "OK Google" is a search button, not a confirmation.
+    assert not is_destructive("OK Google")
+
+
+def test_submit_controls_are_recognised() -> None:
+    assert is_submit_control("button", "")
+    assert is_submit_control("button", "submit")
+    assert not is_submit_control("button", "button")
+    assert not is_submit_control("button", "reset")
+    assert is_submit_control("input", "submit")
+    assert is_submit_control("input", "image")
+    assert not is_submit_control("input", "text")
+    assert not is_submit_control("a", "")
+
+
+def test_unlabelled_submit_control_needs_confirmation() -> None:
+    # An icon-only button submits the form it sits in by default.
+    assert needs_confirmation("", "button", "")
+    assert needs_confirmation("", "button", "submit")
+    assert needs_confirmation("", "input", "submit")
+    assert needs_confirmation("", "input", "image")
+    # A control that cannot submit a form is harmless without a label.
+    assert not needs_confirmation("", "button", "button")
+    assert not needs_confirmation("", "input", "text")
+    assert not needs_confirmation("", "a", "")
+
+
+def test_labelled_control_uses_the_label() -> None:
+    assert needs_confirmation("Delete account", "button", "button")
+    assert needs_confirmation("OK", "button", "button")
+    assert not needs_confirmation("Read more", "button", "button")
+    assert not needs_confirmation("", "a", "")
 
 
 def test_as_dict_keeps_valid_target_and_amount() -> None:

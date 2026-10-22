@@ -51,7 +51,7 @@ def test_qwen_unattended_approves_everything(target):
     assert plan.argv[plan.argv.index("--approval-mode") + 1] == "yolo"
 
 
-def test_codex_uses_the_tier_gateway(target):
+def test_codex_uses_the_tier_gateway(target, codex_home):
     # The local profile speaks the Responses API to 4010; the adapter emits real
     # function_call events, so Codex executes tools without --oss.
     plan = _plan("codex", target=target)
@@ -118,7 +118,7 @@ def test_every_client_supports_both_modes():
     assert set(MODES) == {"local", "cloud"}
 
 
-def test_run_headless_reports_a_missing_binary(target):
+def test_run_headless_reports_a_missing_binary(target, codex_home):
     from dataclasses import replace
 
     plan = _plan("codex", target=target)
@@ -135,7 +135,7 @@ def test_runner_swallows_a_bad_client(target):
     assert "unknown client" in output
 
 
-def test_codex_read_only_delegate_uses_the_read_only_sandbox(target):
+def test_codex_read_only_delegate_uses_the_read_only_sandbox(target, codex_home):
     plan = _plan("codex", target=target, write=False)
     assert plan.argv[plan.argv.index("--sandbox") + 1] == "read-only"
 

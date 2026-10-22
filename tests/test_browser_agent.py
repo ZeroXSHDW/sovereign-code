@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sovereign_code.browser.actions import BrowserPolicy
-from sovereign_code.browser.agent import BrowserAgent
+from sovereign_code.browser.agent import AuditLog, BrowserAgent, ModelPlanner, _redact_url
 from sovereign_code.browser.executor import SensitiveFieldError
 
 OK_OBSERVATION: dict[str, Any] = {
@@ -32,6 +32,7 @@ class FakeSession:
         self.errors = list(errors or [])
         self.index = 0
         self.actions = []
+        self.confirm = None
 
     def observe(self):
         observation = self.observations[min(self.index, len(self.observations) - 1)]
@@ -40,6 +41,7 @@ class FakeSession:
 
     def perform(self, action, confirm=None):
         self.actions.append(action)
+        self.confirm = confirm
         if self.errors:
             raise self.errors.pop(0)
         if self.results:
@@ -52,8 +54,10 @@ class FakePlanner:
         self.replies = list(replies)
         self.calls = 0
         self.corrections = []
+        self.seen: list[tuple] = []
 
     def plan(self, task, observation, history, correction=""):
+        self.seen.append((task, observation, history))
         self.corrections.append(correction)
         reply = self.replies[min(self.calls, len(self.replies) - 1)]
         self.calls += 1
@@ -154,3 +158,63 @@ def test_screenshots_captured_on_done(tmp_path) -> None:
     assert result.stopped == "done"
     assert len(agent.screenshots) == 1
     assert agent.screenshots[0].endswith(".png")
+
+
+def test_redact_url_keeps_the_host_and_the_path() -> None:
+    redacted = _redact_url("https://example.com/orders?token=abc123&page=2#frag")
+    assert redacted.startswith("https://example.com/orders?")
+    assert "abc123" not in redacted
+    assert "page=2" not in redacted
+    assert "frag" not in redacted
+    assert "<redacted>" in redacted
+    assert _redact_url("https://example.com/plain") == "https://example.com/plain"
+
+
+def test_audit_log_keeps_secrets_out(tmp_path) -> None:
+    observation = {
+        "url": "https://example.com/login?session=abc123",
+        "title": "Example",
+        "text": "Example Domain",
+        "elements": [],
+        "captcha": False,
+    }
+    session = FakeSession(
+        [observation, observation],
+        results=[
+            {"ok": True, "detail": "navigated to https://example.com/?token=abc123"},
+            {"ok": True, "detail": "selected an option in element 1"},
+        ],
+    )
+    planner = FakePlanner(
+        [
+            '{"action":"navigate","url":"https://example.com/?token=abc123"}',
+            '{"action":"select","id":1,"value":"hunter2"}',
+            '{"action":"done","summary":"ok"}',
+        ]
+    )
+    audit = AuditLog(path=tmp_path / "audit.jsonl")
+    agent = _agent(session, planner, audit=audit)
+    result = agent.run("log in")
+    audit.close()
+    assert result.stopped == "done"
+    text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert "abc123" not in text
+    assert "hunter2" not in text
+    assert "example.com" in text
+    assert "<redacted>" in text
+
+
+def test_observation_never_carries_a_secret_value() -> None:
+    planner = ModelPlanner(gateway_url="http://localhost:1")
+    observation = {
+        "url": "https://example.com/",
+        "title": "Example",
+        "text": "",
+        "elements": [
+            {"id": 0, "tag": "input", "type": "text", "name": "otp", "value": "123456"},
+            {"id": 1, "tag": "input", "type": "text", "name": "city", "value": "Berlin"},
+        ],
+    }
+    payload = planner._observation(observation)
+    assert payload["elements"][0].get("value") is None
+    assert payload["elements"][1]["value"] == "Berlin"

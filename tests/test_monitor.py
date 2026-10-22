@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 from sovereign_code import monitor
@@ -13,6 +14,41 @@ def _reset_caches() -> None:
     monitor._BANK_CACHE_AT = 0.0
     monitor._PROJECT_CACHE = []
     monitor._PROJECT_CACHE_AT = 0.0
+
+
+def _write_skills_db(path) -> None:
+    """Write a small skill index with the dashboard's covering index."""
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE skills (name TEXT, category TEXT, usage_count INTEGER, "
+        "rating REAL, installed INTEGER)"
+    )
+    conn.executemany(
+        "INSERT INTO skills (name, category, usage_count, rating, installed) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            ("alpha", "code", 3, 4.5, 1),
+            ("beta", "chat", 1, 2.0, 1),
+            ("gamma", "code", 0, 0.0, 0),
+        ],
+    )
+    conn.execute(
+        "CREATE INDEX skills_bank_idx ON skills(installed, rating DESC, usage_count DESC, "
+        "name, category)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _bank_env(tmp_path, monkeypatch) -> None:
+    """Point the monitor at an empty skills tree and a scratch data dir."""
+    repo = tmp_path / "skills"
+    repo.mkdir()
+    monkeypatch.setattr(monitor, "REPO_SKILLS_DIR", repo)
+    monkeypatch.setattr(monitor, "USER_SKILLS_DIR", tmp_path / "user-skills")
+    monkeypatch.setattr(monitor, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(monitor, "PROJECT_ROOT", tmp_path)
+    _reset_caches()
 
 
 def test_skill_bank_counts_files_when_no_index(tmp_path, monkeypatch) -> None:
@@ -67,7 +103,7 @@ def test_live_projects_merge_sessions_by_folder(tmp_path, monkeypatch) -> None:
         encoding="utf-8",
     )
     monkeypatch.setattr(monitor, "SESSIONS_DIR", sessions)
-    monkeypatch.setattr(monitor, "_running_agents", lambda limit=8: [])
+    monkeypatch.setattr(monitor, "_running_agents", lambda **_kwargs: [])
     _reset_caches()
 
     projects = monitor.live_projects()
@@ -159,3 +195,87 @@ def test_health_is_green_when_everything_is_nominal() -> None:
     health = monitor.assess(report)
     assert health.level == "ok"
     assert health.reasons == ()
+
+
+# ------------------------------------------------------------------- bank
+
+
+def test_skill_bank_reads_the_index(tmp_path, monkeypatch) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    _write_skills_db(data / "skills.db")
+    _bank_env(tmp_path, monkeypatch)
+
+    bank = monitor.skill_bank()
+    assert bank.total == 3
+    assert bank.installed == 2
+    assert dict(bank.categories) == {"code": 1, "chat": 1}
+    assert bank.top == (("alpha", 3), ("beta", 1))
+    assert bank.source.endswith("skills.db")
+
+
+def test_skill_bank_query_uses_the_covering_index(tmp_path, monkeypatch) -> None:
+    """The dashboard's hot query must not scan the content table."""
+    data = tmp_path / "data"
+    data.mkdir()
+    _write_skills_db(data / "skills.db")
+    _bank_env(tmp_path, monkeypatch)
+
+    traced: list[str] = []
+    real_open = monitor._open_readonly
+
+    def traced_open(path):
+        conn = real_open(path)
+        if conn is not None:
+            conn.set_trace_callback(traced.append)
+        return conn
+
+    monkeypatch.setattr(monitor, "_open_readonly", traced_open)
+    monitor.skill_bank()
+
+    statement = next(s for s in traced if "FROM skills" in s and "ORDER BY" in s)
+    conn = sqlite3.connect(data / "skills.db")
+    plan_sql = "EXPLAIN QUERY PLAN " + statement
+    plan = [row[3] for row in conn.execute(plan_sql)]
+    conn.close()
+
+    assert any("skills_bank_idx" in detail for detail in plan)
+    assert not any(detail.startswith("SCAN skills") for detail in plan)
+
+
+def test_skill_bank_reads_an_index_without_the_installed_column(tmp_path, monkeypatch) -> None:
+    """An index without the newer columns still has to be readable."""
+    data = tmp_path / "data"
+    data.mkdir()
+    conn = sqlite3.connect(data / "skills.db")
+    conn.execute("CREATE TABLE skills (name TEXT, category TEXT, usage_count INTEGER, rating REAL)")
+    conn.executemany(
+        "INSERT INTO skills (name, category, usage_count, rating) VALUES (?, ?, ?, ?)",
+        [("alpha", "code", 3, 4.5), ("beta", "chat", 1, 2.0)],
+    )
+    conn.commit()
+    conn.close()
+    _bank_env(tmp_path, monkeypatch)
+
+    bank = monitor.skill_bank()
+    assert bank.total == 2
+    assert bank.installed == 2
+    assert dict(bank.categories) == {"code": 1, "chat": 1}
+    assert bank.top == (("alpha", 3), ("beta", 1))
+
+
+# --------------------------------------------------------------- metrics
+
+
+def test_metrics_count_honours_the_limit(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "tiers.jsonl"
+    path.write_text(
+        "\n".join(json.dumps({"ts": index, "tier": "fast"}) for index in range(10)) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(monitor, "metrics_path", lambda: path)
+
+    assert monitor.metrics_count() == 10
+    assert monitor.metrics_count(5) == 5
+    assert monitor.metrics_count(1) == 1
+    assert monitor.metrics_count(0) == 0

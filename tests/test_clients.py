@@ -118,7 +118,7 @@ def test_pin_opencode_model_works_without_a_user_config(monkeypatch, tmp_path):
     assert "OPENCODE_CONFIG_CONTENT" in env
 
 
-def test_plan_launch_sets_the_local_environment(project):
+def test_plan_launch_sets_the_local_environment(project, codex_home):
     # The local Codex profile points at the tier gateway's Responses API.
     plan = plan_launch("codex", project, Settings(), "auto")
     assert plan.argv[0] == "codex"

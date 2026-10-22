@@ -192,10 +192,81 @@ class LiveReport:
 
 # --------------------------------------------------------------------- banks
 
+# The bank statements are written out for every column combination the
+# monitor supports.  Picking the statement from a fixed table of complete
+# literals keeps the SQL that reaches the database a literal - no column
+# name is ever interpolated - and still lets the monitor read an older or
+# partial index that is missing the newer columns.
+_SKILL_BANK_SQL = {
+    ("usage_count", "rating", "installed"): (
+        "SELECT name, category, usage_count, rating FROM skills "
+        "WHERE installed = 1 ORDER BY rating DESC, usage_count DESC LIMIT 400"
+    ),
+    ("usage_count", "rating", None): (
+        "SELECT name, category, usage_count, rating FROM skills "
+        "ORDER BY rating DESC, usage_count DESC LIMIT 400"
+    ),
+    ("usage_count", None, "installed"): (
+        "SELECT name, category, usage_count, 0 FROM skills "
+        "WHERE installed = 1 ORDER BY 0 DESC, usage_count DESC LIMIT 400"
+    ),
+    ("usage_count", None, None): (
+        "SELECT name, category, usage_count, 0 FROM skills "
+        "ORDER BY 0 DESC, usage_count DESC LIMIT 400"
+    ),
+    (None, "rating", "installed"): (
+        "SELECT name, category, 0, rating FROM skills "
+        "WHERE installed = 1 ORDER BY rating DESC, 0 DESC LIMIT 400"
+    ),
+    (None, "rating", None): (
+        "SELECT name, category, 0, rating FROM skills ORDER BY rating DESC, 0 DESC LIMIT 400"
+    ),
+    (None, None, "installed"): (
+        "SELECT name, category, 0, 0 FROM skills "
+        "WHERE installed = 1 ORDER BY 0 DESC, 0 DESC LIMIT 400"
+    ),
+    (None, None, None): (
+        "SELECT name, category, 0, 0 FROM skills ORDER BY 0 DESC, 0 DESC LIMIT 400"
+    ),
+}
+
+_SKILL_INSTALLED_COUNT_SQL = {
+    "installed": "SELECT COUNT(DISTINCT name) FROM skills WHERE installed = 1",
+    None: "SELECT COUNT(DISTINCT name) FROM skills",
+}
+
+_PROMPT_BANK_SQL = {
+    ("category", "usage_count"): (
+        "SELECT name, category, usage_count, '0' FROM prompts "
+        "ORDER BY usage_count DESC, updated_at DESC LIMIT 400"
+    ),
+    ("category", None): (
+        "SELECT name, category, 0, '0' FROM prompts ORDER BY 0 DESC, updated_at DESC LIMIT 400"
+    ),
+    (None, "usage_count"): (
+        "SELECT name, 'general', usage_count, '0' FROM prompts "
+        "ORDER BY usage_count DESC, updated_at DESC LIMIT 400"
+    ),
+    (None, None): (
+        "SELECT name, 'general', 0, '0' FROM prompts ORDER BY 0 DESC, updated_at DESC LIMIT 400"
+    ),
+}
+
+# The only tables the monitor is allowed to read from.
+_BANK_TABLES = ("skills", "prompts")
+
+
+def _present(columns: set[str], name: str) -> str | None:
+    """The column name when the table has it, otherwise None."""
+    return name if name in columns else None
+
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of a bank table, read from a fixed allow-list."""
+    if table not in _BANK_TABLES:
+        return set()
     try:
-        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        return {row[1] for row in conn.execute("PRAGMA table_info(" + table + ")")}
     except sqlite3.Error:
         return set()
 
@@ -207,6 +278,17 @@ def _open_readonly(path: Path) -> sqlite3.Connection | None:
         return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.0)
     except sqlite3.Error:
         return None
+
+
+def _has_covering_index(conn: sqlite3.Connection) -> bool:
+    """Whether the skill bank has the index that makes its query cheap."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'skills_bank_idx'"
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
 
 
 def _file_skills() -> dict[str, Path]:
@@ -265,22 +347,25 @@ def skill_bank() -> BankStats:
         if conn is None:
             continue
         try:
-            if not {"name", "category"} <= _table_columns(conn, "skills"):
-                continue
             columns = _table_columns(conn, "skills")
-            uses = "usage_count" if "usage_count" in columns else "0"
-            rating = "rating" if "rating" in columns else "0"
-            installed_col = "installed" if "installed" in columns else "1"
-            rows = conn.execute(
-                f"SELECT name, category, {uses}, {rating} FROM skills "
-                f"WHERE {installed_col} = 1 ORDER BY {rating} DESC, {uses} DESC LIMIT 400"
-            ).fetchall()
+            if not {"name", "category"} <= columns:
+                continue
+            bank_sql = _SKILL_BANK_SQL[
+                (
+                    _present(columns, "usage_count"),
+                    _present(columns, "rating"),
+                    _present(columns, "installed"),
+                )
+            ]
+            count_sql = _SKILL_INSTALLED_COUNT_SQL[_present(columns, "installed")]
+            rows = conn.execute(bank_sql).fetchall()
             total = int(conn.execute("SELECT COUNT(DISTINCT name) FROM skills").fetchone()[0])
-            installed = int(
-                conn.execute(
-                    f"SELECT COUNT(DISTINCT name) FROM skills WHERE {installed_col} = 1"
-                ).fetchone()[0]
-            )
+            installed = int(conn.execute(count_sql).fetchone()[0])
+            detail = f"indexed · {len(files)} on disk"
+            if not _has_covering_index(conn):
+                # Without this index every refresh scans the whole table,
+                # because the markdown of every skill is stored inline.
+                detail += " · unindexed · sovereign doctor --fix"
             return _bank_from_rows(
                 "skill bank",
                 max(total, len(files)),
@@ -288,7 +373,7 @@ def skill_bank() -> BankStats:
                 installed=max(installed, len(files)),
                 size_mb=round(path.stat().st_size / (1024 * 1024), 1),
                 source=str(path),
-                detail=f"indexed · {len(files)} on disk",
+                detail=detail,
             )
         except sqlite3.Error:
             continue
@@ -335,13 +420,13 @@ def prompt_bank() -> BankStats:
             columns = _table_columns(conn, "prompts")
             if "name" in columns:
                 total = int(conn.execute("SELECT COUNT(DISTINCT name) FROM prompts").fetchone()[0])
-                category = "category" if "category" in columns else "'general'"
-                uses = "usage_count" if "usage_count" in columns else "0"
-                rating = "'0'"
-                rows = conn.execute(
-                    f"SELECT name, {category}, {uses}, {rating} FROM prompts "
-                    f"ORDER BY {uses} DESC, updated_at DESC LIMIT 400"
-                ).fetchall()
+                bank_sql = _PROMPT_BANK_SQL[
+                    (
+                        _present(columns, "category"),
+                        _present(columns, "usage_count"),
+                    )
+                ]
+                rows = conn.execute(bank_sql).fetchall()
         except sqlite3.Error:
             rows = []
         finally:
@@ -768,7 +853,11 @@ def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
 
 def metrics_count(limit: int = 500) -> int:
     """How many requests are in the recent metrics window."""
-    return len([line for line in _tail_text(metrics_path()) if line.strip()])
+    count = max(0, int(limit))
+    if count == 0:
+        return 0
+    lines = [line for line in _tail_text(metrics_path()) if line.strip()]
+    return len(lines[-count:])
 
 
 def format_age(timestamp: float) -> str:

@@ -32,7 +32,6 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,6 +41,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .cache import MEMORY, cache_key_chat, disk_cache
+from .http import leased_client, shared_client
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
 
@@ -55,33 +55,17 @@ DEFAULT_UPSTREAM = "http://127.0.0.1:4000"
 DEFAULT_REQUEST_TIMEOUT = 300.0
 DEFAULT_STREAM_IDLE_TIMEOUT = 180.0
 
+
 # Shared HTTP client with keep-alive and a bounded connection pool. Reusing
 # connections across requests skips the TCP + TLS handshake on every turn and
 # is one of the largest per-request speedups on loopback.
-_HTTP_CLIENT: httpx.Client | None = None
-_HTTP_CLIENT_LOCK = threading.Lock()
-
-
 def http_client() -> httpx.Client:
-    global _HTTP_CLIENT
-    if _HTTP_CLIENT is None:
-        with _HTTP_CLIENT_LOCK:
-            if _HTTP_CLIENT is None:
-                _HTTP_CLIENT = httpx.Client(
-                    timeout=httpx.Timeout(DEFAULT_REQUEST_TIMEOUT, connect=5.0),
-                    limits=httpx.Limits(
-                        max_connections=64,
-                        max_keepalive_connections=32,
-                        keepalive_expiry=30.0,
-                    ),
-                )
-    return _HTTP_CLIENT
+    """The gateway's pooled client.
 
-
-@contextmanager
-def shared_client():
-    """Yield the shared HTTP client without closing it on exit."""
-    yield http_client()
+    It has a long default read budget, because a local model call can take
+    minutes; callers that need less pass a per-request timeout.
+    """
+    return shared_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0)
 
 
 def _seconds(name: str, default: float) -> float:
@@ -548,7 +532,7 @@ def _model_sizes(ollama: str) -> dict[str, float]:
         return _SIZE_CACHE[1]
     sizes: dict[str, float] = {}
     try:
-        response = httpx.get(f"{ollama.rstrip('/')}/api/tags", timeout=3.0)
+        response = shared_client().get(f"{ollama.rstrip('/')}/api/tags", timeout=3.0)
         for item in response.json().get("models") or []:
             name = str(item.get("name") or "")
             if name:
@@ -561,7 +545,7 @@ def _model_sizes(ollama: str) -> dict[str, float]:
 
 def _loaded_models(ollama: str) -> list[tuple[str, float, int]]:
     try:
-        response = httpx.get(f"{ollama.rstrip('/')}/api/ps", timeout=3.0)
+        response = shared_client().get(f"{ollama.rstrip('/')}/api/ps", timeout=3.0)
         return [
             (
                 str(item.get("name") or ""),
@@ -588,7 +572,7 @@ def ensure_model_room(model: str, ollama: str, context: int = 0) -> None:
         if same and (not context or not loaded_ctx or loaded_ctx >= context):
             continue
         try:
-            httpx.post(
+            shared_client().post(
                 f"{ollama.rstrip('/')}/api/generate",
                 json={"model": name, "prompt": "", "stream": False, "keep_alive": 0},
                 timeout=15.0,
@@ -1563,7 +1547,7 @@ def _installed(ollama: str) -> set[str]:
     if _INSTALLED_CACHE and now - _INSTALLED_CACHE[0] < 20:
         return _INSTALLED_CACHE[1]
     try:
-        response = httpx.get(f"{ollama.rstrip('/')}/api/tags", timeout=3.0)
+        response = shared_client().get(f"{ollama.rstrip('/')}/api/tags", timeout=3.0)
         models = {
             str(item.get("name") or "")
             for item in response.json().get("models") or []
@@ -1821,7 +1805,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(b": sovereign\n\n")
             self.wfile.write(_chunk(route.model, {"role": "assistant", "content": ""}, cid=cid))
             self.wfile.flush()
-            with shared_client() as client:
+            with leased_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0) as client:
                 with client.stream(
                     "POST", f"{self.ollama.rstrip('/')}/api/chat", json=payload
                 ) as response:
@@ -2061,7 +2045,7 @@ class _Handler(BaseHTTPRequestHandler):
                             self.wfile.write(chunk)
                             self.wfile.flush()
             else:
-                response = httpx.post(
+                response = shared_client().post(
                     f"{self.upstream.rstrip('/')}/v1/chat/completions",
                     headers=headers,
                     json=request,
@@ -2114,7 +2098,7 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                with shared_client() as client:
+                with leased_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0) as client:
                     with client.stream("POST", target, json=chat) as result:
                         if result.status_code != 200:
                             body = result.read().decode("utf-8", "replace")[:400]
@@ -2151,7 +2135,7 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            with shared_client() as client:
+            with leased_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0) as client:
                 result = client.post(target, json=chat)
             if result.status_code != 200:
                 raise RuntimeError(result.text[:400])
@@ -2342,7 +2326,7 @@ def warm_fast(ollama: str) -> None:
     _MODEL_LOCK.acquire()
     try:
         ensure_model_room(model, ollama, context)
-        httpx.post(
+        shared_client().post(
             f"{ollama.rstrip('/')}/api/generate",
             json={
                 "model": model,

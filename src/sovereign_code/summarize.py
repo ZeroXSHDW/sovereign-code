@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .browser.actions import BrowserPolicy, PolicyError, check_url
+from .http import shared_client
 
 MAX_CHARS = 24000
 MAX_REDIRECTS = 5
@@ -37,7 +38,7 @@ def _fetch(url: str, timeout: float) -> httpx.Response:
         except PolicyError as exc:
             raise SourceError(f"refused to fetch {url}: {exc}") from exc
         try:
-            response = httpx.get(current, timeout=timeout, follow_redirects=False)
+            response = shared_client().get(current, timeout=timeout, follow_redirects=False)
         except httpx.HTTPError as exc:
             raise SourceError(f"could not fetch {url}: {exc.__class__.__name__}") from exc
         if not response.is_redirect:

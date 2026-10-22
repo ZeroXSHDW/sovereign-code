@@ -171,21 +171,16 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "run_checks",
-        "Detect and run a project's tests, returning the pass/fail log.",
-        {
-            "path": {"type": "string"},
-            "commands": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Explicit commands; omit to auto-detect",
-            },
-        },
+        "Detect and run a project's tests, returning the pass/fail log. The commands "
+        "are always detected from the project; a client cannot choose what runs.",
+        {"path": {"type": "string"}},
         ["path"],
     ),
     _tool(
         "delegate",
         "Run a local coding agent on a project. Read-only by default; set write=true "
-        "to allow edits. Returns the agent's output and success flag.",
+        "to allow edits. The agent still asks before acting, and this tool can never "
+        "disable its approval prompts. Returns the agent's output and success flag.",
         {
             "prompt": {"type": "string"},
             "path": {"type": "string"},
@@ -576,7 +571,10 @@ def _delegate(
         prompt,
         Settings.load(),
         "auto",
-        unattended=write,
+        # The MCP path never turns the agent's approval prompts off: a
+        # connected client must not be able to run an agent unattended.
+        # `write` still allows edits, but the agent keeps asking the human.
+        unattended=False,
         write=write,
         wall_time=seconds,
     )
@@ -590,12 +588,22 @@ def _delegate(
     }
 
 
-def _checks(path: str, commands: list[str] | None) -> dict[str, Any]:
-    from .checks import detect_checks, run_checks
+def _checks(path: str, commands: list[str] | None = None) -> dict[str, Any]:
+    """Run the project's own checks.
+
+    `commands` is for internal callers only: the MCP tool schema does not
+    offer it, and an explicit command still has to be an allow-listed test
+    or lint runner.
+    """
+    from .checks import allowed_commands, detect_checks, run_allowed_checks, run_checks
 
     target = Path(path).expanduser().resolve()
-    chosen = commands or detect_checks(target)
-    result = run_checks(target, chosen, timeout=900.0)
+    if commands:
+        chosen = allowed_commands(commands)
+        result = run_allowed_checks(target, chosen, timeout=900.0)
+    else:
+        chosen = detect_checks(target)
+        result = run_checks(target, chosen, timeout=900.0)
     return {"ok": result.ok, "commands": chosen, "log": result.log[-6000:]}
 
 
@@ -705,9 +713,10 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             int(args.get("max_tokens") or 512),
         )
     if name == "run_checks":
-        commands = args.get("commands")
+        # The tool schema has no "commands" parameter: the client never picks
+        # what runs on this Mac, only where the project is.
         target = str(args.get("path") or ".")
-        return _text(_checks(target, commands if isinstance(commands, list) else None))
+        return _text(_checks(target))
     if name == "browser_open":
         return _text(
             _browser_open(
@@ -822,7 +831,8 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "model=fast for quick work or model=deep for code/reasoning, "
                     "list_skills/get_skill for workflows, run_checks to verify, and "
                     "delegate to run a real local Codex/Claude agent on a project "
-                    "(read-only unless write=true). Browser control is available via "
+                    "(read-only unless write=true; it never skips the human's "
+                    "approvals). Browser control is available via "
                     "browser_open/observe/act/screenshot/close. Use hf_status, "
                     "search_hf_models/hf_model_info, and search_hf_datasets/"
                     "hf_dataset_info to discover Hugging Face repositories; use "

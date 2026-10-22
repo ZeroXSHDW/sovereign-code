@@ -5605,17 +5605,25 @@ def build_parser() -> argparse.ArgumentParser:
     # --- cache ------------------------------------------------------------
     cache = sub.add_parser("cache", help="response cache: stats, clear, warm")
     cache.add_argument("action", nargs="?", default="stats", choices=("stats", "clear"))
-    cache.add_argument("--older-than", type=float, default=None, help="clear entries older than seconds")
+    cache.add_argument(
+        "--older-than", type=float, default=None, help="clear entries older than seconds"
+    )
 
     # --- warm -------------------------------------------------------------
     warm = sub.add_parser("warm", help="model warm pool: status, load, touch, start, stop")
-    warm.add_argument("action", nargs="?", default="status", choices=("status", "load", "touch", "start", "stop"))
+    warm.add_argument(
+        "action", nargs="?", default="status", choices=("status", "load", "touch", "start", "stop")
+    )
     warm.add_argument("model", nargs="?", default=None, help="model tag to load/touch")
 
     # --- knowledge --------------------------------------------------------
     knowledge = sub.add_parser("knowledge", help=".md knowledge base: index, search, roots")
-    knowledge.add_argument("action", nargs="?", default="roots", choices=("roots", "index", "search"))
-    knowledge.add_argument("query", nargs="?", default=None, help="search words (for search) or root path (for index)")
+    knowledge.add_argument(
+        "action", nargs="?", default="roots", choices=("roots", "index", "search")
+    )
+    knowledge.add_argument(
+        "query", nargs="?", default=None, help="search words (for search) or root path (for index)"
+    )
     knowledge.add_argument("--root", default=None, help="directory to index (for index)")
     knowledge.add_argument("--model", default="nomic-embed-text", help="embedding model")
     knowledge.add_argument("--top", type=int, default=10, help="top results (for search)")
@@ -6028,6 +6036,150 @@ def _parse_vars(pairs: list[str]) -> dict[str, str]:
         key, value = pair.split("=", 1)
         out[key.strip()] = value.strip()
     return out
+
+
+# --------------------------------------------------------------------- cache
+
+
+def _cache(args) -> int:
+    from .tier_gateway import CACHE
+
+    if args.action == "stats":
+        mem = CACHE.memory.stats()
+        disk = CACHE.disk.stats()
+        table = Table(title="Response Cache", header_style="bold #b794f4")
+        table.add_column("Layer", style="bold")
+        table.add_column("Entries", justify="right")
+        table.add_column("Hits", justify="right")
+        table.add_column("Misses", justify="right")
+        table.add_column("Hit rate", justify="right")
+        table.add_row(
+            "memory",
+            str(mem["entries"]),
+            str(mem["hits"]),
+            str(mem["misses"]),
+            f"{mem['hit_rate']}%",
+        )
+        table.add_row(
+            "disk",
+            str(disk["entries"]),
+            str(disk.get("disk_hits", 0)),
+            str(disk.get("memory_misses", 0)),
+            f"{disk.get('hit_rate', 0)}%",
+        )
+        console.print(table)
+        return 0
+    if args.action == "clear":
+        removed = CACHE.disk.clear(older_than=args.older_than)
+        CACHE.memory.clear()
+        if args.older_than is not None:
+            console.print(
+                f"[green]Cleared[/] {removed} cache entr{'y' if removed == 1 else 'ies'} "
+                f"older than {args.older_than}s"
+            )
+        else:
+            console.print(f"[green]Cleared[/] {removed} cache entr{'y' if removed == 1 else 'ies'}")
+        return 0
+    console.print(f"[red]Unknown action:[/] {args.action}")
+    return 1
+
+
+# --------------------------------------------------------------------- warm
+
+
+def _warm(args) -> int:
+    from .warm import pool as warm_pool
+
+    p = warm_pool()
+    if args.action == "status":
+        console.print(p.summary())
+        return 0
+    if args.action == "load":
+        tags = [args.model] if args.model else None
+        results = p.warm(tags)
+        for tag, seconds in results.items():
+            console.print(f"[green]{tag}[/] loaded in {seconds}s")
+        p.save_state()
+        return 0
+    if args.action == "touch":
+        tags = [args.model] if args.model else None
+        p.touch(tags)
+        console.print("[green]Touched[/]" + (f" {args.model}" if args.model else ""))
+        return 0
+    if args.action == "start":
+        p.start()
+        console.print("[green]Warm pool keep-alive started.[/]")
+        return 0
+    if args.action == "stop":
+        p.stop()
+        console.print("[green]Warm pool keep-alive stopped.[/]")
+        return 0
+    console.print(f"[red]Unknown action:[/] {args.action}")
+    return 1
+
+
+# --------------------------------------------------------------------- knowledge
+
+
+def _knowledge(args) -> int:
+    from .knowledge import KnowledgeBase
+
+    kb = KnowledgeBase()
+    try:
+        if args.action == "roots":
+            rows = kb.list_roots()
+            if not rows:
+                console.print("[dim]No knowledge roots indexed yet.[/]")
+                console.print("[dim]Run: sovereign knowledge index /path/to/docs[/]")
+                return 0
+            table = Table(title="Knowledge Roots", header_style="bold #b794f4")
+            table.add_column("Root", style="bold")
+            table.add_column("Files", justify="right")
+            table.add_column("Chunks", justify="right")
+            table.add_column("Indexed", overflow="fold")
+            table.add_column("Embed model")
+            for row in rows:
+                indexed = (row["indexed_at"] or "")[:16].replace("T", " ")
+                table.add_row(
+                    row["root"],
+                    str(row["file_count"]),
+                    str(row["chunk_count"]),
+                    indexed,
+                    row["embed_model"],
+                )
+            console.print(table)
+            return 0
+        if args.action == "index":
+            root = args.root or args.query
+            if not root:
+                console.print("[red]Give a directory:[/] sovereign knowledge index /path/to/docs")
+                return 1
+            stats = kb.index_root(root, embed_model=args.model)
+            console.print(
+                f"[green]Indexed[/] {root}: {stats['files']} files · {stats['chunks']} chunks"
+            )
+            return 0
+        if args.action == "search":
+            query = args.query
+            if not query:
+                console.print("[red]Give a query:[/] sovereign knowledge search <words>")
+                return 1
+            hits = kb.search(query, top=args.top)
+            if not hits:
+                console.print(f"[dim]No matches for '{query}'.[/]")
+                return 0
+            table = Table(title=f"Knowledge search · {query}", header_style="bold #b794f4")
+            table.add_column("Score", justify="right")
+            table.add_column("File", style="bold")
+            table.add_column("Snippet", overflow="fold")
+            for h in hits:
+                table.add_row(f"{h.score:.2f}", h.name, h.snippet)
+            console.print(table)
+            return 0
+        console.print(f"[red]Unknown action:[/] {args.action}")
+        return 1
+    finally:
+        kb.close()
 
 
 def main(argv: list[str] | None = None) -> int:

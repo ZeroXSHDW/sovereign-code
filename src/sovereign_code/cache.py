@@ -25,6 +25,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
 from .config import DATA_DIR
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
@@ -63,7 +64,7 @@ class MemoryCache:
     def __init__(self, max_entries: int = 512, ttl: float = TTL_DEFAULT) -> None:
         self.max_entries = max_entries
         self.ttl = ttl
-        self._data: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+        self._data: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
@@ -103,6 +104,7 @@ class MemoryCache:
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
+
 
 class DiskCache:
     """SQLite-backed persistent cache.

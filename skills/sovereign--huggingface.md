@@ -1,13 +1,13 @@
 ---
 name: sovereign-huggingface
-description: Search, inspect, authenticate, and download models from the Hugging Face Hub with `sovereign hf`. Use when the user wants a model that is not in the Ollama catalog, needs a GGUF quant, or asks where model files live.
+description: Search, inspect, authenticate, download, and clean up models and datasets from the Hugging Face Hub with `sovereign hf`, including one-step import into Ollama. Use when the user wants a model or dataset that is not in the Ollama catalog, needs a specific GGUF quant, asks where Hub files live, or wants to free Hub disk space.
 ---
 
 # Sovereign Hugging Face
 
-Use the Hub when a model is not available as an Ollama tag, or when the user
-needs a specific GGUF quantization. Search and inspection are read-only.
-Downloads are explicit and file-selective by default.
+Use the Hub when a model is not available as an Ollama tag, when the user needs
+a specific GGUF quantization, or when a project needs a dataset. Search and
+inspection are read-only. Downloads are explicit and file-selective by default.
 
 1. Check authentication and paths:
 
@@ -15,19 +15,30 @@ Downloads are explicit and file-selective by default.
    sovereign hf status
    ```
 
-2. Search, preferring GGUF for local Ollama use:
+2. Search models, preferring GGUF for local Ollama use:
 
    ```sh
    sovereign hf search "qwen coder" --gguf --limit 10
    sovereign hf search "mlx llama" --sort likes
+   sovereign hf search "coder" --gguf --license apache-2.0 --language en
+   ```
+
+   Search datasets with `--dataset`; add `--format`, `--license`, `--language`,
+   `--filter TAG`, or `--pipeline` to narrow results:
+
+   ```sh
+   sovereign hf search "ultrachat" --dataset --format parquet --limit 5
+   sovereign hf search "code instructions" --dataset --license mit
    ```
 
 3. Inspect a repository before downloading. This shows gated status, storage,
-   GGUF context length, and file sizes:
+   licence, languages, formats, base models, GGUF context length, and file
+   sizes. Add `--readme` for the human-readable model or dataset card:
 
    ```sh
    sovereign hf info org/model-GGUF
-   sovereign hf info org/model-GGUF --files
+   sovereign hf info org/model-GGUF --files --readme
+   sovereign hf info HuggingFaceH4/ultrachat_200k --dataset --files
    sovereign hf info org/model-GGUF --json
    ```
 
@@ -38,23 +49,42 @@ Downloads are explicit and file-selective by default.
    ```sh
    sovereign hf download org/model-GGUF --include "*Q4_K_M.gguf"
    sovereign hf download org/model --include "*.safetensors" --include "*.json"
+   sovereign hf download org/data --dataset --include "*.parquet"
+   sovereign hf download org/model-GGUF --include "*Q4_K_M.gguf" --exclude "*.bin"
    sovereign hf download org/model-GGUF --include "*Q4_K_M.gguf" --dry-run
    ```
 
    The destination defaults to
-   `~/Documents/local-ai/models/huggingface/<org>--<repo>`. Use
-   `--local-dir PATH` to choose another folder, or `--cache-dir PATH` to
-   override the Hub cache. Large downloads ask for confirmation; `--yes`
-   skips the prompt for scripts.
+   `~/Documents/local-ai/models/huggingface/<org>--<repo>` for models and
+   `~/Documents/local-ai/datasets/huggingface/<org>--<repo>` for datasets. Use
+   `--local-dir PATH` to choose another folder, `--cache-dir PATH` to override
+   the Hub cache, and `--max-workers N` to tune parallelism. Large downloads ask
+   for confirmation; `--yes` skips the prompt for scripts.
 
-5. Import a GGUF into Ollama when it is the single model file in the folder:
+5. Import one GGUF into Ollama. `hf import` downloads the selected file first
+   when it is not already present, then generates a temporary Modelfile:
 
    ```sh
-   ollama create my-model -f <(printf 'FROM %s\n' \
-     "$HOME/Documents/local-ai/models/huggingface/org--repo/model-Q4_K_M.gguf")
+   sovereign hf import org/model-GGUF --include "*Q4_K_M.gguf" --name qwen-coder:7b
+   sovereign hf import org/model-GGUF --include "*Q8_0.gguf" --context 32768
+   sovereign hf import /path/to/model.gguf --dry-run
    ```
 
-   Then check it with `ollama list` and `sovereign models`.
+   Split GGUFs (`*-00001-of-00004.gguf`) are rejected because Ollama needs a
+   single file. Choose a single-file quantization or merge the parts first.
+   After import, check it with `ollama list`, `sovereign models`, and
+   `ollama run <name>`.
+
+6. List or remove local copies. `hf list` covers model and dataset downloads
+   plus the shared Hub cache. `hf remove` shows the size and deletes only the
+   exact download/cache paths for that repository:
+
+   ```sh
+   sovereign hf list
+   sovereign hf list --dataset
+   sovereign hf remove org/model-GGUF --yes
+   sovereign hf remove org/data --dataset --yes
+   ```
 
 ## Authentication
 
@@ -70,7 +100,16 @@ sovereign hf logout
 The token is stored in the same file as `hf` and `huggingface_hub`, so it also
 works for `transformers`, `vllm`, `mlx-lm`, and plain `hf download`. If
 `HF_TOKEN` is exported, it takes precedence over the saved file. Gated models
-still require accepting the licence on the model page.
+and datasets still require accepting the licence on their Hub page.
+
+## MCP
+
+MCP exposes discovery and local inventory only; downloads stay in the CLI:
+
+- `hf_status` — token source, mode, CLI, cache and download paths.
+- `search_hf_models` / `hf_model_info` — model search and inspection.
+- `search_hf_datasets` / `hf_dataset_info` — dataset search and inspection.
+- `list_hf_local` — models, datasets, and Hub cache already on this Mac.
 
 ## Locations
 
@@ -78,7 +117,8 @@ still require accepting the licence on the model page.
 | --- | --- |
 | Hub token | `~/.cache/huggingface/token` (or `$HF_TOKEN_PATH`) |
 | Hub cache | `~/.cache/huggingface/hub` (or `$HF_HOME`) |
-| Sovereign downloads | `~/Documents/local-ai/models/huggingface` |
+| Model downloads | `~/Documents/local-ai/models/huggingface` |
+| Dataset downloads | `~/Documents/local-ai/datasets/huggingface` |
 | Ollama weights | `~/.ollama/models` → `~/Documents/local-ai/models` |
 | Repo skills | `~/Documents/sovereign-code/skills` |
 | User prompt skills | `~/Documents/local-ai/config/skills` |
@@ -91,5 +131,11 @@ still require accepting the licence on the model page.
 - Prefer a GGUF quant that fits the machine's unified memory. On this 24 GB Mac,
   Q4_K_M at roughly 4-9 GB is usually the right balance for 7B-14B models.
 - Report the exact destination and selected files after a download.
+- For datasets, download the specific split or format files the project needs;
+  do not pull a full multi-GB dataset by default.
+- Use `hf import` rather than hand-writing a Modelfile, unless the user asks
+  for custom parameters.
 - Never echo a token, even partially. `sovereign hf status` shows only the
-  source and the account name.
+  source, file mode, and account name.
+- `hf remove` is destructive but scoped to one repository; confirm the path and
+  size before passing `--yes`.

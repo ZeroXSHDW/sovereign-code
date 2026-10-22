@@ -9,7 +9,7 @@
 | `router.py` | Task→model priority, context fitting against free RAM, system prompts |
 | `ollama.py` | Async Ollama client, NDJSON streaming, pull progress |
 | `cloud.py` | Ollama Cloud readiness, enable/disable, alias rendering, provider routes, plan errors |
-| `bridge.py` | Anthropic Messages → non-streaming gateway → Anthropic SSE, so Claude Code executes tools |
+| `bridge.py` | Anthropic Messages → streamed gateway completion → Anthropic SSE, so Claude Code shows text as it is generated and executes tools |
 | `tier_gateway.py` | Latency-aware OpenAI gateway: fast/balanced/deep/ultra routing, correct streamed tool calls, fallback, cache, metrics |
 | `mcp.py` | MCP stdio server: models, skills, project memory, checks, completions |
 | `skills_install.py` | One curated skill library → Claude/Codex/Qwen/OpenCode/Continue + project index |
@@ -17,26 +17,30 @@
 | `gateway.py` | LiteLLM `/v1/models` probe |
 | `system.py` | macOS memory, disk, ports, launch agent, client paths |
 | `status.py` | Single `Snapshot` used by CLI and TUI |
+| `monitor.py` | Read-only live report: skill/prompt banks, live projects, requests, services |
 | `sessions.py` | Append-only JSONL conversations, mode 0600 |
-| `tui/app.py` | Textual dashboard, streaming chat, suspend-to-Qwen |
+| `tui/monitor.py` | Login dashboard: live monitor, no chat, no model residency |
+| `tui/app.py` | Opt-in streaming chat (`sovereign chat`), suspend-to-Qwen |
 | `cli.py` | `sovereign` commands and login agent installer |
 
 ## Data flow
 
-1. The dashboard calls `status.collect()` every 2.5 s.
+1. The login monitor calls `status.collect()` plus `monitor.collect_live()` every 5 s.
 2. `collect()` gathers Ollama version/tags/ps, gateway models, memory, disk,
    ports, and login-agent state concurrently.
-3. `models.build_views()` merges installed tags with the catalog and marks the
+3. `monitor.collect_live()` reads the skill/prompt bank metadata (read-only),
+   merges running agent processes with recent session headers to show which
+   project is using a model, tails `tiers.jsonl` for recent requests, and reads
+   memory/swap/load. It never writes a database and never starts a service.
+4. `models.build_views()` merges installed tags with the catalog and marks the
    loaded model and its real context. Cloud entries carry `cloud=True`: they have
    no local size, are never chosen by the router, and are shown in a separate
    table.
-4. `router.choose()` selects a model for the current task and the largest context
-   that fits; the TUI and `sovereign code` share this logic.
-5. Before a turn, `_make_room()` unloads any other resident model so the
-   selected model gets a real context instead of a 2k fallback.
-6. A prompt is sent to `/api/chat` with `stream: true`. The assistant Markdown
-   widget is updated as tokens arrive, then the exchange is appended to a JSONL
-   session.
+5. `router.choose()` selects a model for the current task and the largest context
+   that fits; the CLI, chat app and `sovereign code` share this logic.
+6. Chat is explicit (`sovereign chat`). Before a turn, `_make_room()` unloads any
+   other resident model so the selected model gets a real context instead of a
+   2k fallback. The login monitor never runs this path.
 
 ## Context fitting
 
@@ -72,15 +76,27 @@ so the project routes edits to Qwen Code rather than pretending otherwise.
 
 ## TUI event loop
 
-- `on_mount` builds the shell, adds the welcome message, starts the 2.5 s refresh.
+### Login monitor (`tui/monitor.py`)
+
+- `on_mount` collects once, then refreshes every 5 s.
+- The refresh runs `status.collect()` and `monitor.collect_live()`; bank and
+  project lookups are cached (30 s / 10 s) because the skill tree has >20k files.
+- There is no prompt input, no chat worker, and no guardian tick. `F9` unloads
+  resident models on demand; `F2`/`F4`/`F6` suspend the monitor and hand the
+  terminal to an agent client.
+- The monitor never writes to `skills.db`, `skills_index.db`, or `prompts.db`.
+
+### Opt-in chat (`tui/app.py`, `sovereign chat`)
+
 - `on_input_submitted` handles slash commands or starts a `run_worker` chat task.
 - `_stream_reply` consumes `OllamaClient.chat_stream` and updates a `Markdown`
   widget in place; it never blocks the refresh timer.
-- `sovereign free` and the TUI `/free` command unload residents on demand.
-- `F2` / `F4` / `F6` use Textual's `suspend()` to hand the real terminal to
-  Qwen Code, Codex, or Claude Code, then refresh on return.
-- `/qwen`, `/codex`, and `/claude` do the same from the input line;
-  `/clients` prints the capability matrix without leaving the dashboard.
+- `sovereign free` and the chat `/free` command unload residents on demand.
+
+`F2` / `F4` / `F6` use Textual's `suspend()` to hand the real terminal to
+Qwen Code, Codex, or Claude Code, then refresh on return. `/qwen`, `/codex`,
+and `/claude` do the same from the input line; `/clients` prints the capability
+matrix without leaving the chat app.
 
 ## Login agent
 
@@ -92,21 +108,21 @@ both the plist and the loaded job.
 ## The stack as services
 
 `sovereign autostart --install` writes one `~/Library/LaunchAgents` plist per
-service: the LiteLLM gateway, the tier gateway, the Anthropic bridge, the
-ChatGPT Local web UI and the guardian. Each has `RunAtLoad` (it starts at
-login, so it survives a reboot) and `KeepAlive` with `SuccessfulExit: false`
-(launchd restarts it after a crash, but leaves it alone after a clean exit —
-a clean exit means another instance already owns the port).
+service the clients actually need: the LiteLLM gateway, the tier gateway and
+the Anthropic bridge. Each has `RunAtLoad` (it starts at login, so it survives
+a reboot) and `KeepAlive` with `SuccessfulExit: false` (launchd restarts it
+after a crash, but leaves it alone after a clean exit — a clean exit means
+another instance already owns the port).
 
-The guardian is the second line of defence. Every 30 seconds it checks the
-ports and restarts what is missing, preferring `launchctl kickstart` when the
-job is loaded so the job launchd supervises is the one that gets restarted. It
-also republishes `CODEX_APP_SERVER_OPENAI_BASE_URL` and `SOVEREIGN_API_KEY`
-with `launchctl setenv`, which is the only way to reach an app launched from
-the Dock, and it puts the ChatGPT config and Claude's settings back on the
-local path when they drift — but only while the local mode is the current
-one, so `sovereign chatgpt --cloud` and `sovereign claude --cloud` are not
-undone.
+The old `webchat` and `guardian` services are retired. A chat web server and a
+30-second restart loop are not worth 24/7 RAM/CPU when the dashboard is a
+passive monitor; `--install` stops and removes their plists so launchd cannot
+bring them back at the next login.
+
+`sovereign guardian` is still available as a one-shot check. It republishes
+`CODEX_APP_SERVER_OPENAI_BASE_URL` and `SOVEREIGN_API_KEY` with
+`launchctl setenv` and repairs drifted client configs when asked; it is no
+longer installed as a watch loop.
 
 ## Gateway supervisor and TCC
 
@@ -136,10 +152,10 @@ with `nohup`. It is retired: the launchd services own the gateway now, and
 the retired plists are kept as `.superseded` so the old way can be restored.
 
 `com.user.ailocalgateway.watchdog` checked the gateway every five minutes
-and asked Terminal to restart the supervisor. The guardian does that job
-now, without a window: it checks the same ports, restarts a service through
-launchd when the job is loaded, and repairs the client configs. The watchdog
-is retired with the rest.
+and asked Terminal to restart the supervisor. `sovereign guardian` can do that
+on demand, without a window: it checks the same ports, restarts a service
+through launchd when the job is loaded, and repairs the client configs. The
+24/7 watchdog job is retired with the rest.
 
 ## Cloud path (opt-in)
 
@@ -192,13 +208,13 @@ translation returns a tool call as `content` text; Codex 0.163 dropped
 OpenCode's built-in `ollama` provider does too. The working paths are:
 
 - **Codex**: local profile points at the tier gateway's `/v1/responses` adapter,
-  which translates to a non-streaming chat completion and emits Responses SSE
-  with real `function_call` items. `--cloud` uses the ChatGPT login.
+  which forwards text deltas as they are generated and emits Responses SSE with
+  real `function_call` items. `--cloud` uses the ChatGPT login.
 - **OpenCode**: a custom `local/` OpenAI-compatible provider pointing at
   `127.0.0.1:11434/v1`, not the built-in `ollama` provider.
-- **Claude Code**: `bridge.py` accepts Anthropic `/v1/messages`, calls the
-  gateway's `/v1/chat/completions` with `stream: false` (where LiteLLM's tool
-  translation is correct), then emits Anthropic SSE with `tool_use` blocks.
+- **Claude Code**: `bridge.py` accepts Anthropic `/v1/messages`, asks the
+  gateway's `/v1/chat/completions` for a stream, and re-emits text deltas as
+  Anthropic SSE while buffering tool calls into complete `tool_use` blocks.
   `message_start` is sent before the model runs so Claude's first-byte timeout
   does not close the connection during a long local prefill.
 - **Qwen Code**: native Ollama model, no proxy.
@@ -259,5 +275,8 @@ All runtime state is in `~/Documents/local-ai`:
 - Missing Qwen: `F2` reports it; `sovereign code` exits with the install hint.
 - Missing Codex profile: `F4` prints the `sovereign install-clients` fix instead
   of launching, so Codex never falls back to a cloud account.
-- Chat-only clients: `sovereign clients` and `doctor` label Codex and Claude
-  Code as chat-only for local edits; edits are routed to Qwen Code.
+- Agent clients execute edits locally: Codex through the tier gateway's
+  Responses stream, Claude Code through the bridge's `tool_use` blocks, and
+  Qwen Code and OpenCode directly. `sovereign clients` reports each one.
+- A stalled local model surfaces as an Anthropic `error` event (Claude) or an
+  upstream error (OpenAI clients) instead of an empty or hung reply.

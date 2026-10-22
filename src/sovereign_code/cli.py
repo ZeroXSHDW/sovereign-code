@@ -21,6 +21,14 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from .agent_detect import (
+    detect_all,
+    gateway_targets,
+    installed_agents,
+)
+from .agent_detect import (
+    summarize as agent_summary,
+)
 from .agents import build_headless, run_headless
 from .backup import create_backup
 from .bench import DEFAULT_MODELS, DEFAULT_PROMPT, bench_alias
@@ -61,11 +69,21 @@ from .config import (
     write_default_config,
 )
 from .direct import apply_writes, build_messages, parse_blocks, relevant_files
+from .gateway_config import (
+    default_path as gateway_config_path,
+)
+from .gateway_config import (
+    render as render_gateway_config,
+)
+from .gateway_config import (
+    write as write_gateway_config,
+)
 from .logs import TARGETS, log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
+from .promptdb import PromptDB
 from .router import Task, choose
 from .search import (
     DEFAULT_EMBED,
@@ -81,6 +99,7 @@ from .sessions import (
     search_sessions,
     select_prunable,
 )
+from .skilldb import SkillDB
 from .skills import list_skills, read_skill, render_skill
 from .stats import collect_stats, human_size
 from .status import Snapshot, collect
@@ -2908,11 +2927,12 @@ def _guardian(
     interval: float = 30.0,
     as_json: bool = False,
 ) -> int:
-    """Keep the tier gateway, the Anthropic bridge and the web chat alive.
+    """Check the gateway and the Anthropic bridge, and put back what is down.
 
     A dead tier gateway is what makes the ChatGPT app look like it wants a
-    sign-in, and a dead bridge does the same to Claude. Both are detached
-    processes with no supervisor, so the guardian is the supervisor.
+    sign-in, and a dead bridge does the same to Claude. This is a manual
+    one-shot by default; the 24/7 watch loop is no longer installed as a
+    service. ``--watch`` still runs in the foreground if asked for.
     """
     import json as _json
 
@@ -4082,7 +4102,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"sovereign {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("dashboard", help="open the live terminal dashboard (default)")
+    sub.add_parser(
+        "dashboard",
+        help="open the live read-only monitor (default): banks, projects, system",
+    )
+    sub.add_parser(
+        "monitor",
+        help="alias for dashboard: skill/prompt banks, live projects, system activity",
+    )
     status = sub.add_parser("status", help="one-shot system status")
     status.add_argument("--json", action="store_true", help="machine-readable output")
     models = sub.add_parser("models", help="list installed and recommended models")
@@ -4208,14 +4235,14 @@ def build_parser() -> argparse.ArgumentParser:
     dog = sub.add_parser("watchdog", help="recover a wedged Ollama without killing a busy one")
     dog.add_argument("--no-restart", action="store_true", help="report only")
     dog.add_argument("--interval", type=float, default=8.0, help="seconds between samples")
-    guard = sub.add_parser("guardian", help="keep the tier gateway, bridge and web chat alive")
+    guard = sub.add_parser("guardian", help="check/restore the gateway and bridge (no 24/7 loop)")
     guard.add_argument("--status", action="store_true", help="report only, start nothing")
     guard.add_argument("--watch", action="store_true", help="keep checking until interrupted")
     guard.add_argument("--interval", type=float, default=30.0, help="seconds between checks")
     guard.add_argument("--json", action="store_true", help="print machine readable output")
     auto = sub.add_parser(
         "autostart",
-        help="start the local stack at login, keep it alive, and survive a reboot",
+        help="start the gateway tier and bridge at login and survive a reboot",
     )
     auto.add_argument("--install", action="store_true", help="install and load the services")
     auto.add_argument("--uninstall", action="store_true", help="remove the services")
@@ -4480,7 +4507,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_web.add_argument(
         "--install-app", action="store_true", help="create ~/Applications/ChatGPT Local.app"
     )
-    chat = sub.add_parser("chat", help="open the dashboard in chat mode")
+    chat = sub.add_parser("chat", help="open the interactive chat dashboard (opt-in)")
     chat.add_argument("--model", default=None)
 
     code = sub.add_parser("code", help="launch Qwen Code in a project with the best local model")
@@ -4491,7 +4518,497 @@ def build_parser() -> argparse.ArgumentParser:
     login = sub.add_parser("install-login", help="open the dashboard in Terminal at login")
     login.add_argument("--start-now", action="store_true")
     sub.add_parser("uninstall-login", help="remove the login terminal agent")
+
+    # --- agents -----------------------------------------------------------
+    agents = sub.add_parser("agents", help="detect coding agents and list gateway targets")
+    agents.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    agents.add_argument("--tsv", action="store_true", help="tab-separated output for shell scripts")
+
+    # --- prompts ----------------------------------------------------------
+    prompts = sub.add_parser("prompts", help="prompt database: versioned, categorized, searchable")
+    prompts.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=("list", "add", "get", "render", "delete", "search", "count", "touch"),
+    )
+    prompts.add_argument("name", nargs="?", default=None, help="prompt name")
+    prompts.add_argument("--content", default=None, help="prompt content (for add)")
+    prompts.add_argument("--category", default=None, help="category filter (default: no filter)")
+    prompts.add_argument("--tags", default="", help="comma-separated tags")
+    prompts.add_argument(
+        "--version", type=int, default=None, help="specific version (get/delete/render)"
+    )
+    prompts.add_argument("--search", default=None, help="full-text search query (list/search)")
+    prompts.add_argument("--replace", action="store_true", help="replace existing prompt (add)")
+    prompts.add_argument("--var", action="append", default=[], help="VAR=value for render")
+    prompts.add_argument("--limit", type=int, default=100, help="max rows to list")
+
+    # --- skill-db ---------------------------------------------------------
+    skilldb = sub.add_parser(
+        "skill-db", help="skill database: index, search, rate, install/uninstall"
+    )
+    skilldb.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=(
+            "list",
+            "add",
+            "get",
+            "delete",
+            "search",
+            "count",
+            "sync",
+            "rate",
+            "touch",
+            "export",
+            "import",
+        ),
+    )
+    skilldb.add_argument("name", nargs="?", default=None, help="skill name")
+    skilldb.add_argument("--content", default=None, help="skill content (for add)")
+    skilldb.add_argument("--category", default="general", help="category (default: general)")
+    skilldb.add_argument("--tags", default="", help="comma-separated tags")
+    skilldb.add_argument("--description", default="", help="one-line description")
+    skilldb.add_argument("--rating", type=float, default=0.0, help="rating 0-5")
+    skilldb.add_argument("--search", default=None, help="full-text search query (list/search)")
+    skilldb.add_argument("--installed-only", action="store_true", help="only show installed skills")
+    skilldb.add_argument("--limit", type=int, default=200, help="max rows to list")
+
+    # --- gateway-config ---------------------------------------------------
+    gwcfg = sub.add_parser(
+        "gateway-config", help="generate the LiteLLM model_list.yaml for all code agents"
+    )
+    gwcfg.add_argument("--write", action="store_true", help="write model_list.yaml to disk")
+    gwcfg.add_argument(
+        "--path",
+        default=None,
+        help="output path (default: ~/Documents/local-ai/gateway/model_list.yaml)",
+    )
+    gwcfg.add_argument(
+        "--show", action="store_true", help="print the YAML to stdout instead of writing"
+    )
+
+    # --- connect ----------------------------------------------------------
+    connect = sub.add_parser("connect", help="run the one-command agent connect (like curl | sh)")
+    connect.add_argument(
+        "--script",
+        default=None,
+        help="path to agent-connect.sh (default: scripts/agent-connect.sh)",
+    )
+
     return parser
+
+
+# --------------------------------------------------------------------- agents
+
+
+def _agents(as_json: bool, as_tsv: bool) -> int:
+    reports = detect_all()
+    if as_json:
+        import json as _json
+
+        print(_json.dumps([r.to_dict() for r in reports], indent=2))
+        return 0
+    if as_tsv:
+        for r in reports:
+            print(
+                f"{r.key}\t{r.name}\t{'true' if r.installed else 'false'}\t"
+                f"{r.command or ''}\t{r.config_dir or ''}\t{r.app_bundle or ''}"
+            )
+        return 0
+    console.print(agent_summary())
+    installed = installed_agents()
+    if installed:
+        console.print("\n[bold]Gateway targets (sovereign local-first):[/]")
+        targets = gateway_targets()
+        table = Table(box=None, padding=(0, 1))
+        table.add_column("Agent", style="bold")
+        table.add_column("Points at")
+        for r in installed:
+            table.add_row(r.name, targets.get(r.key, "http://127.0.0.1:4010/v1"))
+        console.print(table)
+    else:
+        console.print(
+            "[dim]None found. Install one, then re-run `sovereign agents`, or run "
+            "`sovereign connect` to set everything up.[/]"
+        )
+    return 0
+
+
+# --------------------------------------------------------------------- prompts
+
+
+def _prompts(args) -> int:
+    db = PromptDB()
+    try:
+        action = args.action or "list"
+        if action == "list":
+            rows = db.list(
+                category=args.category,
+                tag=None,
+                search=args.search,
+                limit=args.limit,
+            )
+            if not rows:
+                console.print("[dim]No prompts yet. Add one with:[/]")
+                console.print(
+                    "  sovereign prompts add <name> --content '…' --category code --tags coding,review"
+                )
+                return 0
+            table = Table(title="Prompts", header_style="bold #b794f4")
+            table.add_column("Name", style="bold")
+            table.add_column("Category")
+            table.add_column("Tags")
+            table.add_column("Version", justify="right")
+            table.add_column("Uses", justify="right")
+            table.add_column("Updated", overflow="fold")
+            for p in rows:
+                updated = (p.updated_at or "")[:16].replace("T", " ")
+                table.add_row(
+                    p.name,
+                    p.category,
+                    ", ".join(p.tags),
+                    str(p.version),
+                    str(p.usage_count),
+                    updated,
+                )
+            console.print(table)
+            console.print(f"[dim]{db.count()} prompt(s)[/]")
+            return 0
+
+        if action == "add":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign prompts add <name> --content '…'")
+                return 1
+            if not args.content:
+                console.print("[red]Give content:[/] --content '…'")
+                return 1
+            variables = _parse_vars(args.var)
+            if variables:
+                console.print("[dim]Note: {{variables}} are applied at render time, not stored.[/]")
+            try:
+                p = db.add(
+                    args.name,
+                    args.content,
+                    category=args.category,
+                    tags=args.tags,
+                    replace=args.replace,
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/]")
+                console.print("[dim]Use --replace to overwrite, or pick a different name.[/]")
+                return 1
+            console.print(
+                f"[green]Added[/] {p.name} (v{p.version}) · vars: {', '.join(p.variables) or 'none'}"
+            )
+            return 0
+
+        if action == "get":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign prompts get <name>")
+                return 1
+            p = (
+                db.get_version(args.name, args.version)
+                if args.version is not None
+                else db.get(args.name)
+            )
+            if p is None:
+                console.print(f"[red]No such prompt:[/] {args.name}")
+                return 1
+            console.print(
+                Panel(Text(p.content), title=f"prompt · {p.name} v{p.version}", border_style="cyan")
+            )
+            console.print(
+                f"[dim]category={p.category} tags={', '.join(p.tags) or 'none'} vars={', '.join(p.variables) or 'none'}[/]"
+            )
+            return 0
+
+        if action == "render":
+            if not args.name:
+                console.print(
+                    "[red]Give a name:[/] sovereign prompts render <name> --var VAR=value"
+                )
+                return 1
+            variables = _parse_vars(args.var)
+            try:
+                text = db.render(args.name, version=args.version, **variables)
+            except KeyError as exc:
+                console.print(f"[red]{exc}[/]")
+                return 1
+            console.print(Text(text))
+            return 0
+
+        if action == "delete":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign prompts delete <name> [--version N]")
+                return 1
+            ok = db.delete(args.name, version=args.version)
+            if not ok:
+                console.print(f"[red]No such prompt:[/] {args.name}")
+                return 1
+            what = f"v{args.version} of" if args.version is not None else "all versions of"
+            console.print(f"[green]Deleted[/] {what} {args.name}")
+            return 0
+
+        if action == "search":
+            query = args.search or args.name or ""
+            if not query:
+                console.print("[red]Give a query:[/] sovereign prompts search <words>")
+                return 1
+            rows = db.list(search=query, limit=args.limit)
+            if not rows:
+                console.print(f"[dim]No prompts match '{query}'.[/]")
+                return 0
+            table = Table(title=f"Prompt search · {query}", header_style="bold #b794f4")
+            table.add_column("Name", style="bold")
+            table.add_column("Category")
+            table.add_column("Version", justify="right")
+            table.add_column("Uses", justify="right")
+            for p in rows:
+                table.add_row(p.name, p.category, str(p.version), str(p.usage_count))
+            console.print(table)
+            return 0
+
+        if action == "count":
+            console.print(f"{db.count()}")
+            return 0
+
+        if action == "touch":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign prompts touch <name>")
+                return 1
+            row = db._conn.execute(
+                "SELECT id FROM prompts WHERE name = ? ORDER BY version DESC LIMIT 1", (args.name,)
+            ).fetchone()
+            if row is None:
+                console.print(f"[red]No such prompt:[/] {args.name}")
+                return 1
+            db.touch(args.name)
+            console.print(f"[green]Touched[/] {args.name}")
+            return 0
+
+        console.print(f"[red]Unknown action:[/] {action}")
+        return 1
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------- skill-db
+
+
+def _skill_db(args) -> int:
+    db = SkillDB()
+    try:
+        action = args.action or "list"
+        if action == "list":
+            rows = db.list(
+                category=args.category,
+                tag=None,
+                search=args.search,
+                installed_only=args.installed_only,
+                limit=args.limit,
+            )
+            if not rows:
+                console.print("[dim]No skills indexed yet.[/]")
+                console.print("[dim]Run: sovereign skill-db sync[/]")
+                return 0
+            table = Table(title="Skills", header_style="bold #b794f4")
+            table.add_column("Name", style="bold")
+            table.add_column("Category")
+            table.add_column("Tags")
+            table.add_column("Rating", justify="right")
+            table.add_column("Uses", justify="right")
+            table.add_column("Installed", justify="center")
+            for s in rows:
+                mark = "[green]yes[/]" if s.installed else "[dim]no[/]"
+                table.add_row(
+                    s.name,
+                    s.category,
+                    ", ".join(s.tags),
+                    f"{s.rating:.1f}",
+                    str(s.usage_count),
+                    mark,
+                )
+            console.print(table)
+            console.print(f"[dim]{db.count()} skill(s)[/]")
+            return 0
+
+        if action == "sync":
+            stats = db.sync_repo()
+            console.print(
+                f"[green]Synced[/] · added {stats['added']} · updated {stats['updated']} · "
+                f"unchanged {stats['unchanged']} · disabled {stats['disabled']}"
+            )
+            return 0
+
+        if action == "add":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign skill-db add <name> --content '…'")
+                return 1
+            if not args.content:
+                console.print("[red]Give content:[/] --content '…'")
+                return 1
+            try:
+                s = db.add(
+                    args.name,
+                    args.content,
+                    category=args.category,
+                    tags=args.tags,
+                    description=args.description,
+                    rating=args.rating,
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/]")
+                console.print("[dim]Use a different name.[/]")
+                return 1
+            console.print(f"[green]Added[/] {s.name} (category={s.category})")
+            return 0
+
+        if action == "get":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign skill-db get <name>")
+                return 1
+            s = db.get(args.name)
+            if s is None:
+                console.print(f"[red]No such skill:[/] {args.name}")
+                return 1
+            console.print(
+                Panel(Text(s.content), title=f"skill · {s.name} v{s.version}", border_style="cyan")
+            )
+            console.print(
+                f"[dim]category={s.category} tags={', '.join(s.tags) or 'none'} "
+                f"rating={s.rating:.1f} installed={s.installed}[/]"
+            )
+            return 0
+
+        if action == "delete":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign skill-db delete <name>")
+                return 1
+            ok = db.delete(args.name)
+            if not ok:
+                console.print(f"[red]No such skill:[/] {args.name}")
+                return 1
+            console.print(f"[green]Deleted[/] {args.name}")
+            return 0
+
+        if action == "search":
+            query = args.search or args.name or ""
+            if not query:
+                console.print("[red]Give a query:[/] sovereign skill-db search <words>")
+                return 1
+            rows = db.list(search=query, limit=args.limit)
+            if not rows:
+                console.print(f"[dim]No skills match '{query}'.[/]")
+                return 0
+            table = Table(title=f"Skill search · {query}", header_style="bold #b794f4")
+            table.add_column("Name", style="bold")
+            table.add_column("Category")
+            table.add_column("Rating", justify="right")
+            for s in rows:
+                table.add_row(s.name, s.category, f"{s.rating:.1f}")
+            console.print(table)
+            return 0
+
+        if action == "count":
+            console.print(f"{db.count()}")
+            return 0
+
+        if action == "rate":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign skill-db rate <name> --rating 0-5")
+                return 1
+            ok = db.rate(args.name, args.rating)
+            if not ok:
+                console.print(f"[red]No such skill:[/] {args.name}")
+                return 1
+            console.print(f"[green]Rated[/] {args.name} → {args.rating}")
+            return 0
+
+        if action == "touch":
+            if not args.name:
+                console.print("[red]Give a name:[/] sovereign skill-db touch <name>")
+                return 1
+            db.touch(args.name)
+            console.print(f"[green]Touched[/] {args.name}")
+            return 0
+
+        if action == "export":
+            import json as _json
+
+            path = Path(args.name or Path.home() / "skills_export.json")
+            path.write_text(_json.dumps(db.export_json(), indent=2) + "\n", encoding="utf-8")
+            console.print(f"[green]Exported[/] {db.count()} skill(s) to {path}")
+            return 0
+
+        if action == "import":
+            import json as _json
+
+            path = Path(args.name)
+            if not path.is_file():
+                console.print(f"[red]Not a file:[/] {path}")
+                return 1
+            rows = _json.loads(path.read_text(encoding="utf-8"))
+            written = db.import_json(rows)
+            console.print(f"[green]Imported[/] {written} skill(s)")
+            return 0
+
+        console.print(f"[red]Unknown action:[/] {action}")
+        return 1
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------- gateway-config
+
+
+def _gateway_config(args) -> int:
+    from .cloud import gateway_block
+
+    cloud_block = gateway_block()
+    if args.show or args.write is False:
+        print(render_gateway_config(cloud_block))
+        return 0
+    path = Path(args.path) if args.path else gateway_config_path()
+    written = write_gateway_config(cloud_block, path=path)
+    console.print(f"[green]Wrote[/] {written}")
+    console.print(
+        "[dim]Restart the LiteLLM gateway so it picks up the new model list: "
+        "sovereign gateway --restart[/]"
+    )
+    return 0
+
+
+# --------------------------------------------------------------------- connect
+
+
+def _connect(script: str | None) -> int:
+    root = Path(__file__).resolve().parents[2]
+    sh = script or str(root / "scripts" / "agent-connect.sh")
+    path = Path(sh)
+    if not path.is_file():
+        console.print(f"[red]Connect script not found:[/] {path}")
+        return 1
+    path.chmod(0o755)
+    console.print(f"[dim]Running {path}[/]")
+    try:
+        subprocess.run(["bash", str(path)], check=True)
+    except subprocess.CalledProcessError as exc:
+        console.print(f"[red]Connect script exited {exc.returncode}[/]")
+        return exc.returncode
+    return 0
+
+
+def _parse_vars(pairs: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4508,10 +5025,10 @@ def main(argv: list[str] | None = None) -> int:
         if cmd.is_file():
             cmd.chmod(0o755)
         return 0
-    if command == "dashboard":
-        from .tui.app import SovereignApp
+    if command in {"dashboard", "monitor"}:
+        from .tui.monitor import MonitorApp
 
-        SovereignApp(settings=settings).run()
+        MonitorApp(settings=settings).run()
         return 0
     if command == "local-bar":
         from . import localbar
@@ -4814,6 +5331,16 @@ def main(argv: list[str] | None = None) -> int:
         return _uninstall_login()
     if command == "code":
         return _code(args.path, yolo=args.yolo, prompt=args.prompt)
+    if command == "agents":
+        return _agents(args.json, args.tsv)
+    if command == "prompts":
+        return _prompts(args)
+    if command == "skill-db":
+        return _skill_db(args)
+    if command == "gateway-config":
+        return _gateway_config(args)
+    if command == "connect":
+        return _connect(args.script)
     parser.print_help()
     return 2
 

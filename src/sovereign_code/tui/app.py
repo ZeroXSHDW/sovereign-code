@@ -108,7 +108,6 @@ class SovereignApp(App[None]):
         self._verify_busy = False
         self.last_verify: list[AliasResult] = []
         self._model_signature: tuple = ()
-        self._guardian_checked = 0.0
         self.ollama = OllamaClient(self.settings.ollama_url)
 
     # ---------------------------------------------------------------- layout
@@ -166,29 +165,8 @@ class SovereignApp(App[None]):
             self._render_status()
             self._render_system()
             await self._render_models()
-            self._guardian_tick()
         finally:
             self._refresh_busy = False
-
-    def _guardian_tick(self) -> None:
-        """Put back a dead gateway, bridge or web chat.
-
-        The dashboard is the one thing that is always running, so it is the
-        natural supervisor. Once a minute is often enough: a dead tier gateway
-        is what makes the ChatGPT app look like it wants a sign-in.
-        """
-        now = time.monotonic()
-        if now - self._guardian_checked < 60.0:
-            return
-        self._guardian_checked = now
-        try:
-            from ..guardian import check, log
-
-            states = check(self.settings)
-            log(states)
-        except Exception:
-            # A guardian failure must never take the dashboard down.
-            pass
 
     def _apply_demo(self) -> None:
         from ..models import CATALOG, ModelView

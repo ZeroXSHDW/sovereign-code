@@ -13,9 +13,21 @@ def test_the_stack_is_a_known_set_of_services() -> None:
         "com.user.sovereign.gateway",
         "com.user.sovereign.tier",
         "com.user.sovereign.bridge",
-        "com.user.sovereign.webchat",
-        "com.user.sovereign.guardian",
     ]
+    # The always-on chat web UI and guardian were removed to stop paying RAM
+    # and CPU for a 24/7 chat/restart loop.
+    assert "com.user.sovereign.webchat" not in labels
+    assert "com.user.sovereign.guardian" not in labels
+
+
+def test_old_chat_and_guardian_jobs_are_retired(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(services, "AGENT_DIR", tmp_path)
+    stale = tmp_path / "com.user.sovereign.webchat.plist"
+    stale.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(services, "is_loaded", lambda label: False)
+    rows = services.retire_services()
+    assert not stale.exists()
+    assert any("webchat" in label for label, _result in rows)
 
 
 def test_the_plist_starts_the_service_and_brings_it_back() -> None:

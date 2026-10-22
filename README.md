@@ -19,10 +19,15 @@ The terminal configuration as a 3D stack:
 social preview card.)
 
 Sovereign Code replaces the Swift menu-bar approach of the earlier Local Bar
-projects with a portable Python/Textual system. At login, Terminal opens a live
-dashboard showing the local stack, the loaded model, free memory, the gateway,
-and a streaming chat prompt. From the dashboard you can code with the best local
-model or drop straight into Qwen Code in the current repository.
+projects with a portable Python/Textual system. At login, Terminal opens a live,
+read-only monitor: the total skill bank and prompt bank, which project is using
+a model now, which models are resident, and what the stack is doing. It never
+sends a prompt or keeps a model loaded just to watch the machine. From the
+monitor you can still jump straight into Qwen Code in the current repository.
+
+Chat is an explicit opt-in (`sovereign chat`), because every chat turn keeps a
+model resident for its `keep_alive` window and that is RAM the monitor exists to
+protect.
 
 Nothing leaves the Mac by default. Both Ollama and the LiteLLM gateway are bound
 to `127.0.0.1`, and every local alias stays local. Frontier models served by
@@ -53,24 +58,23 @@ Everything the system owns lives in `~/Documents/local-ai`:
 └── legacy/      archived pre-migration ai-stack
 ```
 
-### Dashboard keys
+### Monitor keys
 
 | Key | Action |
 | --- | --- |
-| `F2` | suspend the dashboard and open Qwen Code in your workspace (`~/Documents`) |
-| `F3` | cycle installed models |
+| `F2` | suspend the monitor and open Qwen Code in your workspace (`~/Documents`) |
 | `F4` | open the local ChatGPT / Codex profile in your workspace |
-| `F5` | refresh system state |
+| `F5` / `r` | refresh the live report now |
 | `F6` | open Claude Code against the local gateway |
-| `Ctrl+N` | new conversation |
+| `F9` / `f` | unload every resident model (free RAM) |
 | `Ctrl+Q` | quit |
 
-Input commands: `/model <tag>`, `/models`, `/chat`, `/code`, `/reason`,
-`/vision`, `/fast`, `/status`, `/open [path]`, `/qwen`, `/codex`, `/claude`,
-`/clients`, `/clear`, `/help`, `/quit`.
+The login monitor is read-only: no chat prompt, no slash commands, no model
+load, and no background guardian tick. Use `sovereign chat` when you want a
+conversation and `sovereign code` when you want the coding agent.
 
 `workspace` lives in `~/Documents/local-ai/config/sovereign/config.toml` and defaults to
-`~/Documents`; `/open /path/to/repo` overrides it for one session.
+`~/Documents`; `sovereign code /path/to/repo` overrides it for one session.
 
 ## Why this is better than the old Local Bar build
 
@@ -440,11 +444,13 @@ client.
 > text, which Claude Code prints instead of executing. Codex 0.163 only speaks
 > the Responses API. The tier gateway now implements `/v1/responses` with a
 > proper event stream (`response.output_item.added`,
-> `response.function_call_arguments.delta`, `response.completed`), so Codex
-> executes tools correctly through the same fast/deep router. `sovereign bridge`
-> does the equivalent for Claude's Anthropic API. OpenCode's built-in `ollama`
-> provider is avoided for the same reason; its config uses a custom `local/`
-> OpenAI-compatible provider.
+> `response.output_text.delta`, `response.function_call_arguments.delta`,
+> `response.completed`), so Codex shows text as it is generated and executes
+> tools correctly through the same fast/deep router. `sovereign bridge`
+> does the equivalent for Claude's Anthropic API and forwards text deltas as
+> they arrive, so a long local answer never looks like a stalled connection.
+> OpenCode's built-in `ollama` provider is avoided for the same reason; its
+> config uses a custom `local/` OpenAI-compatible provider.
 
 ```sh
 sovereign install-clients         # wrappers + client configs + MCP + skills
@@ -635,7 +641,9 @@ OpenCode and Continue use Ollama directly.
 ## Commands
 
 ```sh
-sovereign                  # live dashboard
+sovereign                  # live read-only monitor (banks, projects, system)
+sovereign monitor          # alias for the same monitor
+sovereign chat             # opt-in streaming chat dashboard
 sovereign status           # one-shot status (--json for scripts and the menu bar)
 sovereign models           # installed + recommended, with roles
 sovereign cloud            # Ollama Cloud status, mapping, aliases (--enable/--probe/--pull)
@@ -706,7 +714,7 @@ sovereign browse URL --task "…" --dry-run   # show the first planned action on
 The local model drives a visible, persistent Chromium profile through Playwright,
 reading the page and performing one structured action at a time (`navigate`,
 `click`, `fill`, `select`, `press`, `scroll`, `extract`), then hands back control
-when it needs you. In the dashboard, press `F8` (or `/browse <url> [task]`).
+when it needs you. Run it from the CLI with `sovereign browse <url> --task "…"`.
 
 - **No CAPTCHA solving, bot-check bypass, user-agent spoofing, or fingerprint
   evasion.** The browser runs with its normal identity.
@@ -754,8 +762,8 @@ files, and a **reviewer** critiques the result. `--yes` auto-approves the agent'
 tool calls for unattended runs; `--no-review` skips the final stage. This is the
 local version of end-to-end, multi-model coding — one or two models resident at
 a time, swapped automatically by Ollama. `sovereign memory add "…"` stores a per-folder note that is injected
-into every dashboard chat, so project preferences persist. If a project has an
-`AGENTS.md` or `CLAUDE.md`, that too is injected into the dashboard chat, `sovereign
+into every chat session, so project preferences persist. If a project has an
+`AGENTS.md` or `CLAUDE.md`, that too is injected into `sovereign chat`, `sovereign
 code`, and `sovereign pipeline` automatically. `sovereign clone
 <url>` bootstraps a GitHub repo under `~/Documents/projects/` (then
 `sovereign index` it for search).
@@ -795,31 +803,33 @@ logging out. `uninstall-login` removes it.
 
 ### Autostart, keep-alive and reboot
 
-`sovereign autostart --install` turns the whole local stack into launchd
-services. Each one starts at login, so the stack is back after a reboot, and
-launchd restarts it when it dies:
+`sovereign autostart --install` turns the three pieces the clients need into
+launchd services. Each one starts at login, so the stack is back after a reboot,
+and launchd restarts it when it dies:
 
 | Service | What it is | Port |
 |---|---|---|
 | `com.user.sovereign.gateway` | the LiteLLM gateway | 4000 |
 | `com.user.sovereign.tier` | the tier gateway | 4010 |
 | `com.user.sovereign.bridge` | the Anthropic bridge for Claude | 4001 |
-| `com.user.sovereign.webchat` | the ChatGPT Local web UI | 4020 |
-| `com.user.sovereign.guardian` | keeps the stack up and the clients local | — |
+
+The always-on `webchat` and `guardian` jobs are gone. They kept a chat server
+and a 30-second restart loop running 24/7 without serving a request; the
+dashboard is now a passive monitor and `sovereign chat` / `sovereign chat-web`
+are started only when you ask for them. Upgrading with `--install` stops and
+removes the old plists, so they do not come back at login.
 
 ```sh
 sovereign autostart              # what survives a reboot, right now
-sovereign autostart --install    # install and start the services
+sovereign autostart --install    # install the three services and retire the old two
 sovereign autostart --restart    # restart every service
 sovereign autostart --repair     # rewrite the plists and reload the jobs
 sovereign autostart --uninstall  # remove them and put the old jobs back
 ```
 
-The guardian is the safety net: every 30 seconds it checks the ports and
-restarts what is missing, republishes the session environment the ChatGPT app
-needs, and puts the client configs back on the local path when the ChatGPT app
-rewrites its own config. It only repairs the local mode — `sovereign chatgpt
---cloud` and `sovereign claude --cloud` are not undone.
+`sovereign guardian` remains available as a one-shot check of the gateway and
+bridge. It is no longer installed as a 24/7 loop; pass `--watch` if you want to
+run that loop in the foreground yourself.
 
 The ChatGPT app is local from the first launch after a reboot, because
 `launchctl setenv` publishes `CODEX_APP_SERVER_OPENAI_BASE_URL` and
@@ -862,12 +872,13 @@ gateway — but the files are still there if you want them back.
 Terminal / login agent
         │
         ▼
-  Textual dashboard ───────────────┐
+  Textual monitor ─────────────────┐
         │                          │
-        ├── OllamaClient ──► 127.0.0.1:11434  (/api/tags, /api/ps, /api/chat)
+        ├── Banks ──────────► skills/ + prompts.db + skills_index.db (read-only)
+        ├── Live projects ─► running agents + session cwd/model
+        ├── OllamaClient ──► 127.0.0.1:11434  (/api/tags, /api/ps)
         ├── Gateway check ─► 127.0.0.1:4000   (/v1/models)
         ├── Router ────────► model + context from free RAM
-        ├── SessionStore ──► ~/Documents/local-ai/data/sessions/*.jsonl
         └── Clients ───────► Qwen Code / OpenCode (agent), Codex / Claude (chat)
 ```
 

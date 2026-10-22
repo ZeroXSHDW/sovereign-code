@@ -148,13 +148,10 @@ def services(settings: Settings | None = None) -> list[Service]:
     from .bridge import ensure_running as bridge_start
     from .bridge import port_open as bridge_open
     from .bridge import stop as bridge_stop
-    from .services import BRIDGE_LABEL, GATEWAY_LABEL, TIER_LABEL, WEBCHAT_LABEL
+    from .services import BRIDGE_LABEL, GATEWAY_LABEL, TIER_LABEL
     from .tier_gateway import ensure_running as router_start
     from .tier_gateway import port_open as router_open
     from .tier_gateway import stop as router_stop
-    from .webchat import ensure_running as web_start
-    from .webchat import port_open as web_open
-    from .webchat import stop as web_stop
 
     settings = settings or Settings.load()
     router_port = _port(settings.router_url) or 4010
@@ -195,19 +192,6 @@ def services(settings: Settings | None = None) -> list[Service]:
             stop=bridge_stop,
             note="Claude Code and Claude Desktop talk to this",
             label=BRIDGE_LABEL,
-        ),
-        Service(
-            name="ChatGPT Local web",
-            port=WEB_PORT,
-            url=f"http://127.0.0.1:{WEB_PORT}",
-            running=lambda: web_open("127.0.0.1", WEB_PORT),
-            start=_launchd_first(
-                WEBCHAT_LABEL,
-                lambda: web_start(port=WEB_PORT, router=settings.router_url),
-            ),
-            stop=web_stop,
-            note="the local web chat",
-            label=WEBCHAT_LABEL,
         ),
     ]
 

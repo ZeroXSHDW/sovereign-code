@@ -31,9 +31,9 @@ CLIENT_ROLE_ALIAS: dict[str, tuple[str, str]] = {
 _ROLE_TASK: dict[str, Task] = {
     "code": Task.CODE,
     "chat": Task.CHAT,
-    # Claude Code is chat-only locally (its streamed tool calls are unreliable
-    # through LiteLLM + Ollama), so its best model is the 64k chat model behind
-    # local-claude, not the agent model.
+    # Claude Code's launch plan follows the quality route (`best`); the bridge
+    # executes its tool calls. The status fallback keeps the long-context
+    # `local-claude` alias so a picker slot never inherits a 32k cap.
     "claude": Task.CHAT,
     "agent": Task.AGENT,
 }
@@ -434,8 +434,8 @@ def plan_launch(
 
             env.update(
                 {
-                    # The bridge is non-streaming internally; Claude Code still
-                    # receives a normal Anthropic SSE stream with tool_use blocks.
+                    # The bridge streams text deltas and returns tool_use blocks
+                    # as complete Anthropic content blocks.
                     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
                     "ANTHROPIC_AUTH_TOKEN": "local",
                     "ANTHROPIC_API_KEY": "local",
@@ -469,8 +469,8 @@ def plan_launch(
         )
         env.update(
             {
-                # The bridge is non-streaming internally; Claude Code still
-                # receives a normal Anthropic SSE stream with tool_use blocks.
+                # The bridge streams text deltas and returns tool_use blocks as
+                # complete Anthropic content blocks.
                 "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
                 "ANTHROPIC_AUTH_TOKEN": "local",
                 "ANTHROPIC_API_KEY": "local",

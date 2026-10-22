@@ -1,11 +1,14 @@
 """Anthropic Messages bridge for local and gateway models.
 
 Claude Code speaks the Anthropic Messages API and streams tool calls as
-``tool_use`` content blocks. LiteLLM's streamed Ollama translation emits the
-tool call as plain text, so Claude Code prints JSON instead of editing files.
-This bridge accepts Anthropic requests, asks the gateway for a **non-streaming**
-OpenAI completion (where LiteLLM's tool-call translation is correct), then
-re-emits the result as Anthropic JSON or SSE.
+``tool_use`` content blocks. This bridge accepts Anthropic requests, asks the
+tier gateway for an OpenAI chat completion, then re-emits the result as
+Anthropic JSON or SSE.
+
+Streaming requests are proxied as a stream: text deltas reach Claude Code as
+they are generated, so a long local answer no longer looks like a hung
+connection. Tool calls are buffered and emitted as complete ``tool_use``
+blocks at the end of the turn, which is the shape Claude Code executes.
 
 It works for every gateway alias: local Ollama models, Ollama Cloud, and
 provider routes. No cloud key is needed for local work.
@@ -212,16 +215,18 @@ def convert_tools(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
 
 
 def to_openai_request(
-    payload: dict[str, Any], default_model: str = DEFAULT_ALIAS
+    payload: dict[str, Any],
+    default_model: str = DEFAULT_ALIAS,
+    stream: bool = False,
 ) -> dict[str, Any]:
-    """The non-streaming gateway request that corresponds to an Anthropic call."""
+    """The gateway request that corresponds to an Anthropic call."""
     model = resolve_model(payload.get("model"), default_model)
     request: dict[str, Any] = {
         "model": model,
         "messages": convert_messages(payload),
         "max_tokens": int(payload.get("max_tokens") or 4096),
         "temperature": float(payload.get("temperature", 0.2)),
-        "stream": False,
+        "stream": stream,
     }
     tools, choice = convert_tools(payload)
     if tools:
@@ -376,9 +381,168 @@ def sse_events(message: dict[str, Any], include_start: bool = True) -> Iterable[
     yield _event("message_stop", {"type": "message_stop"})
 
 
-def completion(gateway_url: str, payload: dict[str, Any], timeout: float = 600.0) -> dict[str, Any]:
+def anthropic_stream_events(
+    chunks: Iterable[dict[str, Any]],
+    message_id: str,
+    model: str,
+    include_start: bool = False,
+    input_tokens: int = 0,
+) -> Iterable[bytes]:
+    """Translate OpenAI chat chunks into Anthropic SSE events.
+
+    Text is forwarded as it arrives. Tool calls are held back until the turn
+    ends: Anthropic wants the full argument object on a ``tool_use`` block, and
+    a local model may split one call across several chunks.
+    """
+    if include_start:
+        yield message_start_event(
+            {
+                "id": message_id,
+                "model": model,
+                "usage": {"input_tokens": input_tokens},
+            }
+        )
+
+    text_open = False
+    text_index = 0
+    next_index = 0
+    tools: dict[int, dict[str, str]] = {}
+    finish = ""
+    completion_tokens = 0
+
+    for chunk in chunks:
+        usage = chunk.get("usage") or {}
+        if usage:
+            completion_tokens = int(usage.get("completion_tokens") or completion_tokens)
+        for choice in chunk.get("choices") or []:
+            reason = choice.get("finish_reason")
+            if reason:
+                finish = str(reason)
+            delta = choice.get("delta") or {}
+            text = delta.get("content")
+            if isinstance(text, str) and text:
+                if not text_open:
+                    text_open = True
+                    text_index = next_index
+                    next_index += 1
+                    yield _event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": text_index,
+                            "content_block": {"type": "text", "text": ""},
+                        },
+                    )
+                yield _event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": text_index,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                )
+            for call in delta.get("tool_calls") or []:
+                try:
+                    call_index = int(call.get("index") or 0)
+                except (TypeError, ValueError):
+                    call_index = 0
+                slot = tools.setdefault(call_index, {"id": "", "name": "", "arguments": ""})
+                if call.get("id"):
+                    slot["id"] = str(call["id"])
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["name"] = str(function["name"])
+                arguments = function.get("arguments")
+                if isinstance(arguments, dict):
+                    slot["arguments"] += json.dumps(arguments)
+                elif isinstance(arguments, str):
+                    slot["arguments"] += arguments
+
+    if text_open:
+        yield _event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": text_index},
+        )
+
+    for call_index in sorted(tools):
+        slot = tools[call_index]
+        index = next_index
+        next_index += 1
+        raw_arguments = slot["arguments"].strip() or "{}"
+        try:
+            parsed = json.loads(raw_arguments)
+        except ValueError:
+            parsed = {"raw": raw_arguments}
+        yield _event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": slot["id"] or f"toolu_{uuid.uuid4().hex[:24]}",
+                    "name": slot["name"] or "tool",
+                    "input": {},
+                },
+            },
+        )
+        yield _event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(parsed),
+                },
+            },
+        )
+        yield _event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": index},
+        )
+
+    if not text_open and not tools:
+        yield _event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
+        yield _event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        )
+
+    if tools:
+        stop_reason = "tool_use"
+    elif finish == "length":
+        stop_reason = "max_tokens"
+    else:
+        stop_reason = "end_turn"
+    yield _event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": {
+                "output_tokens": completion_tokens,
+            },
+        },
+    )
+    yield _event("message_stop", {"type": "message_stop"})
+
+
+def completion(
+    gateway_url: str,
+    payload: dict[str, Any],
+    timeout: float = 600.0,
+    default_model: str = DEFAULT_ALIAS,
+) -> dict[str, Any]:
     """Ask the gateway for a non-streaming chat completion."""
-    request = to_openai_request(payload)
+    request = to_openai_request(payload, default_model=default_model)
     base = gateway_url.rstrip("/")
     try:
         response = httpx.post(
@@ -393,6 +557,49 @@ def completion(gateway_url: str, payload: dict[str, Any], timeout: float = 600.0
         detail = response.text.replace("\n", " ")[:400]
         raise RuntimeError(f"gateway HTTP {response.status_code}: {detail}")
     return response.json()
+
+
+def iter_completion(
+    gateway_url: str,
+    payload: dict[str, Any],
+    timeout: float = 600.0,
+    default_model: str = DEFAULT_ALIAS,
+    transport: httpx.BaseTransport | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Yield the OpenAI chunks of a streaming gateway completion."""
+    request = to_openai_request(payload, default_model=default_model, stream=True)
+    base = gateway_url.rstrip("/")
+    with httpx.Client(
+        timeout=httpx.Timeout(timeout, connect=5.0),
+        transport=transport,
+    ) as client:
+        with client.stream(
+            "POST",
+            f"{base}/v1/chat/completions",
+            headers={"Authorization": "Bearer local"},
+            json=request,
+        ) as response:
+            if response.status_code != 200:
+                detail = response.read().decode("utf-8", "replace").replace("\n", " ")[:400]
+                raise RuntimeError(f"gateway HTTP {response.status_code}: {detail}")
+            for line in response.iter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("error"):
+                    error = chunk["error"]
+                    detail = error.get("message") if isinstance(error, dict) else error
+                    raise RuntimeError(f"gateway stream error: {str(detail)[:400]}")
+                yield chunk
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -451,6 +658,7 @@ class _Handler(BaseHTTPRequestHandler):
             # first-response timeout, and a local 34k-token prompt can take
             # minutes to prefill.
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
+            estimate = max(1, len(json.dumps(payload)) // 4)
             try:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -458,7 +666,6 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_header("Connection", "close")
                 self.close_connection = True
                 self.end_headers()
-                estimate = max(1, len(json.dumps(payload)) // 4)
                 self.wfile.write(
                     message_start_event(
                         {
@@ -472,15 +679,23 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                data = completion(self.gateway_url, payload)
-                message = to_anthropic_response(data, model)
-                message["id"] = message_id
-                for chunk in sse_events(message, include_start=False):
-                    self.wfile.write(chunk)
+                chunks = iter_completion(
+                    self.gateway_url,
+                    payload,
+                    default_model=self.default_model,
+                )
+                for event in anthropic_stream_events(
+                    chunks,
+                    message_id,
+                    model,
+                    include_start=False,
+                    input_tokens=estimate,
+                ):
+                    self.wfile.write(event)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
-            except (RuntimeError, ValueError) as exc:
+            except (RuntimeError, ValueError, httpx.HTTPError) as exc:
                 try:
                     self.wfile.write(
                         _event(
@@ -496,7 +711,7 @@ class _Handler(BaseHTTPRequestHandler):
                     pass
             return
         try:
-            data = completion(self.gateway_url, payload)
+            data = completion(self.gateway_url, payload, default_model=self.default_model)
         except (RuntimeError, ValueError) as exc:
             self._json(
                 502,

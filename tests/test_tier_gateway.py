@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
+
+import httpx
 
 from sovereign_code import tier_gateway as tg
 
@@ -451,3 +454,123 @@ def test_the_catalog_holds_no_cloud_or_embedding_model() -> None:
     assert "nomic-embed-text" not in ids
     # A ":latest" tag is listed under the name the configs use.
     assert "glm-4.7-flash" in ids
+
+
+def _events(stream: bytes) -> list[tuple[str, dict]]:
+    events = []
+    for block in stream.decode().split("\n\n"):
+        name = ""
+        payload = {}
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[7:]
+            elif line.startswith("data: "):
+                payload = json.loads(line[6:])
+        if name:
+            events.append((name, payload))
+    return events
+
+
+def test_responses_stream_forwards_text_then_tool_use() -> None:
+    chunks = [
+        {"model": "qwen3-coder:30b", "choices": [{"delta": {"role": "assistant"}}]},
+        {"choices": [{"delta": {"content": "Hel"}}]},
+        {"choices": [{"delta": {"content": "lo"}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "Write", "arguments": '{"file_path":'},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": ' "a.py"}'}}]}}
+            ]
+        },
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}},
+    ]
+    events = _events(b"".join(tg.responses_stream(chunks, "resp_1", "auto")))
+    names = [name for name, _ in events]
+    assert names[:2] == ["response.created", "response.in_progress"]
+    assert names[-1] == "response.completed"
+    sequences = [payload["sequence_number"] for _, payload in events]
+    assert sequences == list(range(len(events)))
+
+    deltas = [payload["delta"] for name, payload in events if name == "response.output_text.delta"]
+    assert deltas == ["Hel", "lo"]
+    text_done = next(payload for name, payload in events if name == "response.output_text.done")
+    assert text_done["text"] == "Hello"
+
+    arguments_done = next(
+        payload for name, payload in events if name == "response.function_call_arguments.done"
+    )
+    assert json.loads(arguments_done["arguments"]) == {"file_path": "a.py"}
+    completed = events[-1][1]["response"]
+    assert completed["status"] == "completed"
+    assert completed["model"] == "qwen3-coder:30b"
+    assert [item["type"] for item in completed["output"]] == ["message", "function_call"]
+    assert completed["usage"] == {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+
+
+def test_responses_stream_without_output_still_completes() -> None:
+    events = _events(b"".join(tg.responses_stream([], "resp_1", "fast")))
+    completed = events[-1][1]["response"]
+    assert completed["output"][0]["type"] == "message"
+    assert completed["output"][0]["content"][0]["text"] == ""
+
+
+def test_iter_chat_stream_parses_chunks_and_surfaces_errors() -> None:
+    response = httpx.Response(
+        200,
+        content=(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'),
+    )
+    chunks = list(tg.iter_chat_stream(response))
+    assert chunks[0]["choices"][0]["delta"]["content"] == "hi"
+
+    failed = httpx.Response(200, content=b'data: {"error":{"message":"model failed"}}\n\n')
+    try:
+        list(tg.iter_chat_stream(failed))
+    except RuntimeError as exc:
+        assert "model failed" in str(exc)
+    else:  # pragma: no cover - the call above must raise
+        raise AssertionError("a stream error must not look like a reply")
+
+
+def test_gateway_binds_before_it_warms_the_model(tmp_path, monkeypatch) -> None:
+    order: list[str] = []
+    warmed = threading.Event()
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            order.append("serving")
+            warmed.wait(timeout=2.0)
+
+        def server_close(self) -> None:
+            return
+
+    def fake_make_server(*args, **kwargs) -> FakeServer:
+        order.append("bound")
+        return FakeServer()
+
+    def fake_warm(ollama: str) -> None:
+        order.append("warming")
+        warmed.set()
+
+    monkeypatch.setattr(tg, "pid_path", lambda: tmp_path / "tier.pid")
+    monkeypatch.setattr(tg, "make_server", fake_make_server)
+    monkeypatch.setattr(tg, "warm_fast", fake_warm)
+    tg.serve("127.0.0.1", 0, "http://127.0.0.1:11434", "http://127.0.0.1:4000")
+    # The listening socket exists before the warm-up can take the model lock.
+    assert order[0] == "bound"
+    assert "warming" in order
+    assert "serving" in order

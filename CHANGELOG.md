@@ -4,7 +4,50 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-22
+
 ### Added
+- Read-only live monitor (`sovereign monitor` / default dashboard): skill and prompt banks, live projects, system activity.
+- Structured prompt database (`sovereign prompts`) and skill database (`sovereign skill-db`).
+- Agent detection (`sovereign agents`) and one-command connect (`sovereign connect`).
+- LiteLLM gateway config generator (`sovereign gateway-config`).
+
+### Changed
+- `rich` upgraded to 15.x.
+
+### Changed
+- **The login dashboard is now a read-only live monitor.** It shows the total
+  skill bank and prompt bank, which project is using a model now (running
+  agents + recent session cwd/model), resident models with context, recent
+  gateway requests, services, RAM/swap/disk/load, and `F9` unloads models to
+  free RAM. It no longer contains a chat prompt or streams Qwen replies.
+  Chat remains available explicitly with `sovereign chat`.
+- **The 24/7 chat/guardian stack is gone.** `sovereign autostart` now installs
+  only the LiteLLM gateway, tier gateway and Anthropic bridge. The `webchat`
+  and `guardian` launchd jobs are stopped and removed on upgrade, so no chat
+  server and no 30-second restart loop run when nobody is using them.
+  `sovereign guardian` still works as a one-shot check.
+
+### Added
+- `sovereign monitor` as an explicit alias for the login monitor.
+
+## [0.2.1] - 2026-10-22
+
+### Changed
+- Bumped `rich` dependency to `<16` (15.x) and verified the full test suite.
+
+### Added
+- **Codex streams local answers**: `/v1/responses` now consumes the tier
+  gateway's chat stream and emits `response.output_text.delta` events as the
+  model generates, instead of waiting for the whole completion and replaying it
+  in one burst. Tool calls still arrive as complete `function_call` items, and
+  an upstream failure becomes `response.failed` instead of a silent stall.
+- **Claude Code streams local answers**: the Anthropic bridge used to wait for
+  the whole completion before sending anything, so a long answer looked like a
+  hung connection. It now asks the tier gateway for a stream, forwards text
+  deltas as `text_delta` events, and turns the buffered tool calls into complete
+  `tool_use` blocks at the end of the turn. A stream error before or during the
+  reply is reported as an Anthropic `error` event instead of an empty answer.
 - **`sovereign autostart`**: the local stack as a set of launchd services.
   `sovereign autostart --install` writes and loads one agent per service
   (LiteLLM gateway, tier gateway, Anthropic bridge, ChatGPT Local web, and a
@@ -83,6 +126,11 @@ All notable changes to Sovereign Code.
   it is cloud, and `sovereign local --fix` forces it local.
 
 ### Changed
+- **The tier gateway listens before it warms**: the fast model used to load
+  before the port opened, so every restart refused connections for up to a
+  minute. The server binds first and warms the 4B in a background thread;
+  health answers immediately and chat requests wait on the model lock instead
+  of failing to connect.
 - **The stack is a set of launchd services** instead of hand-started
   processes: one agent for the LiteLLM gateway, the tier gateway, the
   Anthropic bridge, the ChatGPT Local web UI and the guardian. The two

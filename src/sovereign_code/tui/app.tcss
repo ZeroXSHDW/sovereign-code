@@ -28,6 +28,37 @@ Footer {
     width: 1fr;
 }
 
+#main VerticalScroll {
+    width: 1fr;
+}
+
+#bank-row {
+    height: auto;
+}
+
+#skill-box,
+#prompt-box {
+    width: 1fr;
+    padding: 0 1;
+}
+
+.card {
+    margin: 0 0 1 0;
+    padding: 1 2;
+    border: round #2a2a3a;
+    background: #101018;
+}
+
+#project-panel,
+#activity-panel {
+    min-height: 4;
+}
+
+#help-panel {
+    height: auto;
+    margin: 1 2;
+}
+
 #chat-scroll {
     height: 1fr;
     padding: 1 2;

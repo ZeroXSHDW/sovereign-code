@@ -1,9 +1,12 @@
 """launchd services for the local stack.
 
-Every part of the stack runs as a launchd agent: it starts at login, so it is
-back after a reboot, and launchd restarts it when it dies. The guardian watches
-the same ports, so a stack that was killed comes back without the user
-noticing.
+Only the pieces a client needs run as launchd agents: the LiteLLM gateway,
+the tier gateway and the Anthropic bridge. They start at login, so they are
+back after a reboot, and launchd restarts them when they die.
+
+The old always-on chat web UI and the 30-second guardian loop are intentionally
+not installed. They spent RAM/CPU continuously for work nobody was asking for;
+the login dashboard is a passive monitor now and chat is explicit.
 
 macOS protects ~/Documents, and a launchd job cannot list a directory there.
 It can, however, run a program by its full path, so every service is started
@@ -34,6 +37,13 @@ TIER_LABEL = f"{LABEL_PREFIX}.tier"
 BRIDGE_LABEL = f"{LABEL_PREFIX}.bridge"
 WEBCHAT_LABEL = f"{LABEL_PREFIX}.webchat"
 GUARDIAN_LABEL = f"{LABEL_PREFIX}.guardian"
+
+# The chat web UI and the 24/7 guardian used to be installed as services.
+# They are deliberately no longer part of the stack: the dashboard is now a
+# read-only monitor, and an always-on chat server plus a restart loop was RAM
+# and CPU spent on nothing. The labels stay here so an upgrade can remove the
+# old jobs instead of leaving them running.
+RETIRED_LABELS = (WEBCHAT_LABEL, GUARDIAN_LABEL)
 
 
 @dataclass
@@ -191,39 +201,6 @@ def service_definitions(settings: Settings | None = None) -> list[Service]:
             detail="what Claude Code and Claude Desktop talk to",
             working_dir=str(PROJECT_ROOT),
             log_name="service-bridge.log",
-        ),
-        Service(
-            label=WEBCHAT_LABEL,
-            name="ChatGPT Local web",
-            argv=(
-                python,
-                "-m",
-                "sovereign_code",
-                "chat-web",
-                "--serve",
-                "--port",
-                "4020",
-            ),
-            port=4020,
-            detail="the local ChatGPT-style web client",
-            working_dir=str(PROJECT_ROOT),
-            log_name="service-webchat.log",
-        ),
-        Service(
-            label=GUARDIAN_LABEL,
-            name="Guardian",
-            argv=(
-                python,
-                "-m",
-                "sovereign_code",
-                "guardian",
-                "--watch",
-                "--interval",
-                "30",
-            ),
-            detail="keeps the stack up and the client configs local",
-            working_dir=str(PROJECT_ROOT),
-            log_name="service-guardian.log",
         ),
     ]
 
@@ -501,7 +478,7 @@ def stop_detached(service: Service) -> bool:
 
 def install_services(settings: Settings | None = None, start: bool = True) -> list[tuple[str, str]]:
     """Write and load every service. Returns (service, result) rows."""
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str]] = retire_services()
     for service in service_definitions(settings):
         path = write_plist(service)
         if not start:
@@ -517,7 +494,7 @@ def install_services(settings: Settings | None = None, start: bool = True) -> li
 
 def uninstall_services(settings: Settings | None = None) -> list[tuple[str, str]]:
     """Stop every service and remove its plist."""
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str]] = retire_services()
     for service in service_definitions(settings):
         unload_service(service)
         if service.plist_path.is_file():
@@ -525,6 +502,30 @@ def uninstall_services(settings: Settings | None = None) -> list[tuple[str, str]
             rows.append((service.name, f"removed · {service.label}"))
         else:
             rows.append((service.name, f"not installed · {service.label}"))
+    return rows
+
+
+def retire_services() -> list[tuple[str, str]]:
+    """Stop and remove the old 24/7 chat and guardian jobs.
+
+    An upgrade that only stops installing them would leave the old plists in
+    ``~/Library/LaunchAgents``, so launchd would keep starting them at login.
+    """
+    rows: list[tuple[str, str]] = []
+    for label in RETIRED_LABELS:
+        path = AGENT_DIR / f"{label}.plist"
+        loaded = is_loaded(label)
+        if loaded:
+            unload_label(label)
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError as exc:
+                rows.append((label, f"could not remove: {exc}"))
+                continue
+            rows.append((label, "removed · retired"))
+        elif loaded:
+            rows.append((label, "stopped · retired"))
     return rows
 
 

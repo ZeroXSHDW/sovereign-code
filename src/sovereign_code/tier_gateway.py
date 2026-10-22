@@ -9,7 +9,9 @@ are proxied to the existing LiteLLM gateway unchanged.
 Endpoints:
   GET  /health
   GET  /v1/models
+  GET  /metrics
   POST /v1/chat/completions   (stream and non-stream)
+  POST /v1/responses          (Responses API for Codex, stream and non-stream)
 """
 
 from __future__ import annotations
@@ -546,6 +548,28 @@ def _responses_text(content: Any) -> str:
     return ""
 
 
+def iter_chat_stream(response: httpx.Response) -> Iterable[dict[str, Any]]:
+    """Parse an OpenAI-compatible SSE response into chunk objects."""
+    for line in response.iter_lines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data)
+        except ValueError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        if chunk.get("error"):
+            error = chunk["error"]
+            detail = error.get("message") if isinstance(error, dict) else error
+            raise RuntimeError(f"upstream stream error: {str(detail)[:400]}")
+        yield chunk
+
+
 def _tier_headers(result: httpx.Response) -> dict[str, str]:
     """Carry the routing headers from the chat call to the Responses reply."""
     headers: dict[str, str] = {}
@@ -817,6 +841,274 @@ def responses_sse(
             {"type": "response.output_item.done", "output_index": index, "item": item},
         )
     yield event("response.completed", {"type": "response.completed", "response": response})
+
+
+def responses_stream(
+    chunks: Iterable[dict[str, Any]],
+    response_id: str,
+    model: str,
+    start_seq: int = 0,
+    include_start: bool = True,
+) -> Iterable[bytes]:
+    """Translate streaming chat chunks into Responses API SSE events.
+
+    Text is emitted as ``response.output_text.delta`` while the model runs.
+    Tool calls are buffered until the turn ends, because a Responses
+    ``function_call`` carries one complete argument object.
+    """
+    seq = start_seq
+    created_at = int(time.time())
+
+    def event(name: str, data: dict[str, Any]) -> bytes:
+        nonlocal seq
+        data["sequence_number"] = seq
+        seq += 1
+        return _event(name, data)
+
+    def response_object(status: str, output: list[dict[str, Any]], usage: dict[str, int]) -> dict:
+        return {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": status,
+            "model": model,
+            "output": output,
+            "usage": usage,
+        }
+
+    empty = response_object("in_progress", [], {})
+    if include_start:
+        yield event(
+            "response.created",
+            {"type": "response.created", "response": empty},
+        )
+        yield event(
+            "response.in_progress",
+            {"type": "response.in_progress", "response": empty},
+        )
+
+    text_open = False
+    text_id = f"msg_{uuid.uuid4().hex[:20]}"
+    text_index = 0
+    next_index = 0
+    text_parts: list[str] = []
+    tools: dict[int, dict[str, str]] = {}
+    usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    for chunk in chunks:
+        if chunk.get("model"):
+            model = str(chunk["model"])
+        raw_usage = chunk.get("usage") or {}
+        if raw_usage:
+            usage = {
+                "input_tokens": int(raw_usage.get("prompt_tokens") or usage["input_tokens"]),
+                "output_tokens": int(raw_usage.get("completion_tokens") or usage["output_tokens"]),
+                "total_tokens": int(raw_usage.get("total_tokens") or usage["total_tokens"]),
+            }
+        for choice in chunk.get("choices") or []:
+            delta = choice.get("delta") or {}
+            text = delta.get("content")
+            if isinstance(text, str) and text:
+                if not text_open:
+                    text_open = True
+                    text_index = next_index
+                    next_index += 1
+                    yield event(
+                        "response.output_item.added",
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": text_index,
+                            "item": {
+                                "id": text_id,
+                                "type": "message",
+                                "status": "in_progress",
+                                "role": "assistant",
+                                "content": [],
+                            },
+                        },
+                    )
+                    yield event(
+                        "response.content_part.added",
+                        {
+                            "type": "response.content_part.added",
+                            "item_id": text_id,
+                            "output_index": text_index,
+                            "content_index": 0,
+                            "part": {"type": "output_text", "text": "", "annotations": []},
+                        },
+                    )
+                text_parts.append(text)
+                yield event(
+                    "response.output_text.delta",
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": text_id,
+                        "output_index": text_index,
+                        "content_index": 0,
+                        "delta": text,
+                    },
+                )
+            for call in delta.get("tool_calls") or []:
+                try:
+                    call_index = int(call.get("index") or 0)
+                except (TypeError, ValueError):
+                    call_index = 0
+                slot = tools.setdefault(call_index, {"id": "", "name": "", "arguments": ""})
+                if call.get("id"):
+                    slot["id"] = str(call["id"])
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["name"] = str(function["name"])
+                arguments = function.get("arguments")
+                if isinstance(arguments, dict):
+                    slot["arguments"] += json.dumps(arguments)
+                elif isinstance(arguments, str):
+                    slot["arguments"] += arguments
+            # Some providers put tool calls on the message, not the delta.
+            message = choice.get("message") or {}
+            for call in message.get("tool_calls") or []:
+                slot = tools.setdefault(
+                    len(tools),
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                if call.get("id"):
+                    slot["id"] = str(call["id"])
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["name"] = str(function["name"])
+                arguments = function.get("arguments")
+                if isinstance(arguments, dict):
+                    slot["arguments"] += json.dumps(arguments)
+                elif isinstance(arguments, str):
+                    slot["arguments"] += arguments
+
+    output: list[dict[str, Any]] = []
+    text = "".join(text_parts)
+    if text_open:
+        part = {"type": "output_text", "text": text, "annotations": []}
+        yield event(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": text_id,
+                "output_index": text_index,
+                "content_index": 0,
+                "text": text,
+            },
+        )
+        yield event(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": text_id,
+                "output_index": text_index,
+                "content_index": 0,
+                "part": part,
+            },
+        )
+        item = {
+            "id": text_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [part],
+        }
+        yield event(
+            "response.output_item.done",
+            {"type": "response.output_item.done", "output_index": text_index, "item": item},
+        )
+        output.append(item)
+
+    for call_index in sorted(tools):
+        slot = tools[call_index]
+        index = next_index
+        next_index += 1
+        raw_arguments = slot["arguments"].strip() or "{}"
+        try:
+            parsed = json.loads(raw_arguments)
+        except ValueError:
+            parsed = {"raw": raw_arguments}
+        arguments = json.dumps(parsed)
+        item_id = f"fc_{uuid.uuid4().hex[:20]}"
+        call_id = slot["id"] or f"call_{uuid.uuid4().hex[:12]}"
+        yield event(
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": index,
+                "item": {
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": call_id,
+                    "name": slot["name"] or "tool",
+                    "arguments": "",
+                },
+            },
+        )
+        yield event(
+            "response.function_call_arguments.delta",
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id,
+                "output_index": index,
+                "delta": arguments,
+            },
+        )
+        yield event(
+            "response.function_call_arguments.done",
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": item_id,
+                "output_index": index,
+                "arguments": arguments,
+            },
+        )
+        item = {
+            "id": item_id,
+            "type": "function_call",
+            "status": "completed",
+            "call_id": call_id,
+            "name": slot["name"] or "tool",
+            "arguments": arguments,
+        }
+        yield event(
+            "response.output_item.done",
+            {"type": "response.output_item.done", "output_index": index, "item": item},
+        )
+        output.append(item)
+
+    if not output:
+        empty_item = {
+            "id": f"msg_{uuid.uuid4().hex[:20]}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "", "annotations": []}],
+        }
+        yield event(
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**empty_item, "status": "in_progress", "content": []},
+            },
+        )
+        yield event(
+            "response.output_item.done",
+            {"type": "response.output_item.done", "output_index": 0, "item": empty_item},
+        )
+        output.append(empty_item)
+
+    if usage["total_tokens"] == 0:
+        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    yield event(
+        "response.completed",
+        {
+            "type": "response.completed",
+            "response": response_object("completed", output, usage),
+        },
+    )
 
 
 class ResponseCache:
@@ -1649,6 +1941,7 @@ class _Handler(BaseHTTPRequestHandler):
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
         model = str(payload.get("model") or "auto")
         if stream:
+            chat["stream"] = True
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -1668,39 +1961,23 @@ class _Handler(BaseHTTPRequestHandler):
             }
             try:
                 self.wfile.write(b": sovereign\n\n")
-                self.wfile.write(
-                    _event(
-                        "response.created",
-                        {
-                            "type": "response.created",
-                            "response": placeholder,
-                            "sequence_number": 0,
-                        },
-                    )
-                )
-                self.wfile.write(
-                    _event(
-                        "response.in_progress",
-                        {
-                            "type": "response.in_progress",
-                            "response": placeholder,
-                            "sequence_number": 1,
-                        },
-                    )
-                )
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
                 with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
-                    result = client.post(target, json=chat)
-                if result.status_code != 200:
-                    raise RuntimeError(result.text[:400])
-                response = chat_to_responses(result.json())
-                response["id"] = response_id
-                for chunk in responses_sse(response, include_start=False, start_seq=2):
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                    with client.stream("POST", target, json=chat) as result:
+                        if result.status_code != 200:
+                            body = result.read().decode("utf-8", "replace")[:400]
+                            raise RuntimeError(body)
+                        for chunk in responses_stream(
+                            iter_chat_stream(result),
+                            response_id,
+                            model,
+                            start_seq=2,
+                        ):
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
             except (httpx.HTTPError, RuntimeError, ValueError) as exc:
                 try:
                     self.wfile.write(
@@ -1917,6 +2194,8 @@ def warm_fast(ollama: str) -> None:
         )
     except httpx.HTTPError:
         pass
+    except Exception:  # a failed warm-up must never take the gateway down
+        pass
     finally:
         _MODEL_LOCK.release()
 
@@ -1929,8 +2208,16 @@ def serve(host: str, port: int, ollama: str, upstream: str) -> None:
         return
     pid_path().parent.mkdir(parents=True, exist_ok=True)
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
-    warm_fast(ollama)
     server = make_server(host, port, ollama, upstream)
+    # Listen first, warm second: a restart used to refuse connections for as
+    # long as the 4B model took to load. Requests that arrive during the warm-up
+    # wait on the model lock; they are not rejected by a closed port.
+    threading.Thread(
+        target=warm_fast,
+        args=(ollama,),
+        name="sovereign-warm-fast",
+        daemon=True,
+    ).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

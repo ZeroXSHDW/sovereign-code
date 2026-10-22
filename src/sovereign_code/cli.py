@@ -3687,9 +3687,18 @@ def _hf_logout(hub) -> int:
 
 def _hf_search(args, hub) -> int:
     query = args.target or ""
+    repo_type = "dataset" if args.dataset else "model"
     if not query.strip():
-        raise hub.HFError("usage: sovereign hf search <words> [--gguf]")
+        raise hub.HFError("usage: sovereign hf search <words> [--gguf] [--dataset]")
     token = hub.resolve_token()[0]
+    filters = [str(item).strip() for item in args.filter if str(item).strip()]
+    for prefix, value in (
+        ("license", args.license),
+        ("language", args.language),
+        ("format", args.format),
+    ):
+        if value:
+            filters.append(f"{prefix}:{value}")
     rows = hub.search_models(
         query,
         limit=args.limit,
@@ -3697,52 +3706,87 @@ def _hf_search(args, hub) -> int:
         author=args.author,
         sort=args.sort,
         token=token or None,
+        repo_type=repo_type,
+        filters=filters,
+        pipeline_tag=args.pipeline,
     )
     if args.json:
         print(json.dumps([row.to_dict() for row in rows], indent=2, default=str))
         return 0
     if not rows:
-        console.print(f"[yellow]No models match[/] {query!r}")
+        console.print(f"[yellow]No {repo_type}s match[/] {query!r}")
         return 1
-    table = Table(title=f"Hugging Face models · {query!r}", header_style="bold #b794f4")
-    table.add_column("Model", style="bold", overflow="fold")
+    label = "Datasets" if repo_type == "dataset" else "Models"
+    table = Table(
+        title=f"Hugging Face {label.lower()} · {query!r}",
+        header_style="bold #b794f4",
+    )
+    table.add_column("Repository", style="bold", overflow="fold")
     table.add_column("Downloads", justify="right")
     table.add_column("Likes", justify="right")
     table.add_column("Updated")
-    table.add_column("Tags", overflow="fold")
+    table.add_column("Meta", overflow="fold")
     for row in rows:
         name = row.id + (f" [magenta]· {row.gated}[/]" if row.gated else "")
-        tags = ", ".join(tag for tag in row.tags if tag in {"gguf", "mlx", "safetensors"})
-        if row.pipeline_tag and row.pipeline_tag not in tags:
-            tags = f"{row.pipeline_tag}{', ' + tags if tags else ''}"
+        meta: list[str] = []
+        if row.pipeline_tag:
+            meta.append(row.pipeline_tag)
+        meta.extend(row.tasks[:1])
+        if row.license:
+            meta.append(row.license)
+        if row.languages:
+            meta.append("/".join(row.languages[:2]))
+        if row.formats:
+            meta.append("/".join(row.formats[:2]))
+        meta.extend(tag for tag in row.tags if tag in {"gguf", "mlx", "safetensors"})
+        meta = list(dict.fromkeys(meta))
         table.add_row(
             name,
             f"{row.downloads:,}",
             f"{row.likes:,}",
             row.updated or "-",
-            tags[:90] or "-",
+            ", ".join(meta)[:100] or "-",
         )
     console.print(table)
-    console.print("[dim]Inspect with:[/] sovereign hf info <org/model>")
+    suffix = " --dataset" if args.dataset else ""
+    console.print(f"[dim]Inspect with:[/] sovereign hf info <org/repo>{suffix}")
     return 0
 
 
 def _hf_info(args, hub) -> int:
     repo = args.target or ""
+    repo_type = "dataset" if args.dataset else "model"
     if not repo:
-        raise hub.HFError("usage: sovereign hf info <org/model>")
-    info = hub.info_model(repo, token=hub.resolve_token()[0] or None)
+        raise hub.HFError("usage: sovereign hf info <org/repo> [--dataset]")
+    token = hub.resolve_token()[0] or None
+    info = hub.info_model(repo, token=token, repo_type=repo_type)
     if args.json:
         print(json.dumps(info.to_dict(), indent=2, default=str))
         return 0
 
-    table = Table(title="Hugging Face model", header_style="bold #b794f4", box=None)
+    table = Table(
+        title=f"Hugging Face {repo_type}",
+        header_style="bold #b794f4",
+        box=None,
+    )
     table.add_column("Field", style="bold #8a8aa0")
     table.add_column("Value", overflow="fold")
     table.add_row("Repository", info.id)
+    table.add_row("Type", info.repo_type)
     table.add_row("Downloads", f"{info.downloads:,}")
     table.add_row("Likes", f"{info.likes:,}")
-    table.add_row("Pipeline", info.pipeline_tag or "-")
+    if info.pipeline_tag:
+        table.add_row("Pipeline", info.pipeline_tag)
+    if info.tasks:
+        table.add_row("Task", ", ".join(info.tasks[:3]))
+    if info.license:
+        table.add_row("License", info.license)
+    if info.languages:
+        table.add_row("Languages", ", ".join(info.languages[:8]))
+    if info.formats:
+        table.add_row("Formats", ", ".join(info.formats[:8]))
+    if info.base_models:
+        table.add_row("Base models", ", ".join(info.base_models[:3]))
     table.add_row("Updated", info.updated or "-")
     if info.gated:
         table.add_row("Gated", info.gated)
@@ -3767,9 +3811,19 @@ def _hf_info(args, hub) -> int:
             files,
             limit=None if args.files else 15,
         )
-    console.print(
-        f'[dim]Download a subset:[/] sovereign hf download {info.id} --include "*Q4_K_M.gguf"'
-    )
+    if args.readme:
+        text = hub.readme(repo, repo_type=repo_type, token=token, limit=6000)
+        if text:
+            console.print(Panel(Text(text), title="README", border_style="dim"))
+        else:
+            console.print("[dim]No README found.[/]")
+    suffix = " --dataset" if args.dataset else ""
+    example = '--include "*.parquet"' if repo_type == "dataset" else '--include "*Q4_K_M.gguf"'
+    console.print(f"[dim]Download a subset:[/] sovereign hf download {info.id} {example}{suffix}")
+    if info.gguf_files:
+        console.print(
+            f"[dim]Import into Ollama:[/] sovereign hf import {info.id} {example} --name <name>"
+        )
     return 0
 
 
@@ -3803,12 +3857,13 @@ def _hf_download(args, hub) -> int:
     import shlex
 
     repo = args.target or ""
+    repo_type = "dataset" if args.dataset else "model"
     if not repo:
-        raise hub.HFError("usage: sovereign hf download <org/model> --include PATTERN")
+        raise hub.HFError("usage: sovereign hf download <org/repo> --include PATTERN [--dataset]")
     token = hub.resolve_token()[0] or None
     info = None
     try:
-        info = hub.info_model(repo, token=token)
+        info = hub.info_model(repo, token=token, repo_type=repo_type)
     except hub.HFError as exc:
         if not args.include and not args.download_all:
             raise
@@ -3824,7 +3879,9 @@ def _hf_download(args, hub) -> int:
             "[yellow]Pick files explicitly.[/] Add --include PATTERN (repeatable) "
             "or --all for the whole repository."
         )
-        console.print(f'[dim]Example:[/] sovereign hf download {repo} --include "*Q4_K_M.gguf"')
+        suffix = " --dataset" if args.dataset else ""
+        example = '--include "*.parquet"' if args.dataset else '--include "*Q4_K_M.gguf"'
+        console.print(f"[dim]Example:[/] sovereign hf download {repo} {example}{suffix}")
         return 1
 
     selected = _hf_selected_files(info, args.include, args.download_all) if info else []
@@ -3842,18 +3899,23 @@ def _hf_download(args, hub) -> int:
                 return 1
 
     destination = (
-        Path(args.local_dir).expanduser() if args.local_dir else hub.default_download_dir(repo)
+        Path(args.local_dir).expanduser()
+        if args.local_dir
+        else hub.default_download_dir(repo, repo_type)
     )
     command = hub.build_download_command(
         repo,
+        repo_type=repo_type,
         include=args.include,
+        exclude=args.exclude,
         all_files=args.download_all,
         revision=args.revision,
         local_dir=destination,
         cache_dir=args.cache_dir,
+        max_workers=args.max_workers,
         dry_run=args.dry_run,
     )
-    console.print(f"[bold]Hugging Face[/] {repo}")
+    console.print(f"[bold]Hugging Face {repo_type}[/] {repo}")
     console.print(f"[dim]Destination:[/] {destination}")
     console.print(f"[dim]Command:[/] {shlex.join(command)}")
     if args.dry_run:
@@ -3863,11 +3925,14 @@ def _hf_download(args, hub) -> int:
     try:
         destination, command = hub.download_model(
             repo,
+            repo_type=repo_type,
             include=args.include,
+            exclude=args.exclude,
             all_files=args.download_all,
             revision=args.revision,
             local_dir=destination,
             cache_dir=args.cache_dir,
+            max_workers=args.max_workers,
             dry_run=False,
             token=token,
         )
@@ -3885,39 +3950,215 @@ def _hf_download(args, hub) -> int:
     console.print(f"[green]Downloaded[/] {repo} → {destination}")
     if info is not None and info.gguf_files:
         console.print(
-            "[dim]Import a GGUF into Ollama with:[/] "
-            f"ollama create <name> -f <(printf 'FROM {destination}/<file>.gguf\\n')"
+            f"[dim]Import into Ollama:[/] sovereign hf import {repo} "
+            f'--include "{args.include[0] if args.include else "*Q4_K_M.gguf"}" '
+            "--name <name>"
         )
     return 0
 
 
 def _hf_list(args, hub) -> int:
-    rows = hub.local_models()
+    repo_type = "dataset" if args.dataset else None
+    rows = hub.local_repos(repo_type)
     if args.json:
         print(json.dumps([row.to_dict() for row in rows], indent=2, default=str))
         return 0
     if not rows:
-        console.print("[dim]No Hugging Face downloads or cache entries.[/]")
+        label = repo_type or "Hugging Face"
+        console.print(f"[dim]No local {label} downloads or cache entries.[/]")
         return 0
-    table = Table(title="Local Hugging Face models", header_style="bold #b794f4")
-    table.add_column("Kind")
+    title = (
+        "Local Hugging Face datasets"
+        if repo_type == "dataset"
+        else "Local Hugging Face repositories"
+    )
+    table = Table(title=title, header_style="bold #b794f4")
+    table.add_column("Type")
     table.add_column("Repository", style="bold", overflow="fold")
+    table.add_column("Storage")
     table.add_column("Size", justify="right")
     table.add_column("Modified")
     table.add_column("Path", overflow="fold")
     for row in rows:
         table.add_row(
-            row.kind,
+            row.repo_type,
             row.repo_id,
+            row.kind,
             human_size(row.bytes),
             row.modified or "-",
             str(row.path),
         )
     console.print(table)
+    models = sum(1 for row in rows if row.repo_type == "model")
+    datasets = sum(1 for row in rows if row.repo_type == "dataset")
     console.print(
         f"[dim]{len(rows)} entr{'y' if len(rows) == 1 else 'ies'} · "
+        f"{models} model(s), {datasets} dataset(s) · "
         f"total {human_size(sum(row.bytes for row in rows))}[/]"
     )
+    return 0
+
+
+def _hf_remove(args, hub) -> int:
+    repo = args.target or ""
+    repo_type = "dataset" if args.dataset else "model"
+    if not repo:
+        raise hub.HFError("usage: sovereign hf remove <org/repo> [--dataset] [--yes]")
+    paths = hub.local_repo_paths(repo, repo_type)
+    if not paths:
+        console.print(f"[dim]No local copy of[/] {repo}")
+        return 0
+    sizes = [hub.directory_size(path) if path.is_dir() else path.stat().st_size for path in paths]
+    total = sum(sizes)
+    for path, size in zip(paths, sizes, strict=True):
+        console.print(f"  {path} · {human_size(size)}")
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise hub.HFError("refusing to delete without confirmation; re-run with --yes")
+        answer = input(f"Delete {human_size(total)} for {repo}? [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            console.print("[dim]Cancelled.[/]")
+            return 1
+    removed = hub.remove_local(repo, repo_type)
+    console.print(f"[green]Removed[/] {repo} · {len(removed)} local path(s), {human_size(total)}")
+    return 0
+
+
+def _hf_import(args, hub) -> int:
+    import shlex
+    import tempfile
+
+    target = (args.target or "").strip()
+    if not target:
+        raise hub.HFError("usage: sovereign hf import <org/repo|file.gguf> --include PATTERN")
+    if args.dataset:
+        raise hub.HFError("Ollama imports model GGUFs, not dataset repositories")
+    ollama = shutil.which("ollama")
+    if not ollama:
+        raise hub.HFError("the `ollama` CLI is not installed")
+    if args.context is not None and args.context < 1:
+        raise hub.HFError("--context must be a positive token count")
+
+    token = hub.resolve_token()[0] or None
+    info = None
+    source_repo = target
+    destination: Path
+    candidate = Path(target).expanduser()
+    if candidate.exists():
+        if candidate.is_dir():
+            destination = candidate
+            files = sorted(candidate.glob("*.gguf"))
+        elif candidate.is_file() and candidate.suffix.lower() == ".gguf":
+            destination = candidate.parent
+            files = [candidate]
+        else:
+            raise hub.HFError(f"not a GGUF file or directory: {candidate}")
+        source_repo = candidate.stem if candidate.is_file() else candidate.name
+    else:
+        info = hub.info_model(target, token=token)
+        destination = hub.default_download_dir(target)
+        files = sorted(destination.rglob("*.gguf")) if destination.is_dir() else []
+
+    if args.include:
+        files = [
+            path
+            for path in files
+            if any(
+                fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(str(path), pattern)
+                for pattern in args.include
+            )
+        ]
+    if not files:
+        if info is None:
+            raise hub.HFError(f"no GGUF files found in {destination}")
+        if not args.include:
+            _hf_file_table("GGUF files", info.gguf_files, limit=None)
+            raise hub.HFError("choose one GGUF with --include PATTERN")
+        selected = _hf_selected_files(info, args.include, False)
+        if not selected:
+            raise hub.HFError("no files matched the include patterns; check `sovereign hf info`")
+        total = sum(item.size for item in selected)
+        console.print(f"[dim]Selected[/] {len(selected)} file(s), {human_size(total)}")
+        if total > 20 * 1024**3 and not args.yes:
+            if not sys.stdin.isatty():
+                raise hub.HFError("large download; re-run with --yes to confirm")
+            answer = input(f"Download {human_size(total)}? [y/N] ").strip().lower()
+            if answer not in {"y", "yes"}:
+                console.print("[dim]Cancelled.[/]")
+                return 1
+        if args.dry_run:
+            command = hub.build_download_command(
+                target,
+                include=args.include,
+                exclude=args.exclude,
+                local_dir=destination,
+                max_workers=args.max_workers,
+            )
+            console.print(f"[dim]Would download:[/] {shlex.join(command)}")
+            return 0
+        destination, _ = hub.download_model(
+            target,
+            include=args.include,
+            exclude=args.exclude,
+            local_dir=destination,
+            max_workers=args.max_workers,
+            token=token,
+        )
+        files = sorted(destination.rglob("*.gguf"))
+        files = [
+            path
+            for path in files
+            if any(
+                fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(str(path), pattern)
+                for pattern in args.include
+            )
+        ]
+    if not files:
+        raise hub.HFError("the download finished but no matching GGUF file was found")
+    if len(files) > 1:
+        names = ", ".join(path.name for path in files[:5])
+        raise hub.HFError(
+            f"multiple GGUF files matched ({names}); narrow --include to one quantization"
+        )
+    gguf = files[0]
+    if hub.is_split_gguf(gguf):
+        raise hub.HFError(
+            "this is one part of a split GGUF; choose a single-file quantization "
+            "or merge the parts first"
+        )
+
+    name = args.name or hub.ollama_model_name(source_repo, gguf)
+    if not hub.valid_ollama_name(name):
+        raise hub.HFError(f"invalid Ollama model name: {name!r}")
+    content = hub.modelfile_text(gguf, context=args.context)
+    if args.dry_run:
+        console.print(Panel(Text(content), title=f"Modelfile for {name}", border_style="dim"))
+        console.print(f"[dim]Command:[/] {ollama} create {name} -f <temporary Modelfile>")
+        return 0
+
+    modelfile: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            prefix="sovereign-",
+            suffix=".Modelfile",
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            handle.write(content)
+            modelfile = Path(handle.name)
+        console.print(f"[bold]Importing[/] {gguf.name} as [bold]{name}[/]")
+        result = subprocess.run(
+            [ollama, "create", name, "-f", str(modelfile)],
+            check=False,
+        )
+    finally:
+        if modelfile is not None:
+            modelfile.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise hub.HFError(f"ollama create exited with status {result.returncode}")
+    console.print(f"[green]Imported[/] {name}")
+    console.print(f"[dim]Run it:[/] ollama run {name}")
     return 0
 
 
@@ -4707,14 +4948,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"sovereign {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser(
+    dashboard = sub.add_parser(
         "dashboard",
         help="open the live read-only monitor (default): banks, projects, system",
     )
-    sub.add_parser(
+    dashboard.add_argument("--json", action="store_true", help="print one report as JSON")
+    dashboard.add_argument("--demo", action="store_true", help="render the demo report")
+    monitor = sub.add_parser(
         "monitor",
         help="alias for dashboard: skill/prompt banks, live projects, system activity",
     )
+    monitor.add_argument("--json", action="store_true", help="print one report as JSON")
+    monitor.add_argument("--demo", action="store_true", help="render the demo report")
     status = sub.add_parser("status", help="one-shot system status")
     status.add_argument("--json", action="store_true", help="machine-readable output")
     models = sub.add_parser("models", help="list installed and recommended models")
@@ -5760,8 +6005,17 @@ def main(argv: list[str] | None = None) -> int:
             cmd.chmod(0o755)
         return 0
     if command in {"dashboard", "monitor"}:
+        from .monitor import collect_live
         from .tui.monitor import MonitorApp
 
+        if args.demo:
+            MonitorApp(settings=settings, demo=True).run()
+            return 0
+        if args.json:
+            snapshot = asyncio.run(collect(settings))
+            report = collect_live(settings, snapshot)
+            print(json.dumps(report.to_dict(), indent=2, default=str))
+            return 0
         MonitorApp(settings=settings).run()
         return 0
     if command == "local-bar":

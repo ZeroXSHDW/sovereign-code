@@ -19,7 +19,7 @@ import sqlite3
 import subprocess
 import time
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,7 @@ from .system import (
     port_open,
     read_memory,
     swap_usage_gb,
+    wired_limit_gb,
 )
 
 # Dashboard refresh is cheap; the expensive lookups are cached separately.
@@ -100,6 +101,9 @@ class Activity:
     tokens: int = 0
     tools: bool = False
     reason: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    stream: bool = False
 
     @property
     def age(self) -> str:
@@ -110,6 +114,11 @@ class Activity:
             return f"{seconds // 60}m ago"
         return f"{seconds // 3600}h ago"
 
+    @property
+    def total_tokens(self) -> int:
+        measured = self.prompt_tokens + self.completion_tokens
+        return measured or self.tokens
+
 
 @dataclass(frozen=True)
 class ServiceLine:
@@ -119,6 +128,38 @@ class ServiceLine:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class Health:
+    """A one-glance verdict plus the reasons behind it."""
+
+    level: str = "ok"
+    title: str = "healthy"
+    reasons: tuple[str, ...] = ()
+
+    @property
+    def icon(self) -> str:
+        return {"ok": "●", "warn": "▲", "critical": "■"}.get(self.level, "●")
+
+    @property
+    def style(self) -> str:
+        return {"ok": "green", "warn": "yellow", "critical": "red"}.get(self.level, "green")
+
+
+@dataclass(frozen=True)
+class ActivityStats:
+    """Aggregate of the recent gateway metrics window."""
+
+    requests: int = 0
+    tokens: int = 0
+    tools: int = 0
+    streams: int = 0
+    p50_ms: int = 0
+    p95_ms: int = 0
+    per_minute: float = 0.0
+    top_tier: str = ""
+    top_tier_count: int = 0
+
+
 @dataclass
 class LiveReport:
     generated_at: float = field(default_factory=time.time)
@@ -126,6 +167,7 @@ class LiveReport:
     prompts: BankStats = field(default_factory=lambda: BankStats("prompt bank"))
     projects: list[LiveProject] = field(default_factory=list)
     activity: list[Activity] = field(default_factory=list)
+    activity_stats: ActivityStats = field(default_factory=ActivityStats)
     services: list[ServiceLine] = field(default_factory=list)
     loaded: list[tuple[str, float, int | None, str]] = field(default_factory=list)
     memory: Memory = field(default_factory=lambda: Memory(0.0, 0.0, 0.0, known=False))
@@ -135,7 +177,17 @@ class LiveReport:
     load: tuple[float, float, float] = (0.0, 0.0, 0.0)
     cpu_count: int = 0
     gateway_requests: int = 0
+    models_installed: int = 0
+    models_resident: int = 0
+    resident_gb: float = 0.0
+    potential_free_gb: float | None = None
+    wired_gb: float = 0.0
+    health: Health = field(default_factory=Health)
     errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe view used by ``sovereign monitor --json``."""
+        return asdict(self)
 
 
 # --------------------------------------------------------------------- banks
@@ -534,10 +586,106 @@ def recent_activity(limit: int = 8) -> list[Activity]:
                 tokens=int(event.get("tokens") or 0),
                 tools=bool(event.get("tools")),
                 reason=str(event.get("reason") or ""),
+                prompt_tokens=int(event.get("prompt_tokens") or 0),
+                completion_tokens=int(event.get("completion_tokens") or 0),
+                stream=bool(event.get("stream")),
             )
         )
     events.sort(key=lambda item: item.at, reverse=True)
     return events[:limit]
+
+
+def activity_stats(events: list[Activity], *, now: float | None = None) -> ActivityStats:
+    """Aggregate latency, tokens, tool use, and request rate for the window."""
+    if not events:
+        return ActivityStats()
+    times = sorted(max(0, int(event.ms)) for event in events)
+    midpoint = times[len(times) // 2]
+    p95 = times[min(len(times) - 1, int(len(times) * 0.95))]
+    tiers = Counter(event.tier for event in events)
+    top_tier, top_count = tiers.most_common(1)[0]
+    moment = time.time() if now is None else now
+    last_minute = sum(1 for event in events if 0 <= moment - event.at <= 60)
+    return ActivityStats(
+        requests=len(events),
+        tokens=sum(event.total_tokens for event in events),
+        tools=sum(1 for event in events if event.tools),
+        streams=sum(1 for event in events if event.stream),
+        p50_ms=midpoint,
+        p95_ms=p95,
+        per_minute=float(last_minute),
+        top_tier=top_tier,
+        top_tier_count=top_count,
+    )
+
+
+_SPARK_LEVELS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(
+    values: list[float] | tuple[float, ...],
+    *,
+    width: int = 20,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> str:
+    """A tiny fixed-width trend line for the monitor's history strip."""
+    width = max(1, int(width))
+    points = [float(value) for value in values]
+    points = points[-width:]
+    if not points:
+        return "·" * width
+    low = min(points) if minimum is None else float(minimum)
+    high = max(points) if maximum is None else float(maximum)
+    if high <= low:
+        high = low + 1.0
+    bars = []
+    for value in points:
+        ratio = max(0.0, min(1.0, (value - low) / (high - low)))
+        index = min(len(_SPARK_LEVELS) - 1, int(ratio * len(_SPARK_LEVELS)))
+        bars.append(_SPARK_LEVELS[index])
+    return "·" * (width - len(bars)) + "".join(bars)
+
+
+def assess(report: LiveReport) -> Health:
+    """Turn raw counters into a conservative health verdict."""
+    critical: list[str] = []
+    warn: list[str] = []
+    memory = report.memory
+    if not memory.known:
+        warn.append("memory counters unavailable")
+    elif memory.free_pct < 8:
+        critical.append(f"low RAM ({memory.free_pct:.0f}% free)")
+    elif memory.free_pct < 18:
+        warn.append(f"RAM pressure ({memory.free_pct:.0f}% free)")
+
+    if report.swap_used_gb >= 6:
+        critical.append(f"heavy swap ({report.swap_used_gb:.1f} GB)")
+    elif report.swap_used_gb >= 2:
+        warn.append(f"swap in use ({report.swap_used_gb:.1f} GB)")
+
+    if report.disk_free_gb and report.disk_free_gb < 5:
+        critical.append(f"disk almost full ({report.disk_free_gb:.0f} GB)")
+    elif report.disk_free_gb and report.disk_free_gb < 20:
+        warn.append(f"low disk ({report.disk_free_gb:.0f} GB)")
+
+    down = [service.name for service in report.services if not service.up]
+    critical_services = {"Ollama", "Tier gateway"}
+    if any(name in critical_services for name in down):
+        critical.append("core service offline: " + ", ".join(down))
+    elif down:
+        warn.append("service offline: " + ", ".join(down))
+
+    if report.models_resident > 1:
+        warn.append(f"{report.models_resident} models resident")
+    if report.errors:
+        warn.append(report.errors[0])
+
+    if critical:
+        return Health("critical", critical[0], tuple((critical + warn)[:4]))
+    if warn:
+        return Health("warn", warn[0], tuple(warn[:4]))
+    return Health("ok", "all systems nominal")
 
 
 # -------------------------------------------------------------------- system
@@ -586,10 +734,13 @@ def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
         report.projects = live_projects()
     except Exception as exc:
         report.errors.append(f"projects: {exc}")
-    report.activity = recent_activity()
+    events = recent_activity(limit=500)
+    report.activity = events[:8]
+    report.activity_stats = activity_stats(events)
     report.memory = read_memory()
     report.swap_used_gb, report.swap_total_gb = swap_usage_gb()
     report.disk_free_gb = disk_free_gb()
+    report.wired_gb = wired_limit_gb(report.memory.total_gb)
     try:
         report.load = os.getloadavg()
     except OSError:
@@ -598,6 +749,10 @@ def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
     report.services = _service_lines(settings)
     if snapshot is not None:
         report.loaded = _loaded(snapshot.views)
+        report.models_installed = len(snapshot.installed)
+        report.models_resident = len(report.loaded)
+        report.resident_gb = round(sum(item[1] for item in report.loaded), 2)
+        report.potential_free_gb = snapshot.potential_free_gb
         report.gateway_requests = metrics_count()
         # A running agent often has no --model flag (the client reads its own
         # config). With exactly one resident model, that model is the honest
@@ -607,6 +762,7 @@ def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
             report.projects = [
                 replace(project, model=project.model or only) for project in report.projects
             ]
+    report.health = assess(report)
     return report
 
 
@@ -665,10 +821,31 @@ def demo_report() -> LiveReport:
         ServiceLine("Anthropic bridge", 4001, True, "Claude"),
     ]
     report.loaded = [("qwen3.5:4b", 2.8, 8192, "runner")]
+    report.models_installed = 9
+    report.models_resident = 1
+    report.resident_gb = 2.8
+    report.potential_free_gb = 18.8
     report.memory = Memory(24.0, 16.0, 67.0)
     report.swap_used_gb, report.swap_total_gb = 0.4, 2.0
     report.disk_free_gb = 220.0
     report.load = (1.2, 1.1, 0.9)
     report.cpu_count = 12
+    report.wired_gb = 18.0
     report.gateway_requests = 500
+    report.activity_stats = ActivityStats(
+        requests=500,
+        tokens=83_400,
+        tools=212,
+        streams=388,
+        p50_ms=1_840,
+        p95_ms=12_400,
+        per_minute=7.0,
+        top_tier="deep",
+        top_tier_count=214,
+    )
+    report.health = Health(
+        "warn",
+        "model resident",
+        ("swap in use (0.4 GB)", "1 model resident"),
+    )
     return report

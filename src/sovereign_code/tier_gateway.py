@@ -1,15 +1,21 @@
-"""A latency-aware OpenAI-compatible gateway in front of LiteLLM/Ollama.
+"""A latency-aware OpenAI-compatible gateway in front of Ollama.
 
 Small models should answer small work in a second or two; big models should be
 reserved for the requests that need them. This server classifies each request,
 picks a tier, and talks to Ollama natively (so streamed tool calls are correct,
-unlike LiteLLM's Ollama translation). Named aliases and cloud/provider models
-are proxied to the existing LiteLLM gateway unchanged.
+unlike LiteLLM's Ollama translation). It is local-only: no cloud provider and
+no upstream proxy. Named aliases route to the best installed local model.
+
+Responses that are deterministic (no tools, low temperature, short output) are
+cached in memory and on disk, so a repeat coding question returns instantly.
+Models are kept warm by the warm pool so the first prompt of a session is not
+a cold start.
 
 Endpoints:
   GET  /health
   GET  /v1/models
   GET  /metrics
+  GET  /cache/stats
   POST /v1/chat/completions   (stream and non-stream)
   POST /v1/responses          (Responses API for Codex, stream and non-stream)
 """
@@ -26,6 +32,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +40,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+from .cache import DISK, MEMORY, cache_key_chat
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
@@ -43,6 +52,34 @@ DEFAULT_UPSTREAM = "http://127.0.0.1:4000"
 # bounds turn "looks hung" into either a fallback model or an explicit error.
 DEFAULT_REQUEST_TIMEOUT = 300.0
 DEFAULT_STREAM_IDLE_TIMEOUT = 180.0
+
+# Shared HTTP client with keep-alive and a bounded connection pool. Reusing
+# connections across requests skips the TCP + TLS handshake on every turn and
+# is one of the largest per-request speedups on loopback.
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = threading.Lock()
+
+
+def http_client() -> httpx.Client:
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        with _HTTP_CLIENT_LOCK:
+            if _HTTP_CLIENT is None:
+                _HTTP_CLIENT = httpx.Client(
+                    timeout=httpx.Timeout(DEFAULT_REQUEST_TIMEOUT, connect=5.0),
+                    limits=httpx.Limits(
+                        max_connections=64,
+                        max_keepalive_connections=32,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+    return _HTTP_CLIENT
+
+
+@contextmanager
+def shared_client():
+    """Yield the shared HTTP client without closing it on exit."""
+    yield http_client()
 
 
 def _seconds(name: str, default: float) -> float:
@@ -1176,7 +1213,29 @@ class ResponseCache:
                 self._data.pop(oldest, None)
 
 
-CACHE = ResponseCache()
+class _CombinedCache:
+    """Memory first, disk second; writes go to both layers."""
+
+    def __init__(self) -> None:
+        self.memory = MEMORY
+        self.disk = DISK
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        hit = self.memory.get(key)
+        if hit is not None:
+            return hit
+        hit = self.disk.get(key)
+        if hit is not None:
+            self.memory.put(key, hit)
+            return hit
+        return None
+
+    def put(self, key: str, value: dict[str, Any], model: str = "", tier: str = "") -> None:
+        self.memory.put(key, value)
+        self.disk.put(key, value, model=model, tier=tier)
+
+
+CACHE = _CombinedCache()
 _METRICS_LOCK = threading.Lock()
 
 
@@ -1659,6 +1718,9 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path in ("/health", "/"):
             installed = _installed(self.ollama)
+            from .warm import pool as warm_pool
+
+            warm = [m.tag for m in warm_pool().status() if m.loaded]
             self._json(
                 200,
                 {
@@ -1666,9 +1728,11 @@ class _Handler(BaseHTTPRequestHandler):
                     "upstream": self.upstream,
                     "ollama": self.ollama,
                     "tiers": {tier: choose_model(tier, installed, "code")[0] for tier in TIERS},
-                    "local_only": local_only(),
+                    "local_only": True,
                     "installed": sorted(installed),
+                    "warm": warm,
                     "metrics": metrics_summary(),
+                    "cache": CACHE.memory.stats(),
                 },
             )
             return
@@ -1680,6 +1744,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/metrics":
             self._json(200, metrics_summary())
+            return
+        if path == "/cache/stats":
+            self._json(
+                200,
+                {
+                    "memory": CACHE.memory.stats(),
+                    "disk": CACHE.disk.stats(),
+                },
+            )
             return
         self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
 
@@ -1711,7 +1784,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(b": sovereign\n\n")
             self.wfile.write(_chunk(route.model, {"role": "assistant", "content": ""}, cid=cid))
             self.wfile.flush()
-            with httpx.Client(timeout=httpx.Timeout(stream_idle_timeout(), connect=5)) as client:
+            with shared_client() as client:
                 with client.stream(
                     "POST", f"{self.ollama.rstrip('/')}/api/chat", json=payload
                 ) as response:
@@ -1836,10 +1909,9 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             try:
-                response = httpx.post(
+                response = http_client().post(
                     f"{self.ollama.rstrip('/')}/api/chat",
                     json=payload,
-                    timeout=httpx.Timeout(request_timeout(), connect=5),
                 )
                 if response.status_code >= 400:
                     last_error = response.text[:500]
@@ -1895,7 +1967,7 @@ class _Handler(BaseHTTPRequestHandler):
             }
         )
         if cache_key:
-            CACHE.put(cache_key, result)
+            CACHE.put(cache_key, result, model=route.model, tier=route.tier)
         headers = {
             "x-sovereign-tier": route.tier,
             "x-sovereign-model": route.model,
@@ -2088,7 +2160,19 @@ class _Handler(BaseHTTPRequestHandler):
             and int(request.get("max_tokens") or 0) <= 2048
             and self.headers.get("x-sovereign-cache", "").lower() != "off"
         )
-        key = ResponseCache.key(request, route.tier, route.model) if cacheable else ""
+        key = (
+            cache_key_chat(
+                route.model,
+                route.tier,
+                request.get("messages") or [],
+                request.get("temperature"),
+                request.get("max_tokens"),
+                request.get("stop"),
+                request.get("tools"),
+            )
+            if cacheable
+            else ""
+        )
         if cacheable:
             cached = CACHE.get(key)
             if cached is not None:

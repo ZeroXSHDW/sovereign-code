@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import time
+from collections import deque
 from pathlib import Path
 
 from rich.text import Text
@@ -25,11 +27,10 @@ from textual.widgets import Footer, Header, Static
 
 from ..clients import local_clients, plan_launch
 from ..config import Settings
-from ..monitor import LiveReport, collect_live, demo_report, format_age
+from ..monitor import LiveReport, collect_live, demo_report, format_age, sparkline
 from ..ollama import OllamaClient
 from ..router import Task, choose
 from ..status import Snapshot, collect
-from ..system import wired_limit_gb
 
 REFRESH_SECONDS = 5.0
 
@@ -37,6 +38,8 @@ HELP_TEXT = """\
 Live monitor keys
 
 F5 / r    refresh now
+p         pause or resume live refresh
+y         copy the current snapshot to the clipboard
 F9 / f    unload every resident model (free RAM)
 F2        open Qwen Code in the workspace
 F4        open the local Codex / ChatGPT profile
@@ -44,8 +47,9 @@ F6        open Claude Code against the local gateway
 Ctrl+Q    quit
 
 This dashboard is read-only. It does not chat, does not load a model, and does
-not keep any service alive in the background. For a chat turn, run
-`sovereign chat`; for coding, press F2 or run `sovereign code`.
+not keep any service alive in the background. Sparklines cover the last five
+minutes. For a chat turn, run `sovereign chat`; for coding, press F2 or run
+`sovereign code`.
 """
 
 
@@ -62,6 +66,8 @@ class MonitorApp(App[None]):
         Binding("f9", "free", "Free RAM"),
         Binding("r", "refresh", "Refresh", show=False),
         Binding("f", "free", "Free RAM", show=False),
+        Binding("p", "pause", "Pause", show=False),
+        Binding("y", "copy", "Copy", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -71,6 +77,8 @@ class MonitorApp(App[None]):
         self.demo = demo
         self.snapshot: Snapshot | None = None
         self.report: LiveReport | None = None
+        self.history: deque[tuple[float, float, float, float]] = deque(maxlen=60)
+        self.paused = False
         self._busy = False
         self._notice = ""
         self.ollama = OllamaClient(self.settings.ollama_url)
@@ -78,12 +86,15 @@ class MonitorApp(App[None]):
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield Static("", id="health-panel")
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
                 yield Static("SYSTEM", classes="section-title")
                 yield Static("", id="system-panel", classes="panel")
                 yield Static("SERVICES", classes="section-title")
                 yield Static("", id="service-panel", classes="panel")
+                yield Static("MODEL INVENTORY", classes="section-title")
+                yield Static("", id="model-panel", classes="panel")
                 yield Static("RESIDENT MODELS", classes="section-title")
                 yield Static("", id="loaded-panel", classes="panel")
             with VerticalScroll(id="main"):
@@ -96,6 +107,8 @@ class MonitorApp(App[None]):
                         yield Static("", id="prompt-panel", classes="card")
                 yield Static("LIVE PROJECTS", classes="section-title")
                 yield Static("", id="project-panel", classes="card")
+                yield Static("GATEWAY THROUGHPUT · RECENT WINDOW", classes="section-title")
+                yield Static("", id="activity-summary", classes="card compact")
                 yield Static("LIVE ACTIVITY · RECENT GATEWAY REQUESTS", classes="section-title")
                 yield Static("", id="activity-panel", classes="card")
                 yield Static(HELP_TEXT, id="help-panel", classes="hint")
@@ -105,6 +118,7 @@ class MonitorApp(App[None]):
     async def on_mount(self) -> None:
         if self.demo:
             self.report = demo_report()
+            self._seed_demo_history()
             self._render_report()
             self._render_status()
             self.set_interval(REFRESH_SECONDS, self.tick)
@@ -112,9 +126,27 @@ class MonitorApp(App[None]):
         await self.refresh_all()
         self.set_interval(REFRESH_SECONDS, self.tick)
 
+    def _seed_demo_history(self) -> None:
+        now = time.time()
+        for index in range(24):
+            free = 48 + (index % 6) * 3
+            load = 0.7 + (index % 5) * 0.25
+            vram = 2.8 if index > 11 else 0.0
+            self.history.append((now - (24 - index) * 5, float(free), load, vram))
+
+    def _record_history(self, report: LiveReport) -> None:
+        self.history.append(
+            (
+                report.generated_at,
+                float(report.memory.free_pct),
+                float(report.load[0]),
+                float(report.resident_gb),
+            )
+        )
+
     # ---------------------------------------------------------------- update
     async def tick(self) -> None:
-        if self.demo:
+        if self.demo or self.paused:
             return
         await self.refresh_all()
 
@@ -125,6 +157,7 @@ class MonitorApp(App[None]):
         try:
             self.snapshot = await collect(self.settings)
             self.report = await asyncio.to_thread(collect_live, self.settings, self.snapshot)
+            self._record_history(self.report)
             self._render_status()
             self._render_report()
         finally:
@@ -138,42 +171,67 @@ class MonitorApp(App[None]):
             text.append("starting…", style="dim")
             self.query_one("#statusbar", Static).update(text)
             return
+        health = report.health
+        text.append(f"{health.icon} {health.title.upper()} ", style=f"bold {health.style}")
         if snap is not None:
             text.append("OLLAMA ", style="bold")
             text.append(
-                "● online" if snap.ollama_up else "○ offline",
+                "●" if snap.ollama_up else "○",
                 style="green" if snap.ollama_up else "red",
             )
-            text.append("   GATEWAY ", style="bold")
+            text.append("  GATEWAY ", style="bold")
             text.append(
-                "● online" if snap.gateway.up else "○ offline",
+                "●" if snap.gateway.up else "○",
                 style="green" if snap.gateway.up else "yellow",
             )
         else:
-            text.append("DEMO", style="bold yellow")
-        text.append("   RAM ", style="bold")
+            text.append("DEMO ", style="bold yellow")
+        text.append("  RAM ", style="bold")
         free = report.memory.free_gb
         style = "cyan" if free > 4 else "yellow"
         text.append(f"{free:.0f}G free", style=style)
-        text.append("   LOAD ", style="bold")
-        text.append(f"{report.load[0]:.1f}", style="dim")
-        text.append("   MODELS ", style="bold")
-        text.append(f"{len(report.loaded)} resident", style="dim")
-        text.append("   READ-ONLY", style="dim italic")
+        text.append(f"  LOAD {report.load[0]:.1f}", style="dim")
+        text.append(f"  MODELS {report.models_resident}", style="dim")
+        if self.paused:
+            text.append("  PAUSED", style="bold yellow")
         if self._notice:
-            text.append(f"   {self._notice}", style="bold green")
+            text.append(f"  {self._notice}", style="bold green")
         self.query_one("#statusbar", Static).update(text)
 
     def _render_report(self) -> None:
         report = self.report
         if report is None:
             return
+        self._render_health(report)
         self._render_system(report)
         self._render_services(report)
+        self._render_inventory(report)
         self._render_loaded(report)
         self._render_banks(report)
         self._render_projects(report)
+        self._render_activity_summary(report)
         self._render_activity(report)
+
+    def _render_health(self, report: LiveReport) -> None:
+        text = Text()
+        health = report.health
+        text.append(f"{health.icon} {health.title.upper()}", style=f"bold {health.style}")
+        reasons = " · ".join(health.reasons[:3]) if health.reasons else "no issues"
+        text.append(f"   {reasons}", style="dim")
+        history = list(self.history)
+        text.append("\nRAM  ", style="bold cyan")
+        text.append(
+            sparkline([point[1] for point in history], width=18, minimum=0, maximum=100),
+            style="cyan",
+        )
+        text.append(f" {report.memory.free_pct:.0f}% free", style="dim")
+        text.append("   LOAD ", style="bold")
+        text.append(sparkline([point[2] for point in history], width=18), style="yellow")
+        text.append(f" {report.load[0]:.2f}", style="dim")
+        text.append("   VRAM ", style="bold")
+        text.append(sparkline([point[3] for point in history], width=18), style="magenta")
+        text.append(f" {report.resident_gb:.1f}G", style="dim")
+        self.query_one("#health-panel", Static).update(text)
 
     def _render_system(self, report: LiveReport) -> None:
         text = Text()
@@ -187,8 +245,11 @@ class MonitorApp(App[None]):
             f"  ·  {report.cpu_count} cores\n",
             style="dim",
         )
-        text.append(f"GPU  {wired_limit_gb(mem.total_gb):.0f}G wired ceiling\n", style="dim")
-        text.append(f"REQ  {report.gateway_requests} in recent log\n", style="dim")
+        text.append(f"GPU  {report.wired_gb:.0f}G wired ceiling\n", style="dim")
+        text.append(
+            f"REQ  {report.gateway_requests} logged · {report.activity_stats.per_minute:.0f}/min\n",
+            style="dim",
+        )
         if report.errors:
             text.append("ERR  " + "; ".join(report.errors[:2]), style="red")
         self.query_one("#system-panel", Static).update(text)
@@ -200,6 +261,26 @@ class MonitorApp(App[None]):
             text.append(f"{service.name}", style="bold" if service.up else "dim")
             text.append(f"  :{service.port}\n", style="dim")
         self.query_one("#service-panel", Static).update(text)
+
+    def _render_inventory(self, report: LiveReport) -> None:
+        text = Text()
+        text.append(f"{report.models_installed} installed", style="bold")
+        text.append(f"  ·  {report.models_resident} resident\n", style="dim")
+        if report.models_resident:
+            text.append(f"{report.resident_gb:.1f}G in use", style="cyan")
+        else:
+            text.append("0G resident", style="green")
+        if report.potential_free_gb is not None:
+            text.append(f"  ·  {report.potential_free_gb:.1f}G potential\n", style="dim")
+        else:
+            text.append("\n")
+        if report.activity_stats.top_tier:
+            text.append(
+                f"top tier {report.activity_stats.top_tier}"
+                f" ({report.activity_stats.top_tier_count})\n",
+                style="dim",
+            )
+        self.query_one("#model-panel", Static).update(text)
 
     def _render_loaded(self, report: LiveReport) -> None:
         text = Text()
@@ -245,6 +326,25 @@ class MonitorApp(App[None]):
             text.append(f"  {project.path}\n", style="dim")
         self.query_one("#project-panel", Static).update(text)
 
+    def _render_activity_summary(self, report: LiveReport) -> None:
+        stats = report.activity_stats
+        text = Text()
+        if not stats.requests:
+            text.append("No gateway traffic in the current metrics window.\n", style="dim")
+            self.query_one("#activity-summary", Static).update(text)
+            return
+        text.append(f"{stats.requests:,} requests", style="bold")
+        text.append(f"  ·  {stats.tokens:,} tok", style="dim")
+        text.append(f"  ·  p50 {stats.p50_ms / 1000:.1f}s", style="dim")
+        text.append(f"  ·  p95 {stats.p95_ms / 1000:.1f}s", style="dim")
+        text.append(f"  ·  {stats.per_minute:.0f}/min\n", style="dim")
+        text.append(
+            f"{stats.tools} tool calls  ·  {stats.streams} streams"
+            f"  ·  most used tier {stats.top_tier} ({stats.top_tier_count})",
+            style="dim",
+        )
+        self.query_one("#activity-summary", Static).update(text)
+
     def _render_activity(self, report: LiveReport) -> None:
         text = Text()
         if not report.activity:
@@ -253,8 +353,12 @@ class MonitorApp(App[None]):
             text.append(f"{format_age(event.at)}  ", style="dim")
             text.append(f"{event.tier:<9}", style="bold cyan")
             text.append(f"{event.model:<18} ", style="bold")
-            tools = " tools" if event.tools else ""
-            label = f"{event.ms:>6}ms  {event.tokens:>4} tok{tools}  {event.age}\n"
+            marks = ""
+            if event.tools:
+                marks += " ⚙"
+            if event.stream:
+                marks += " ⇢"
+            label = f"{event.ms:>6}ms  {event.total_tokens:>5} tok{marks}  {event.age}\n"
             text.append(label, style="dim")
         self.query_one("#activity-panel", Static).update(text)
 
@@ -262,8 +366,58 @@ class MonitorApp(App[None]):
     async def action_refresh(self) -> None:
         await self.refresh_all()
 
-    async def action_help(self) -> None:
+    def action_pause(self) -> None:
+        self.paused = not self.paused
+        self._notice = "paused" if self.paused else "resumed"
+        self._render_status()
+
+    def action_help(self) -> None:
         self._notice = "see the read-only help panel below"
+        self._render_status()
+
+    def _summary_text(self) -> str:
+        report = self.report
+        if report is None:
+            return ""
+        projects = (
+            "\n".join(
+                f"  {'●' if project.active else '○'} {project.name}  "
+                f"{project.model or 'no model'}  {project.age}"
+                for project in report.projects[:8]
+            )
+            or "  none"
+        )
+        activity = (
+            "\n".join(
+                f"  {format_age(event.at)}  {event.tier}  {event.model}  "
+                f"{event.ms}ms  {event.total_tokens} tok"
+                for event in report.activity[:8]
+            )
+            or "  none"
+        )
+        return (
+            f"Sovereign Code monitor · {format_age(report.generated_at)}\n"
+            f"Health: {report.health.icon} {report.health.title}"
+            f" ({', '.join(report.health.reasons) or 'no issues'})\n"
+            f"RAM: {report.memory.free_gb:.1f}G free / {report.memory.total_gb:.0f}G"
+            f" · swap {report.swap_used_gb:.1f}G / {report.swap_total_gb:.1f}G"
+            f" · load {report.load[0]:.2f}\n"
+            f"Skill bank: {report.skills.total:,} · {report.skills.detail}\n"
+            f"Prompt bank: {report.prompts.total:,} · {report.prompts.detail}\n"
+            f"Models: {report.models_installed} installed, "
+            f"{report.models_resident} resident ({report.resident_gb:.1f}G)\n"
+            f"Gateway: {report.activity_stats.requests} requests, "
+            f"p50 {report.activity_stats.p50_ms / 1000:.1f}s, "
+            f"p95 {report.activity_stats.p95_ms / 1000:.1f}s\n"
+            f"Projects:\n{projects}\n"
+            f"Recent activity:\n{activity}\n"
+        )
+
+    def action_copy(self) -> None:
+        if self.report is None:
+            return
+        self.copy_to_clipboard(self._summary_text())
+        self._notice = "snapshot copied"
         self._render_status()
 
     async def action_free(self) -> None:

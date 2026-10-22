@@ -7,3 +7,7 @@ build/
 dist/
 logs/
 .DS_Store
+
+# Self-contained runtime: config, data, gateway files and the model store live
+# here after migration. Never commit gigabytes of weights.
+runtime/

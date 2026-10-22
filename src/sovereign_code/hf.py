@@ -34,12 +34,31 @@ from .stats import human_size
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
 DOWNLOAD_ROOT = LOCAL_AI_ROOT / "models" / "huggingface"
+DATASET_DOWNLOAD_ROOT = LOCAL_AI_ROOT / "datasets" / "huggingface"
 TOKEN_ENV_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+REPO_TYPES = ("model", "dataset")
+SPLIT_GGUF_RE = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
+QUANT_RE = re.compile(
+    r"(?:^|[-_.])((?:iq|q)\d+(?:_[a-z0-9]+)*|f16|bf16|fp16|fp32)(?:[-_.]|$)",
+    re.IGNORECASE,
+)
+OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 
 
 class HFError(RuntimeError):
     """A Hugging Face operation failed in a way the CLI can explain."""
+
+
+def _tag_values(tags: tuple[str, ...], prefix: str) -> tuple[str, ...]:
+    """Values of tags such as ``license:mit`` in declaration order."""
+    marker = f"{prefix}:"
+    return tuple(dict.fromkeys(tag[len(marker) :] for tag in tags if tag.startswith(marker)))
+
+
+def _first_tag(tags: tuple[str, ...], prefix: str) -> str:
+    values = _tag_values(tags, prefix)
+    return values[0] if values else ""
 
 
 @dataclass(frozen=True)
@@ -72,14 +91,37 @@ class HFModel:
     gated: str = ""
     private: bool = False
     updated: str = ""
+    repo_type: str = "model"
+    description: str = ""
 
     @property
     def gguf(self) -> bool:
         return "gguf" in {tag.lower() for tag in self.tags}
 
+    @property
+    def license(self) -> str:
+        return _first_tag(self.tags, "license")
+
+    @property
+    def languages(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "language")
+
+    @property
+    def formats(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "format")
+
+    @property
+    def tasks(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "task_categories")
+
+    @property
+    def base_models(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "base_model")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "repo_type": self.repo_type,
             "downloads": self.downloads,
             "likes": self.likes,
             "pipeline_tag": self.pipeline_tag,
@@ -88,6 +130,12 @@ class HFModel:
             "gated": self.gated,
             "private": self.private,
             "updated": self.updated,
+            "description": self.description,
+            "license": self.license,
+            "languages": list(self.languages),
+            "formats": list(self.formats),
+            "tasks": list(self.tasks),
+            "base_models": list(self.base_models),
         }
 
 
@@ -117,6 +165,8 @@ class HFModelInfo:
     used_storage: int = 0
     files: tuple[HFFile, ...] = ()
     gguf: dict[str, Any] = field(default_factory=dict)
+    repo_type: str = "model"
+    description: str = ""
 
     @property
     def total_file_size(self) -> int:
@@ -126,9 +176,30 @@ class HFModelInfo:
     def gguf_files(self) -> tuple[HFFile, ...]:
         return tuple(item for item in self.files if item.gguf)
 
+    @property
+    def license(self) -> str:
+        return _first_tag(self.tags, "license")
+
+    @property
+    def languages(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "language")
+
+    @property
+    def formats(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "format")
+
+    @property
+    def tasks(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "task_categories")
+
+    @property
+    def base_models(self) -> tuple[str, ...]:
+        return _tag_values(self.tags, "base_model")
+
     def to_dict(self, include_files: bool = True) -> dict[str, Any]:
         data: dict[str, Any] = {
             "id": self.id,
+            "repo_type": self.repo_type,
             "downloads": self.downloads,
             "likes": self.likes,
             "pipeline_tag": self.pipeline_tag,
@@ -139,6 +210,12 @@ class HFModelInfo:
             "used_storage": self.used_storage,
             "total_file_size": self.total_file_size,
             "gguf": dict(self.gguf),
+            "description": self.description,
+            "license": self.license,
+            "languages": list(self.languages),
+            "formats": list(self.formats),
+            "tasks": list(self.tasks),
+            "base_models": list(self.base_models),
         }
         if include_files:
             data["files"] = [item.to_dict() for item in self.files]
@@ -152,10 +229,12 @@ class LocalHFModel:
     kind: str
     bytes: int
     modified: str
+    repo_type: str = "model"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "repo_id": self.repo_id,
+            "repo_type": self.repo_type,
             "path": str(self.path),
             "kind": self.kind,
             "bytes": self.bytes,
@@ -340,6 +419,25 @@ def hf_cli_version() -> str:
     )
 
 
+def _validate_repo_type(repo_type: str) -> str:
+    value = str(repo_type or "model").strip().lower()
+    if value not in REPO_TYPES:
+        raise HFError("repository type must be `model` or `dataset`")
+    return value
+
+
+def _api_repo_path(repo_type: str) -> str:
+    return "/api/models" if repo_type == "model" else "/api/datasets"
+
+
+def _search_path(repo_type: str) -> str:
+    return _api_repo_path(repo_type)
+
+
+def _raw_prefix(repo_type: str) -> str:
+    return "" if repo_type == "model" else "/datasets"
+
+
 def validate_repo_id(repo_id: str) -> str:
     value = str(repo_id or "").strip()
     if not REPO_ID_RE.fullmatch(value):
@@ -351,8 +449,10 @@ def repo_slug(repo_id: str) -> str:
     return validate_repo_id(repo_id).replace("/", "--")
 
 
-def default_download_dir(repo_id: str) -> Path:
-    return DOWNLOAD_ROOT / repo_slug(repo_id)
+def default_download_dir(repo_id: str, repo_type: str = "model") -> Path:
+    repo_type = _validate_repo_type(repo_type)
+    root = DOWNLOAD_ROOT if repo_type == "model" else DATASET_DOWNLOAD_ROOT
+    return root / repo_slug(repo_id)
 
 
 def _client(transport: httpx.BaseTransport | None = None, timeout: float = 20.0) -> httpx.Client:
@@ -363,16 +463,17 @@ def _client(transport: httpx.BaseTransport | None = None, timeout: float = 20.0)
     )
 
 
-def _request_json(
+def _request(
     path: str,
     *,
     params: dict[str, Any] | None = None,
     token: str | None = None,
     transport: httpx.BaseTransport | None = None,
     timeout: float = 20.0,
-) -> Any:
+    accept: str = "application/json",
+) -> httpx.Response:
     url = f"{endpoint()}{path}"
-    headers = {"Accept": "application/json", "User-Agent": "sovereign-code"}
+    headers = {"Accept": accept, "User-Agent": "sovereign-code"}
     token = _clean_token(token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -390,10 +491,47 @@ def _request_json(
         raise HFError(f"not found: {url} (check the repository id)")
     if response.status_code >= 400:
         raise HFError(f"Hugging Face returned HTTP {response.status_code}: {response.text[:300]}")
+    return response
+
+
+def _request_json(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    token: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 20.0,
+) -> Any:
+    response = _request(
+        path,
+        params=params,
+        token=token,
+        transport=transport,
+        timeout=timeout,
+    )
     try:
         return response.json()
     except ValueError as exc:
         raise HFError("Hugging Face returned invalid JSON") from exc
+
+
+def _request_text(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    token: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 20.0,
+) -> str:
+    response = _request(
+        path,
+        params=params,
+        token=token,
+        transport=transport,
+        timeout=timeout,
+        accept="text/plain",
+    )
+    return response.text
 
 
 def _gated_label(value: Any) -> str:
@@ -409,7 +547,13 @@ def _updated(item: dict[str, Any]) -> str:
     return str(raw)[:10]
 
 
-def _model_from_api(item: dict[str, Any]) -> HFModel:
+def _description(item: dict[str, Any]) -> str:
+    card = item.get("cardData") if isinstance(item.get("cardData"), dict) else {}
+    raw = item.get("description") or card.get("description") or ""
+    return " ".join(str(raw).split())
+
+
+def _model_from_api(item: dict[str, Any], repo_type: str = "model") -> HFModel:
     return HFModel(
         id=str(item.get("id") or ""),
         downloads=int(item.get("downloads") or 0),
@@ -419,6 +563,8 @@ def _model_from_api(item: dict[str, Any]) -> HFModel:
         gated=_gated_label(item.get("gated")),
         private=bool(item.get("private")),
         updated=_updated(item),
+        repo_type=repo_type,
+        description=_description(item),
     )
 
 
@@ -441,8 +587,14 @@ def search_models(
     sort: str = "downloads",
     token: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    repo_type: str = "model",
+    filters: list[str] | None = None,
+    pipeline_tag: str | None = None,
 ) -> list[HFModel]:
     """Search the public Hub. A token adds private and gated results."""
+    repo_type = _validate_repo_type(repo_type)
+    if gguf_only and repo_type != "model":
+        raise HFError("the GGUF filter applies to models, not datasets")
     params: dict[str, Any] = {
         "limit": max(1, min(int(limit), 100)),
         "sort": sort,
@@ -451,14 +603,42 @@ def search_models(
     needle = str(query or "").strip()
     if needle:
         params["search"] = needle
+    wanted = [str(item).strip() for item in (filters or []) if str(item).strip()]
     if gguf_only:
-        params["filter"] = "gguf"
+        wanted.append("gguf")
+    if wanted:
+        params["filter"] = wanted
+    if pipeline_tag and repo_type == "model":
+        params["pipeline_tag"] = str(pipeline_tag).strip()
     if author:
         params["author"] = author.strip()
-    data = _request_json("/api/models", params=params, token=token, transport=transport)
+    data = _request_json(_search_path(repo_type), params=params, token=token, transport=transport)
     if not isinstance(data, list):
         raise HFError("Hugging Face returned an unexpected search response")
-    return [_model_from_api(item) for item in data if isinstance(item, dict)]
+    return [_model_from_api(item, repo_type) for item in data if isinstance(item, dict)]
+
+
+def search_datasets(
+    query: str,
+    *,
+    limit: int = 20,
+    author: str | None = None,
+    sort: str = "downloads",
+    token: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+    filters: list[str] | None = None,
+) -> list[HFModel]:
+    """Search datasets with the same shape as model search."""
+    return search_models(
+        query,
+        limit=limit,
+        author=author,
+        sort=sort,
+        token=token,
+        transport=transport,
+        repo_type="dataset",
+        filters=filters,
+    )
 
 
 def info_model(
@@ -466,16 +646,18 @@ def info_model(
     *,
     token: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    repo_type: str = "model",
 ) -> HFModelInfo:
     repo = validate_repo_id(repo_id)
+    repo_type = _validate_repo_type(repo_type)
     data = _request_json(
-        f"/api/models/{quote(repo, safe='/')}",
+        f"{_api_repo_path(repo_type)}/{quote(repo, safe='/')}",
         params={"blobs": "true"},
         token=token,
         transport=transport,
     )
     if not isinstance(data, dict):
-        raise HFError("Hugging Face returned an unexpected model response")
+        raise HFError("Hugging Face returned an unexpected repository response")
     files = tuple(
         _file_from_api(item) for item in (data.get("siblings") or ()) if isinstance(item, dict)
     )
@@ -496,22 +678,61 @@ def info_model(
         used_storage=used_storage,
         files=files,
         gguf=dict(gguf),
+        repo_type=repo_type,
+        description=_description(data),
     )
+
+
+def info_dataset(
+    repo_id: str,
+    *,
+    token: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> HFModelInfo:
+    return info_model(repo_id, token=token, transport=transport, repo_type="dataset")
+
+
+def readme(
+    repo_id: str,
+    *,
+    repo_type: str = "model",
+    token: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+    limit: int = 6000,
+) -> str:
+    """Fetch the repository README without its YAML frontmatter."""
+    repo = validate_repo_id(repo_id)
+    repo_type = _validate_repo_type(repo_type)
+    text = _request_text(
+        f"{_raw_prefix(repo_type)}/{quote(repo, safe='/')}/raw/main/README.md",
+        token=token,
+        transport=transport,
+    )
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4 :]
+    text = text.strip()
+    return text[:limit]
 
 
 def build_download_command(
     repo_id: str,
     *,
+    repo_type: str = "model",
     include: list[str] | None = None,
+    exclude: list[str] | None = None,
     all_files: bool = False,
     revision: str | None = None,
     local_dir: Path | str | None = None,
     cache_dir: Path | str | None = None,
+    max_workers: int | None = None,
     dry_run: bool = False,
     hf_cli: str | None = None,
 ) -> list[str]:
     """Build an ``hf download`` argv without putting a token in it."""
     repo = validate_repo_id(repo_id)
+    repo_type = _validate_repo_type(repo_type)
     patterns = [str(pattern).strip() for pattern in (include or []) if str(pattern).strip()]
     if not patterns and not all_files:
         raise HFError("choose files with --include PATTERN or pass --all")
@@ -519,7 +740,11 @@ def build_download_command(
     if not executable:
         raise HFError("the `hf` CLI is not installed; run `brew install hf`")
     command = [executable, "download", repo]
-    destination = Path(local_dir).expanduser() if local_dir else default_download_dir(repo)
+    if repo_type == "dataset":
+        command.extend(["--repo-type", "dataset"])
+    destination = (
+        Path(local_dir).expanduser() if local_dir else default_download_dir(repo, repo_type)
+    )
     command.extend(["--local-dir", str(destination)])
     if cache_dir:
         command.extend(["--cache-dir", str(Path(cache_dir).expanduser())])
@@ -527,6 +752,18 @@ def build_download_command(
         if pattern.startswith("-"):
             raise HFError("an include pattern cannot start with '-'")
         command.extend(["--include", pattern])
+    for pattern in exclude or []:
+        value = str(pattern).strip()
+        if not value:
+            continue
+        if value.startswith("-"):
+            raise HFError("an exclude pattern cannot start with '-'")
+        command.extend(["--exclude", value])
+    if max_workers:
+        workers = int(max_workers)
+        if not 1 <= workers <= 32:
+            raise HFError("--max-workers must be between 1 and 32")
+        command.extend(["--max-workers", str(workers)])
     if revision:
         value = str(revision).strip()
         if not value or value.startswith("-"):
@@ -540,24 +777,33 @@ def build_download_command(
 def download_model(
     repo_id: str,
     *,
+    repo_type: str = "model",
     include: list[str] | None = None,
+    exclude: list[str] | None = None,
     all_files: bool = False,
     revision: str | None = None,
     local_dir: Path | str | None = None,
     cache_dir: Path | str | None = None,
+    max_workers: int | None = None,
     dry_run: bool = False,
     token: str | None = None,
 ) -> tuple[Path, list[str]]:
     """Download a repository through ``hf``, resuming when files already exist."""
     repo = validate_repo_id(repo_id)
-    destination = Path(local_dir).expanduser() if local_dir else default_download_dir(repo)
+    repo_type = _validate_repo_type(repo_type)
+    destination = (
+        Path(local_dir).expanduser() if local_dir else default_download_dir(repo, repo_type)
+    )
     command = build_download_command(
         repo,
+        repo_type=repo_type,
         include=include,
+        exclude=exclude,
         all_files=all_files,
         revision=revision,
         local_dir=destination,
         cache_dir=cache_dir,
+        max_workers=max_workers,
         dry_run=dry_run,
     )
     if not dry_run:
@@ -597,25 +843,90 @@ def directory_size(path: Path) -> int:
     return total
 
 
-def local_models() -> list[LocalHFModel]:
-    """List visible downloads and the standard Hub cache, largest last."""
+def local_repos(repo_type: str | None = None) -> list[LocalHFModel]:
+    """List visible downloads and Hub cache entries, models first."""
+    kinds = (repo_type,) if repo_type else REPO_TYPES
     rows: list[LocalHFModel] = []
-    if DOWNLOAD_ROOT.is_dir():
-        for child in sorted(DOWNLOAD_ROOT.iterdir()):
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            rows.append(_local_row(child, child.name.replace("--", "/", 1), "download"))
-    cache = hub_cache_dir()
-    if cache.is_dir():
-        for child in sorted(cache.glob("models--*")):
-            if not child.is_dir():
-                continue
-            repo = child.name[len("models--") :].replace("--", "/", 1)
-            rows.append(_local_row(child, repo, "cache"))
-    return sorted(rows, key=lambda row: (row.repo_id.lower(), row.kind))
+    for kind in kinds:
+        kind = _validate_repo_type(kind)
+        root = DOWNLOAD_ROOT if kind == "model" else DATASET_DOWNLOAD_ROOT
+        if root.is_dir():
+            for child in sorted(root.iterdir()):
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                rows.append(_local_row(child, child.name.replace("--", "/", 1), "download", kind))
+        cache = hub_cache_dir()
+        prefix = "models--" if kind == "model" else "datasets--"
+        if cache.is_dir():
+            for child in sorted(cache.glob(f"{prefix}*")):
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                repo = child.name[len(prefix) :].replace("--", "/", 1)
+                rows.append(_local_row(child, repo, "cache", kind))
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if row.repo_type == "model" else 1,
+            row.repo_id.lower(),
+            row.kind,
+        ),
+    )
 
 
-def _local_row(path: Path, repo_id: str, kind: str) -> LocalHFModel:
+def local_models() -> list[LocalHFModel]:
+    """Backwards-compatible model-only view."""
+    return local_repos("model")
+
+
+def local_repo_paths(repo_id: str, repo_type: str = "model") -> list[Path]:
+    """Existing local directories for one repository: download and cache."""
+    repo = validate_repo_id(repo_id)
+    repo_type = _validate_repo_type(repo_type)
+    prefix = "models--" if repo_type == "model" else "datasets--"
+    candidates = [
+        default_download_dir(repo, repo_type),
+        hub_cache_dir() / f"{prefix}{repo_slug(repo)}",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
+def remove_local(repo_id: str, repo_type: str = "model") -> list[Path]:
+    """Delete local downloads and cache for one repository, safely.
+
+    Only paths directly under the configured download root or the Hub cache
+    are removed. Returns the paths that were deleted.
+    """
+    repo_type = _validate_repo_type(repo_type)
+    allowed_roots = [
+        DOWNLOAD_ROOT if repo_type == "model" else DATASET_DOWNLOAD_ROOT,
+        hub_cache_dir(),
+    ]
+    removed: list[Path] = []
+    for path in local_repo_paths(repo_id, repo_type):
+        if not _is_within(path, allowed_roots):
+            continue
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        removed.append(path)
+    return removed
+
+
+def _is_within(path: Path, roots: list[Path]) -> bool:
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _local_row(path: Path, repo_id: str, kind: str, repo_type: str = "model") -> LocalHFModel:
     try:
         modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
     except OSError:
@@ -626,4 +937,45 @@ def _local_row(path: Path, repo_id: str, kind: str) -> LocalHFModel:
         kind=kind,
         bytes=directory_size(path),
         modified=modified,
+        repo_type=repo_type,
     )
+
+
+def is_split_gguf(path: Path | str) -> bool:
+    """True for one part of a multi-file GGUF (Ollama needs a single file)."""
+    return bool(SPLIT_GGUF_RE.search(Path(path).name))
+
+
+def quant_label(path: Path | str) -> str:
+    """Extract a quantization tag such as ``q4_k_m`` from a GGUF filename."""
+    match = QUANT_RE.search(Path(path).stem)
+    if not match:
+        return ""
+    return match.group(1).lower().replace("-", "_").replace(".", "_")
+
+
+def ollama_model_name(repo_id: str, gguf_path: Path | str) -> str:
+    """Derive an Ollama-safe ``name:tag`` from a repository and file name."""
+    base = str(repo_id).split("/")[-1]
+    base = re.sub(r"[-_.]?gguf$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-_.")
+    if not base:
+        base = "hf-model"
+    base = base[:60].strip("-_.").lower()
+    quant = quant_label(gguf_path)
+    return f"{base}:{quant}" if quant else f"{base}:latest"
+
+
+def valid_ollama_name(name: str) -> bool:
+    return bool(OLLAMA_NAME_RE.fullmatch(str(name or "").strip()))
+
+
+def modelfile_text(gguf_path: Path | str, context: int | None = None) -> str:
+    """A minimal Ollama Modelfile pointing at one GGUF file."""
+    source = str(Path(gguf_path).expanduser().resolve())
+    if " " in source:
+        source = f'"{source}"'
+    lines = [f"FROM {source}"]
+    if context:
+        lines.append(f"PARAMETER num_ctx {int(context)}")
+    return "\n".join(lines) + "\n"

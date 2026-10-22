@@ -39,7 +39,16 @@ Footer {
 #skill-box,
 #prompt-box {
     width: 1fr;
+    height: auto;
     padding: 0 1;
+}
+
+#skill-panel,
+#prompt-panel,
+#project-panel,
+#activity-panel,
+#activity-summary {
+    height: auto;
 }
 
 .card {
@@ -76,6 +85,27 @@ Footer {
     background: #14141f;
     color: #a0a0b8;
     padding: 0 1;
+}
+
+#health-panel {
+    height: auto;
+    padding: 0 2;
+    background: #101018;
+    border-bottom: solid #2a2a3a;
+}
+
+#model-panel {
+    margin-top: 0;
+    color: #a0a0b8;
+}
+
+#activity-summary {
+    padding: 0 2;
+}
+
+.card.compact {
+    margin-bottom: 0;
+    padding: 0 2;
 }
 
 .section-title {

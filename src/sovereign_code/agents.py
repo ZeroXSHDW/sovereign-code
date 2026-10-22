@@ -40,6 +40,7 @@ def build_headless(
     unattended: bool = False,
     wall_time: int | None = None,
     max_tool_calls: int | None = 12,
+    write: bool = True,
 ) -> HeadlessPlan:
     """Build a one-shot run. ``unattended`` auto-approves tool calls (opt-in)."""
     if client not in CLIENTS:
@@ -50,6 +51,10 @@ def build_headless(
     local = mode == "local"
 
     # Interactive plan supplies the local env (gateway URL, QWEN_HOME, CODEX_HOME...).
+    if local and client in {"qwen", "opencode", "codex"}:
+        from .tier_gateway import ensure_running as ensure_tier
+
+        ensure_tier(upstream=settings.gateway_url, ollama=settings.ollama_url)
     env = plan_launch(client, target, settings, agent_model).env if local else os.environ.copy()
 
     if client == "qwen":
@@ -57,10 +62,8 @@ def build_headless(
             raise ValueError("qwen only runs locally; use codex, claude or opencode for cloud")
         # The prompt is positional: `-p` appends whatever arrives on stdin, so
         # a run that inherits a terminal waits for input that never comes.
-        argv = [
-            "qwen", "--model", agent_model,
-            "--approval-mode", "yolo" if unattended else "auto-edit",
-        ]  # fmt: skip
+        approval = "yolo" if unattended else ("auto-edit" if write else "plan")
+        argv = ["qwen", "--model", agent_model, "--approval-mode", approval]
         # Let the agent stop itself cleanly instead of being killed: a runaway
         # loop otherwise looks identical to a hung process. The prompt stays
         # last because it is positional.
@@ -70,19 +73,19 @@ def build_headless(
             argv += ["--max-tool-calls", str(int(max_tool_calls))]
         argv.append(prompt)
     elif client == "codex":
-        argv = ["codex", "exec", "-C", str(target), "--sandbox", "workspace-write"]
-        if local:
-            # Codex's Responses translation through LiteLLM streams tool calls
-            # as text. Its OSS path talks to Ollama directly and executes them.
-            argv += ["--oss", "--local-provider", "ollama", "-m", agent_model]
+        sandbox = "workspace-write" if write else "read-only"
+        argv = ["codex", "exec", "-C", str(target), "--sandbox", sandbox]
+        if local and agent_model and agent_model != "auto":
+            argv += ["-m", agent_model]
         argv += ["--skip-git-repo-check", prompt]
     elif client == "claude":
         if local:
             from .bridge import ensure_running
 
-            if not ensure_running(settings.gateway_url):
+            if not ensure_running(settings.router_url):
                 raise ValueError("the Claude bridge did not start")
-        argv = ["claude", "-p", prompt, "--permission-mode", "acceptEdits"]
+        permission = "bypassPermissions" if unattended else ("acceptEdits" if write else "plan")
+        argv = ["claude", "-p", prompt, "--permission-mode", permission]
         if local:
             argv += ["--model", env.get("ANTHROPIC_MODEL", "local-agent")]
     else:  # opencode

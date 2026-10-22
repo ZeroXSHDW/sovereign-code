@@ -211,9 +211,7 @@ class OllamaClient:
                         from .cloud import ollama_error_hint
 
                         raise OllamaError(
-                            ollama_error_hint(
-                                f"pull failed ({response.status_code}): {body[:300]}"
-                            )
+                            ollama_error_hint(f"pull failed ({response.status_code}): {body[:300]}")
                         )
                     async for line in response.aiter_lines():
                         if not line.strip():

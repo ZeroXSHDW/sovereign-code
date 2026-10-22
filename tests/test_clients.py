@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from sovereign_code import clients
 from sovereign_code.clients import (
     CLIENT_ROLE_ALIAS,
     _pin_opencode_model,
@@ -61,6 +62,15 @@ def test_local_clients_reports_the_resolved_models(project):
     clients = local_clients(resolved)
     assert clients
     for info in clients:
+        if info.key == "claude":
+            # Claude Code follows the quality route, and its picker maps onto
+            # the local models.
+            assert "best" in info.model
+            assert "sonnet" in info.model
+            continue
+        if info.key == "codium":
+            assert "Continue" in info.model
+            continue
         tag = resolved.get(info.key, ("", ""))[1]
         if tag:
             assert tag in info.model, f"{info.key} shows {info.model!r}, not {tag!r}"
@@ -109,14 +119,39 @@ def test_pin_opencode_model_works_without_a_user_config(monkeypatch, tmp_path):
 
 
 def test_plan_launch_sets_the_local_environment(project):
-    # Codex now uses its native OSS provider against Ollama, so no gateway key
-    # is injected for it.
-    plan = plan_launch("codex", project, Settings(), "qwen3-coder:30b")
+    # The local Codex profile points at the tier gateway's Responses API.
+    plan = plan_launch("codex", project, Settings(), "auto")
     assert plan.argv[0] == "codex"
-    assert "--oss" in plan.argv
-    assert plan.argv[plan.argv.index("-m") + 1] == "qwen3-coder:30b"
+    assert "--oss" not in plan.argv
+    assert "-m" not in plan.argv
+    assert plan.env["CODEX_HOME"].endswith("config/codex")
+    assert plan.env["SOVEREIGN_API_KEY"] == "local"
 
 
 def test_plan_launch_rejects_a_missing_directory(tmp_path):
     with pytest.raises(ValueError, match="not a directory"):
         plan_launch("codex", tmp_path / "nope", Settings(), "qwen3-coder:30b")
+
+
+def test_the_codex_catalog_describes_the_local_routes() -> None:
+    catalog = clients.codex_model_catalog()
+    slugs = {model["slug"] for model in catalog["models"]}
+    assert {"best", "auto", "deep", "balanced", "ultra", "fast"} <= slugs
+    for model in catalog["models"]:
+        # Codex refuses an entry without instructions.
+        assert model["model_messages"]["instructions_template"]
+        # The context window has to be the one the model really has, or Codex
+        # sends a prompt the local model cannot hold.
+        assert model["context_window"] == model["max_context_window"]
+        assert 8192 <= model["context_window"] <= 65536
+
+
+def test_the_codex_profile_points_at_the_catalog(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(clients, "codex_home_path", lambda: tmp_path / "codex")
+    path = clients.write_codex_profile()
+    text = path.read_text(encoding="utf-8")
+    assert "model_catalog_json" in text
+    catalog = tmp_path / "codex" / "model-catalog.json"
+    assert catalog.is_file()
+    assert str(catalog) in text
+    assert (tmp_path / "codex" / "config.toml").read_text(encoding="utf-8") == text

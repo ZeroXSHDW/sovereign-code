@@ -203,11 +203,7 @@ def provider_key(provider: Provider, env: dict[str, str] | None = None) -> str:
 
 def available_providers(env: dict[str, str] | None = None) -> tuple[str, ...]:
     merged = merged_env(env)
-    return tuple(
-        key
-        for key, provider in PROVIDERS.items()
-        if provider_key(provider, merged)
-    )
+    return tuple(key for key, provider in PROVIDERS.items() if provider_key(provider, merged))
 
 
 def masked(value: str) -> str:
@@ -273,9 +269,7 @@ def _rewrite_shell_profile(path: Path, enabled: bool) -> bool:
     except (OSError, UnicodeDecodeError):
         return False
     marker = f'export OLLAMA_NO_CLOUD="{"0" if enabled else "1"}"'
-    updated, count = re.subn(
-        r'export\s+OLLAMA_NO_CLOUD=(["\']?)[01]\1', marker, text
-    )
+    updated, count = re.subn(r'export\s+OLLAMA_NO_CLOUD=(["\']?)[01]\1', marker, text)
     if count == 0:
         return False
     old_note = "cloud opt-in" if not enabled else "cloud disabled"
@@ -520,7 +514,9 @@ def apply_cloud(enabled: bool, restart: bool = True) -> list[str]:
         if not enabled:
             os.environ["OLLAMA_NO_CLOUD"] = "1"
         try:
-            restart_ollama()
+            from .tune import desired_env
+
+            restart_ollama(env=desired_env())
         finally:
             if enabled:
                 os.environ.pop("OLLAMA_NO_CLOUD", None)
@@ -569,9 +565,7 @@ def route_for(
 
     if prefer in PROVIDERS:
         provider = PROVIDERS[prefer]
-        model = PROVIDER_ALIAS_OVERRIDES.get(alias, {}).get(prefer) or provider.models.get(
-            tag, ""
-        )
+        model = PROVIDER_ALIAS_OVERRIDES.get(alias, {}).get(prefer) or provider.models.get(tag, "")
         if model and provider_key(provider, merged):
             return (provider.key, model, provider.base_url, provider.env_var)
         return ("ollama", "", "http://127.0.0.1:11434", "")
@@ -590,9 +584,7 @@ def route_for(
     return ("ollama", "", "http://127.0.0.1:11434", "")
 
 
-def gateway_aliases(
-    env: dict[str, str] | None = None, prefer: str = "auto"
-) -> list[GatewayAlias]:
+def gateway_aliases(env: dict[str, str] | None = None, prefer: str = "auto") -> list[GatewayAlias]:
     """The aliases `--install-aliases` writes, in a stable order."""
     rows: list[GatewayAlias] = []
     for alias, tag in ALIAS_TARGETS.items():
@@ -714,8 +706,7 @@ def provider_chat(
     secret = provider_key(provider)
     if not secret:
         raise ProviderError(
-            f"{provider.name}: no {env_var} "
-            f"(sovereign cloud --set-key {provider.key})"
+            f"{provider.name}: no {env_var} (sovereign cloud --set-key {provider.key})"
         )
     try:
         response = httpx.post(
@@ -754,9 +745,7 @@ class CloudProbe:
     detail: str
 
 
-def _probe_provider(
-    tag: str, route: tuple[str, str, str, str], timeout: float
-) -> CloudProbe:
+def _probe_provider(tag: str, route: tuple[str, str, str, str], timeout: float) -> CloudProbe:
     import httpx
 
     provider_key_name, provider_model, base_url, env_var = route
@@ -788,9 +777,7 @@ def _probe_provider(
         return CloudProbe(False, f"{provider.name}: rate limited — retry later")
     if response.status_code == 404:
         return CloudProbe(False, f"{provider.name}: {provider_model} not available")
-    return CloudProbe(
-        False, f"{provider.name}: HTTP {response.status_code} {response.text[:100]}"
-    )
+    return CloudProbe(False, f"{provider.name}: HTTP {response.status_code} {response.text[:100]}")
 
 
 def probe_cloud(settings: Any, tag: str = "kimi-k3:cloud", timeout: float = 12.0) -> CloudProbe:

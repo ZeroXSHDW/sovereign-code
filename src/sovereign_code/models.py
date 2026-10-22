@@ -283,19 +283,19 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     # (2026-10-21), strongest first. Weaker/superseded models are pruned so a
     # task never silently falls back to something like phi or gemma3:4b.
     #
-    # qwen3.8:27b leads code, agent and reason: it is the best current-gen model
-    # that actually runs here. It is 18 GB of weights on 24 GB, so the router
-    # pins it to a small window and it swaps against anything else resident —
-    # that is why chat and fast stay on the 4-9 GB models.
+    # qwen3.8:27b leads every task it can serve, including chat, vision and
+    # general: one 18 GB model on 24 GB means switching tasks costs a reload,
+    # so it is cheaper to stay on it than to keep a second family warm. `fast`
+    # is the deliberate exception — it exists to answer before the load finishes.
     CODING: (
         "qwen3.8:27b",
         "qwen3-coder:30b",
         "gpt-oss:20b",
         "qwen2.5-coder:14b",
         "glm-4.7-flash",
-        "qwen2.5-coder:7b",
     ),
     CHAT: (
+        "qwen3.8:27b",
         "qwen3.5:9b",
         "gemma4:12b",
         "qwen3.5:4b",
@@ -305,29 +305,27 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     REASON: (
         "qwen3.8:27b",
         "glm-4.7-flash",
-        "deepseek-r1:8b",
         "gpt-oss:20b",
         "gemma4:12b",
         "qwen3.5:9b",
     ),
     VISION: (
+        # Native vision-language: best accuracy per image, and at 16k it is the
+        # same model already resident for code, so there is nothing to swap in.
+        "qwen3.8:27b",
         "qwen3.5:9b",
         "gemma4:12b",
-        # Native vision-language, best accuracy per image; last because an 18 GB
-        # load is a poor trade for a single screenshot.
-        "qwen3.8:27b",
     ),
     FAST: (
         "qwen3.5:4b",
         "qwen3.5:9b",
-        "qwen2.5-coder:7b",
     ),
     GENERAL: (
+        "qwen3.8:27b",
         "qwen3.5:9b",
         "qwen3.5:4b",
         "gemma4:12b",
         "glm-4.7-flash",
-        "qwen3.8:27b",
     ),
     # Agentic coding needs reliable tool calls, not just code knowledge.
     AGENT: (
@@ -353,9 +351,7 @@ CLOUD_PREFERENCE: tuple[str, ...] = (
     "glm-5.2:cloud",
 )
 
-CLOUD_TAGS: tuple[str, ...] = tuple(
-    tag for tag, spec in CATALOG.items() if spec.cloud
-)
+CLOUD_TAGS: tuple[str, ...] = tuple(tag for tag, spec in CATALOG.items() if spec.cloud)
 
 # What the eight requested model names map to. Kept here (not only in the CLI)
 # so the mapping is testable and `sovereign cloud` can show exactly where each

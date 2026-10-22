@@ -95,15 +95,20 @@ See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 
 | Model | Role | Notes |
 | --- | --- | --- |
-| `qwen3.8:27b` | **primary** for code / agent / reason | 18 GB (after `sovereign pull`); native vision; 256k native, **32k** practical on 24 GB |
-| `qwen2.5-coder:14b` | best coder that fits comfortably | 9.0 GB; recommended download for a fresh install; verified at **32k** with q8 KV |
-| `qwen2.5-coder:7b` | coder fallback | 4.7 GB; 32k works but tool calls through agent clients are unreliable |
-| `qwen3.5:4b` | chat / vision / tools | 4.0 GB; 65k with `think:false` |
-| `gemma4:12b` | agent + deep reasoning / vision | 7.7 GB; 32k with `think:false`; verified tool calls |
-| `llama3.1:8b` | reasoning fallback | 4.9 GB; 65k |
-| `deepseek-r1:8b` | reasoning (chain-of-thought) | 5.2 GB; visible reasoning via `local-reasoning-deep` |
-| `qwen3:8b` | general + reasoning | 5.2 GB; current-gen, via `local-chat-qwen3` |
-| `gemma3:4b` | fast | 3.4 GB; compact, via `local-fast` |
+| `qwen3.8:27b` | **primary** — code, agent, reason, chat, vision | 18 GB; native vision; 256k native window, **16k** verified at 100% GPU on 24 GB |
+| `qwen3-coder:30b` | fast coder (`local-code-fast`) | 19 GB MoE, ~3B active; 32k verified with q8 KV |
+| `glm-4.7-flash` | alternate reasoner / thinking | 19 GB; 32k with `think:false`; needs the machine to itself |
+| `gpt-oss:20b` | fastest strong tool caller | 13 GB; 16k |
+| `qwen2.5-coder:14b` | dense fallback for every alias | 9.0 GB; 32k with q8 KV |
+| `gemma4:12b` | independent reviewer (`local-review`) | 7.7 GB; a *different family* from the Qwen implementer, on purpose |
+| `qwen3.5:9b` | Claude Code / balanced tier | 7.6 GB; 64k, which Claude Code's tool prompt needs |
+| `qwen3.5:4b` | fast tier | 4.0 GB; 8k |
+| `nomic-embed-text` | embeddings | 0.3 GB |
+
+`glm4`, `qwen2.5-coder:7b`, and `deepseek-r1:8b` were removed in this pass — superseded by the
+27B and no longer referenced by any alias. Run one model at a time: `OLLAMA_MAX_LOADED_MODELS=1`
+is set in the launch agent, because keeping a second 18–20 GB model resident only produced
+half-spilled runners (13%/87% CPU/GPU) and a reload on every task switch.
 
 ### Downloadable (any tag works with `sovereign pull` / `sovereign run`)
 
@@ -270,6 +275,108 @@ models before a turn so a 4B model is not squeezed into a 2k context by a
 resident 12B. If the 14B coder is missing it falls back to 7B and says so;
 `sovereign pull-recommended` installs it.
 
+## Tier gateway: fast models for small work, big models for hard work
+
+`sovereign router` runs an OpenAI-compatible gateway on `127.0.0.1:4010` in front
+of LiteLLM (4000) and Ollama. It classifies each request and sends it to a tier:
+
+| Tier | Model | Context | Used for |
+| --- | --- | --- | --- |
+| `fast` | `qwen3.5:4b` | 8k | short questions, simple edits, one-line answers |
+| `balanced` | `qwen3.5:9b` | 65k | tool use, multi-turn work, medium prompts |
+| `deep` | `qwen3-coder:30b` (code) · `glm-4.7-flash` (reasoning) | 32k | code, analysis, long/complex prompts |
+| `ultra` | `qwen3.8:27b` | 16k | hardest reasoning, only when explicitly requested |
+| `best` | quality-first alias | 32k | 30B coder for code, GLM for reasoning |
+
+Benchmarked on this Mac with the same coding prompt: `qwen3-coder:30b` **12.7 s**,
+`glm-4.7-flash` **13.4 s**, `qwen3.8:27b` **45.1 s**. That is why `deep` routes
+coding to the 30B MoE and reasoning to GLM, and the dense 27B is now the explicit
+`ultra` tier rather than the default for every hard request.
+
+```sh
+sovereign router --start        # background gateway
+sovereign router --status       # tiers, current models, upstream
+sovereign router --stats        # recent request count and average latency
+sovereign status                # shows tier gateway online/offline
+```
+
+Clients ask for `best` (quality-first) or `auto` (latency-first); named aliases still work. The gateway streams correct
+OpenAI tool calls directly from Ollama (LiteLLM's streamed Ollama translation
+returns them as text), so OpenCode, Continue, and Qwen can execute tools through
+the tier gateway. It also:
+
+- warms the 4B tier at startup so the first small request is not a cold load;
+- keeps **one model resident** at a time, evicting the other before a tier
+  switch (two 18 GB models panic the Metal allocator on a 24 GB Mac);
+- re-loads a model if its resident context is smaller than the tier requires;
+- caches short, deterministic, tool-free responses for 10 minutes (`x-sovereign-cached: 1`);
+- truncates huge tool outputs, compacts old turns while keeping the task anchor, and
+  tells a model to stop when the same tool call repeats three times — so multi-hour
+  sessions do not silently overflow the context or loop forever;
+- exposes `x-sovereign-tier`, `x-sovereign-model`, and `x-sovereign-reason` headers;
+- writes per-request latency to `~/Documents/local-ai/data/logs/tiers.jsonl`.
+
+Measured on this M5 Pro / 24 GB: a cached short answer returned in ~0.1 s, a warm
+9B agent turn took ~7–9 s, a 30B code turn took ~12–28 s depending on prompt size,
+and the 27B ultra answer took ~21 s once warm. The first request after a tier
+switch pays the model load.
+
+**Local-only is enforced by default.** Cloud aliases and provider routes return
+HTTP 403 instead of silently leaving the Mac. To allow them deliberately:
+
+```sh
+SOVEREIGN_LOCAL_ONLY=0 sovereign router --restart
+```
+
+`sovereign local --strict` verifies the gateway is in local-only mode.
+
+Explicit models bypass classification: `local-fast`, `local-chat`, `local-code`,
+`local-agent`, `local-claude`, `local-glm`, `local-vision`, … are mapped to their
+configured models; `cloud-*` and other upstream aliases are **blocked** in the
+default local-only mode. Start the gateway with `SOVEREIGN_LOCAL_ONLY=0` to allow
+them to proxy through LiteLLM.
+
+### Client defaults with the tier gateway
+
+- OpenCode: `sovereign/best`, small model `sovereign/balanced` (avoids a model
+  swap on every turn), plus the `local/` provider; `openrouter/` is opt-in.
+- Continue: `Sovereign Best`, `Auto`, `Deep`, and `Ultra` OpenAI-compatible models.
+- Qwen Code: default `best` in its OpenAI provider list.
+- ChatGPT (Codex app): `model = "best"` in `~/.codex/config.toml`, pinned to the
+  tier gateway's **Responses API** with no OpenAI sign-in.
+- Claude Code: the bridge → tier gateway. The default turn follows the quality
+  route (`best`); the picker slots are mapped to local routes by the bridge:
+  Sonnet → `deep` (30B coder), Opus → `ultra` (27B), Haiku → `fast` (4B). The
+  slots carry the model ids Claude Code knows, so it never complains about a
+  name it does not recognise.
+- Codex: the local profile points at the tier gateway's **Responses API**
+  (`/v1/responses`), so it gets the same fast/balanced/deep routing and real
+  tool calls. `--cloud` switches to the ChatGPT subscription.
+- `sovereign env`: `OPENAI_BASE_URL` is the tier gateway and `OPENAI_MODEL=best`.
+
+### The model catalog: one list, both clients
+
+Both gateways serve the same model list, built from the routing tables and the
+models Ollama has installed:
+
+```sh
+curl -s http://127.0.0.1:4010/v1/models   # the tier gateway (ChatGPT, Codex, OpenCode)
+curl -s http://127.0.0.1:4001/v1/models   # the Anthropic bridge (Claude)
+```
+
+The list holds the tiers (`fast`, `balanced`, `deep`, `ultra`), the quality
+routes (`auto`, `best`), the local aliases (`local-claude`, `local-glm`,
+`local-review`, …) and every installed local model by name. Anything in it can
+be asked for: a client that names `qwen3-coder:30b` gets exactly that model.
+Cloud and embedding models are not in the list, because the local-only gateway
+refuses them and they cannot answer a chat turn.
+
+`sovereign doctor` checks the models every client config points at against that
+list, so a config that names a model the gateway cannot route is reported
+instead of failing at the first prompt. A request that does not fit the model
+the route picked is answered by the 64k 9B instead of being truncated.
+
+
 ### Gateway wiring for ChatGPT / Codex / Claude local clients
 
 `qwen-local`, `codex-local`, and `claude-local` (from `sovereign install-clients`)
@@ -291,42 +398,245 @@ If an alias shows "no" under Installed, the corresponding client (Codex, Claude,
 or ChatGPT via the local profile) will get an empty reply until you `sovereign pull`
 that model. All aliases currently route to installed models.
 
-## Local coding clients
+### Real ChatGPT in Codex (opt-in — prompts leave the Mac)
 
-`sovereign install-clients` writes a Codex profile at
-`~/Documents/local-ai/config/codex/local.config.toml` and three wrappers in
-`~/Documents/local-ai/bin` (symlinked into `~/.local/bin` for `PATH`):
-`qwen-local`, `codex-local`, and `claude-local`. It never edits the cloud
-configuration of ChatGPT, Codex, or Claude Code.
+Everything above is local, and Codex's local path talks to Ollama directly
+because LiteLLM's *streaming* `/v1/responses` returns a tool call as plain text
+instead of a `function_call`, which Codex renders as prose and never executes.
 
-| Client | Local inference | Can edit files locally? | How |
-| --- | --- | --- | --- |
-| Qwen Code | Yes | **Yes, verified** | `sovereign code [path]` / `qwen-local`; model `gemma4:12b` |
-| OpenCode | Yes | **Yes, verified** | `opencode run -m ollama/gemma4:12b`; pick the model in its TUI |
-| Codex CLI | Yes, chat only | No | `codex --profile local`; tool calls return raw JSON instead of executing |
-| Claude Code | Yes, chat only | No | `claude-local`; the gateway answers, but streaming tool calls are unreliable |
-
-The honest rule: **Qwen Code and OpenCode are the local agents.** Codex and
-Claude Code are useful local chat clients, not reliable local editors. The
-limitation is in how Ollama streams tool calls through LiteLLM, not in the
-models themselves.
-
-Model selection is automatic: `resolve_client_models` runs the router against
-whatever is installed and points each client at its strongest available model.
-`sovereign clients` prints the auto-resolved pick, and `eval "$(sovereign env)"`
-exports the full OpenAI- and Anthropic-compatible environment so ChatGPT, Codex,
-and Claude Code all follow the best local model without hardcoding:
+If you want the actual ChatGPT models instead, sign in once and ask for cloud
+mode. This bypasses Ollama and the gateway entirely:
 
 ```sh
-eval "$(sovereign env)"        # OPENAI_* and ANTHROPIC_* point at the loopback gateway
-sovereign clients              # shows the auto-resolved best model per client
+codex login                      # browser; or: codex login --device-auth
+codex login --with-api-key       # or pipe an OPENAI_API_KEY instead
+sovereign launch codex --cloud   # real ChatGPT; code and diffs go to OpenAI
 ```
+
+`--cloud` refuses to run until `codex login status` reports a session, and the
+launcher prints a warning before it starts. Nothing switches automatically: the
+local router never picks a cloud model, so the default stays on-Mac.
+
+
+## Local coding clients
+
+`sovereign install-clients` is the one-command setup. It writes the Codex
+profile and wrappers, configures OpenCode and Continue, registers the
+`sovereign` MCP server with Codex (also used by the ChatGPT app), Claude Desktop,
+Claude Code, OpenCode, and Qwen Code, and installs the curated skills into every
+client.
+
+| Client | Local agent | Verified behaviour | How |
+| --- | --- | --- | --- |
+| Qwen Code | Yes | writes files, runs commands | `sovereign launch qwen [path]`; `qwen3-coder:30b` |
+| Codex CLI | **Yes** | executes `exec_command`, edits files | `sovereign launch codex [path]`; tier gateway `/v1/responses` |
+| Claude Code | **Yes** | executes `Write`/`Edit`/`Bash` | `sovereign launch claude [path]`; local Anthropic bridge on `:4001` |
+| OpenCode | **Yes** | executes `Write`/`Edit`/`Bash` | `sovereign launch opencode [path]`; custom `local/` provider |
+| VS Codium + Continue | chat/edit/autocomplete | chat, inline edit, FIM | `sovereign launch codium [path]` |
+| ChatGPT desktop | **Yes**, with `sovereign chatgpt --local` | its Codex side runs on the tier gateway with no OpenAI sign-in | the app's `~/.codex/config.toml` is pinned to `sovereign-tier` |
+| Claude Desktop | via MCP | same MCP tools | `claude_desktop_config.json` is pre-wired; restart the app |
+
+> **Why a bridge?** LiteLLM's **streamed** Ollama translation emits tool calls as
+> text, which Claude Code prints instead of executing. Codex 0.163 only speaks
+> the Responses API. The tier gateway now implements `/v1/responses` with a
+> proper event stream (`response.output_item.added`,
+> `response.function_call_arguments.delta`, `response.completed`), so Codex
+> executes tools correctly through the same fast/deep router. `sovereign bridge`
+> does the equivalent for Claude's Anthropic API. OpenCode's built-in `ollama`
+> provider is avoided for the same reason; its config uses a custom `local/`
+> OpenAI-compatible provider.
+
+```sh
+sovereign install-clients         # wrappers + client configs + MCP + skills
+sovereign bridge --start          # Claude Code bridge (also auto-started by launch)
+sovereign launch claude ~/projects/app
+sovereign launch codex ~/projects/app --model glm-4.7-flash
+sovereign launch opencode ~/projects/app
+sovereign launch codium ~/projects/app
+
+# Real subscriptions (prompts leave the Mac):
+sovereign launch codex ~/projects/app --cloud
+sovereign launch claude ~/projects/app --cloud
+```
+
+`--cloud` for Codex uses the ChatGPT subscription login (`codex login`) and
+skips every local override; `--cloud` for Claude uses the Claude subscription.
+The local MCP server remains available to both, so the cloud model can call
+`sovereign` tools on this Mac.
+
+**Fully local ChatGPT UI.** `sovereign chat-web` serves a self-contained,
+loopback-only ChatGPT-style client on `127.0.0.1:4020`: streaming, model picker
+(`best`, `auto`, `deep`, `ultra`, `balanced`, `fast`), sessions in local storage,
+swift skill search over all 22k skills, and no CDN or telemetry. It is the fully
+local alternative to the closed ChatGPT chat window.
+
+```sh
+sovereign chat-web --start      # background server
+sovereign chat-web --open       # open the browser
+sovereign chat-web --install-app # ~/Applications/ChatGPT Local.app
+```
+
+The local app calls only `127.0.0.1:4010`; if the gateway is local-only, the UI is
+too. It also has a **Browser panel**: enter a URL and a task, and the local 9B
+planner drives a visible Chromium window (click/type/scroll/extract/screenshot)
+while keeping destructive actions blocked unless confirmed. Use `chatgpt-local`
+when you need the full Codex file-editing agent.
+
+**ChatGPT desktop.** The official app cannot run local model weights for its
+**chat** pane, but its Codex side can be pointed at the local tier gateway, and
+`sovereign chatgpt --local` does exactly that: it pins `~/.codex/config.toml`
+to `model_provider = "sovereign-tier"` with `openai_base_url` on
+`127.0.0.1:4010`, and the provider needs no OpenAI credentials, so **the app
+works with no sign-in at all**. The token comes from a command
+(`[model_providers.sovereign-tier.auth]`), not from an environment variable,
+because an app launched from Finder or the Dock inherits no shell
+environment. `install-clients` also writes the `sovereign` MCP server into
+`~/.codex/config.toml`, `~/.mcp.json`, `~/.codex/.mcp.json`, and the ChatGPT
+app's `claude_desktop_config.json` discovery path. Restart ChatGPT after
+installing; if its Connectors UI does not show it automatically, use the
+"Import from Claude Desktop" action (that config is already written). The
+server's MCP instructions tell ChatGPT to use `list_models`, `ask`,
+`list_skills`, and `run_checks`. `ask` defaults to `auto`, so ChatGPT's quick
+questions reach the 4B and hard ones reach the 27B.
+
+**OpenCode.** The default model is `sovereign/auto` with
+`sovereign/balanced` for background calls; `opencode run --auto` edits files
+through the tier gateway. The `sovereign` MCP server is connected; `local/` and
+`openrouter/` providers remain available for explicit choices.
+
+### Sovereign Local menu bar
+
+`sovereign local-bar --install --open` builds **`~/Applications/Sovereign Local.app`**,
+a native menu-bar controller with:
+
+- live Ollama/tier-gateway and ChatGPT Local status;
+- the tier latency (`fast 804ms · balanced 4373ms · …`), the resident model and
+  the free memory, so the menu answers “is it still fast?” at a glance;
+- **Open ChatGPT Local**, **Open ChatGPT desktop**, **Start local Codex**,
+  **Start local Claude**;
+- **Force local ChatGPT (no sign-in)**, **Restore cloud ChatGPT**,
+  **Point Claude at local bridge**, **Restore cloud Claude**;
+- **Unload resident models**, **Restart local stack**, **Run local-only audit**,
+  **Verify ChatGPT is local**;
+- `Quit`.
+
+It launches clients with `SOVEREIGN_LOCAL_ONLY=1`, and Ollama itself now runs with
+`OLLAMA_NO_CLOUD=1`, so cloud models are disabled at the server and gateway
+layers. `sovereign local --strict` checks both.
+
+### Multi-hour local sessions
+
+The gateway is built for long runs: huge tool outputs are truncated, old turns are
+compacted while keeping the task anchor, and a repeated identical tool call gets a
+stop instruction instead of looping forever. The clients also support their own
+session resume:
+
+```sh
+claude --continue                 # resume the last Claude Code session
+codex resume --last               # resume the last Codex session
+opencode --continue               # resume the last OpenCode session
+```
+
+Use `best` for quality, `auto` for speed, `deep` for the 30B coder, `ultra` for the
+27B, and `balanced` for long-context work. All of them stay local.
+
+### What “local ChatGPT” and “local Claude” mean here
+
+The ChatGPT app's **chat** pane stays a cloud client, but its Codex side can be
+pinned to this Mac: `sovereign chatgpt --local` rewrites the app's own config so
+every model call goes to the tier gateway and no OpenAI sign-in is needed.
+Claude Desktop is the same story for its agent side through `settings.json`.
+
+| Experience | Local model? | How |
+| --- | --- | --- |
+| `chatgpt-local` | **Yes** — full local Codex agent | `sovereign launch codex`; tier gateway `/v1/responses` |
+| `chatgpt-cloud` / `codex-chatgpt` | No — ChatGPT subscription | `codex` with the saved cloud config |
+| `sovereign chatgpt --local` | **Yes** — the app itself, no sign-in | `~/.codex/config.toml` → `sovereign-tier` on 4010 |
+| `sovereign chatgpt --cloud` | No — ChatGPT subscription | the saved cloud config is put back |
+| `sovereign chatgpt --verify` | **Yes** — proves it | live round trip through the app's own provider config |
+| `sovereign claude --local` | **Yes** — Claude Code/Cowork | `~/.claude/settings.json` → bridge on 4001 |
+| `sovereign claude --cloud` | No — Claude subscription | the saved cloud settings are put back |
+| `claude-local` / `claude` | **Yes** — full local Claude Code agent | `~/.claude/settings.json` → bridge on 4001 |
+| `claude-cloud` | No — Claude subscription | remove/override the local settings |
+| Claude Desktop chat | No — Anthropic cloud | its Codex/Cowork agent follows `settings.json` and MCP |
+| ChatGPT desktop chat | No — OpenAI cloud | its Codex side runs local, no sign-in |
+
+```sh
+sovereign local --strict      # prove every local agent path is local
+sovereign local --fix         # repair local Claude/Codex settings
+sovereign chatgpt --local     # force the app onto the tier gateway, no sign-in
+sovereign chatgpt --cloud     # put the saved cloud config back
+sovereign chatgpt --verify    # prove it: config, sign-in, app-server, live turn
+sovereign claude --local      # point Claude Code/Cowork at the local bridge
+sovereign claude --cloud      # put the saved cloud settings back
+sovereign claude --restart    # launch Claude with local settings/MCP
+chatgpt-local                 # full local agent in a project
+claude-local                  # full local Claude Code agent
+```
+`--local` keeps the app's config as it was in `~/.codex/config.toml.sovereign-cloud`,
+so `--cloud` gives the app back exactly what it had. The local agent commands are
+the honest answer for “work locally with ChatGPT / Claude”; the desktop chat
+windows remain cloud clients.
+
+`sovereign launch ... --model` accepts an Ollama tag (`glm-4.7-flash`,
+`qwen3.5:9b`) or, for Claude through the bridge, a gateway alias
+(`cloud-kimi-k3`, `local-glm`, …). Model selection otherwise uses the router.
+
+### MCP for ChatGPT, Claude Desktop, Codex, Claude Code, OpenCode, Qwen
+
+`sovereign mcp` serves newline-delimited JSON-RPC over stdio. It exposes:
+
+- `list_models` — installed local/cloud models and the gateway route.
+- `best_model(task)` — the router's pick and context window.
+- `list_skills(query)` / `get_skill(name)` — the curated skill library.
+- `project_context(path)` — project memory and file index.
+- `ask(prompt, model)` — a completion through the loopback gateway (`best` by default).
+- `run_checks(path)` — detect and run the project's own tests.
+- `local_status()` — whether this machine is running the local stack only: the
+  tier gateway, the Anthropic bridge, Ollama Cloud, and whether the ChatGPT and
+  Claude desktop apps are on the local path without a sign-in. The desktop apps
+  can check the claim about themselves over their own MCP connection.
+- `delegate(prompt, path, write=false)` — run a real local Codex/Claude agent on a
+  project; read-only unless `write=true`, bounded by a timeout.
+- `browser_open(url)` / `browser_observe()` / `browser_act(...)` /
+  `browser_screenshot()` / `browser_close()` — drive the visible local Chromium
+  browser: navigate, click, fill, select, press, scroll, extract, and screenshot.
+  Destructive actions require `confirm=true`; secrets are refused.
+
+Skills are also exposed as MCP resources and prompts. `sovereign install-clients`
+writes the server into Codex (`~/.codex/config.toml`, shared by the ChatGPT
+app), Claude Desktop (`claude_desktop_config.json`), Claude Code (`claude mcp`),
+OpenCode (`opencode.json`), and Qwen Code. Restart the desktop apps after the
+first install.
+
+### Skills in every client
+
+```sh
+sovereign skills                              # config prompts + install counts
+sovereign skills install --target all         # 40+ curated skills, every client
+sovereign skills install --project ~/app      # project-level skills + AGENTS.md/CLAUDE.md/QWEN.md
+sovereign skills search react                # search all 22k skill files
+sovereign skills install --name <name>       # install a searched skill anywhere
+sovereign skills install --all                # the entire 22k-file library (large)
+```
+
+Claude, Codex, Qwen, and OpenCode receive `~/.<client>/skills/<name>/SKILL.md`;
+Continue receives `~/.continue/prompts/<name>.prompt`. The project install also
+writes a shared index into `AGENTS.md`, `CLAUDE.md`, and `QWEN.md` between
+markers, so re-running updates it instead of duplicating it.
+
+### Model selection
+
+`sovereign clients` prints the auto-resolved pick per client.
+`eval "$(sovereign env)"` exports the loopback OpenAI and Anthropic environment
+for any other tool. Codex uses its own Ollama path; Claude Code uses the bridge;
+OpenCode and Continue use Ollama directly.
 
 ## Commands
 
 ```sh
 sovereign                  # live dashboard
-sovereign status           # one-shot status
+sovereign status           # one-shot status (--json for scripts and the menu bar)
 sovereign models           # installed + recommended, with roles
 sovereign cloud            # Ollama Cloud status, mapping, aliases (--enable/--probe/--pull)
 sovereign doctor           # checks and concrete fixes
@@ -349,20 +659,33 @@ sovereign gateway-aliases          # show which aliases route to installed model
 sovereign rm <model>               # remove an installed model
 sovereign models --remote          # list downloadable models (--remote coder)
 sovereign consult "…"      # run one prompt across several models
-sovereign skills           # list saved prompt templates
+sovereign skills           # prompt templates + installed counts
+sovereign skills install --target all       # SKILL.md in every client
+sovereign skills install --project ~/app    # project skills + AGENTS/CLAUDE/QWEN
 sovereign skill <name> --prompt "…"
+sovereign mcp              # MCP stdio server for desktop clients
+sovereign local            # audit every local agent path; --fix / --strict
+sovereign local-bar        # macOS menu bar: --install / --open / --status
+sovereign chatgpt          # ChatGPT status; --local forces local (no sign-in), --cloud restores, --verify proves it, --repair fixes drift
+sovereign claude           # local Claude settings/bridge; --local/--cloud switch, --restart/--fix
+sovereign local --json     # the same audit, machine-readable
+sovereign bridge --start   # Anthropic bridge for Claude Code
 sovereign memory add "note" # per-project memory (show / clear)
 sovereign clone <url>      # clone a GitHub repo into ~/Documents/projects
 sovereign pipeline "…"     # plan -> implement -> review across models
 sovereign free             # unload resident models
 sovereign code [path]      # Qwen Code with the verified agent model
-sovereign launch qwen|codex|claude [path]
+sovereign launch qwen|codex|claude|opencode|codium [path] [--model TAG] [--cloud]
+chatgpt-local|chatgpt-cloud|claude-local|claude-cloud   # wrappers in ~/.local/bin
 sovereign clients          # installed clients and verified capabilities
 sovereign gateway          # gateway status, paths, and restart command
 sovereign gateway --restart # stop supervisor + LiteLLM, start, wait for health
-sovereign logs [gateway|watchdog|dashboard] [-n 40] [-f]
+sovereign router --start   # tier gateway 4010 (auto/fast/balanced/deep)
+sovereign router --status  # tiers, models, upstream
+sovereign router --stats   # average latency per tier
+sovereign logs [gateway|watchdog|dashboard|bridge] [-n 40] [-f]
 sovereign sessions         # list stored chats; --prune --days 30 --keep 50
-sovereign install-clients  # Codex profile + *-local wrappers
+sovereign install-clients  # wrappers + client configs + MCP + skills
 sovereign chat --model qwen3.5:4b
 sovereign env              # exports for OpenAI-compatible local clients
 sovereign pull-recommended # qwen2.5-coder:14b
@@ -470,34 +793,68 @@ The `.command` starts the dashboard in the project venv. Install is idempotent;
 `--start-now` loads the agent immediately so you can see the terminal before
 logging out. `uninstall-login` removes it.
 
-### Gateway autostart (macOS TCC)
+### Autostart, keep-alive and reboot
 
-macOS does not let a `launchd` job read `~/Documents`, so a plain
-`ProgramArguments` agent cannot even open the gateway venv. Terminal is the
-process that holds your Documents consent, so `com.user.ailocalgateway.plist`
-runs:
+`sovereign autostart --install` turns the whole local stack into launchd
+services. Each one starts at login, so the stack is back after a reboot, and
+launchd restarts it when it dies:
+
+| Service | What it is | Port |
+|---|---|---|
+| `com.user.sovereign.gateway` | the LiteLLM gateway | 4000 |
+| `com.user.sovereign.tier` | the tier gateway | 4010 |
+| `com.user.sovereign.bridge` | the Anthropic bridge for Claude | 4001 |
+| `com.user.sovereign.webchat` | the ChatGPT Local web UI | 4020 |
+| `com.user.sovereign.guardian` | keeps the stack up and the clients local | — |
+
+```sh
+sovereign autostart              # what survives a reboot, right now
+sovereign autostart --install    # install and start the services
+sovereign autostart --restart    # restart every service
+sovereign autostart --repair     # rewrite the plists and reload the jobs
+sovereign autostart --uninstall  # remove them and put the old jobs back
+```
+
+The guardian is the safety net: every 30 seconds it checks the ports and
+restarts what is missing, republishes the session environment the ChatGPT app
+needs, and puts the client configs back on the local path when the ChatGPT app
+rewrites its own config. It only repairs the local mode — `sovereign chatgpt
+--cloud` and `sovereign claude --cloud` are not undone.
+
+The ChatGPT app is local from the first launch after a reboot, because
+`launchctl setenv` publishes `CODEX_APP_SERVER_OPENAI_BASE_URL` and
+`SOVEREIGN_API_KEY` to the login session and an app opened from the Dock
+inherits them.
+
+#### Why the services look the way they do (macOS TCC)
+
+macOS protects `~/Documents`, and `launchd` is stricter than a shell:
+
+- A job may **read** a file there and may **run a program by its full path**,
+  but it may not **execute a script** there and it may not **list** a
+  directory there. The gateway is therefore started through its interpreter
+  (`venv/bin/python3 venv/bin/litellm`), not through `run_gateway.sh`.
+- A job may not open a **log file another app created**: such a file carries
+  `com.apple.provenance`, and the job then fails to spawn with `EX_CONFIG`
+  instead of starting. Every service therefore uses a log file of its own,
+  created by launchd itself.
+
+The two Terminal-based jobs that used to start and watch the gateway are
+retired by `--install`; their plists are kept as `.superseded` and
+`--uninstall` puts them back.
+
+### Gateway autostart (the old way)
+
+`com.user.ailocalgateway.plist` used to run:
 
 ```sh
 /usr/bin/open -gj -a Terminal ~/Documents/local-ai/gateway/start_gateway.command
 ```
 
-That hidden Terminal window detaches `run_gateway.sh` with `nohup` and exits;
-the supervisor restarts LiteLLM on crash and keeps Documents access even after
-the window closes. No Full Disk Access grant is required. Reload it with:
-
-```sh
-launchctl bootout gui/$(id -u)/com.user.ailocalgateway 2>/dev/null
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.ailocalgateway.plist
-```
-
-Check it with `sovereign gateway` (paths, aliases, supervisor state, restart
-command). Closing the hidden window does not stop the gateway.
-
-A second agent, `com.user.ailocalgateway.watchdog`, checks the gateway every five
-minutes and asks Terminal to restart the supervisor if both the gateway and the
-supervisor are gone. It runs only system binaries (`curl`, `open`), so launchd
-never needs Documents access. Decisions are logged to
-`/tmp/sovereign-gateway-watchdog.log`.
+That hidden Terminal window detached `run_gateway.sh` with `nohup` and exited;
+the supervisor restarted LiteLLM on crash and kept Documents access even after
+the window closed. It is retired now — `sovereign autostart --install` owns the
+gateway — but the files are still there if you want them back.
 
 ## Architecture
 

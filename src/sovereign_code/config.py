@@ -10,6 +10,9 @@ from pathlib import Path
 APP_NAME = "sovereign-code"
 DEFAULT_OLLAMA = "127.0.0.1:11434"
 DEFAULT_GATEWAY = "http://127.0.0.1:4000"
+# The latency-aware tier gateway in front of LiteLLM. Clients that ask for
+# "auto" hit this; explicit aliases still work through it too.
+DEFAULT_ROUTER = "http://127.0.0.1:4010"
 
 
 def _home() -> Path:
@@ -56,6 +59,7 @@ LOCAL_AI_ROOT = Path.home() / "Documents" / "local-ai"
 class Settings:
     ollama_host: str = DEFAULT_OLLAMA
     gateway_url: str = DEFAULT_GATEWAY
+    router_url: str = DEFAULT_ROUTER
     default_model: str | None = None
     default_task: str = "code"
     max_context: int = 32768
@@ -88,6 +92,7 @@ class Settings:
         overrides = {
             "ollama_host": os.environ.get("SOVEREIGN_OLLAMA_HOST"),
             "gateway_url": os.environ.get("SOVEREIGN_GATEWAY_URL"),
+            "router_url": os.environ.get("SOVEREIGN_ROUTER_URL"),
             "default_model": os.environ.get("SOVEREIGN_MODEL"),
         }
         path = CONFIG_DIR / "config.toml"
@@ -119,6 +124,7 @@ class Settings:
         """
         self.ollama_host = str(self.ollama_host)
         self.gateway_url = str(self.gateway_url)
+        self.router_url = str(self.router_url)
         self.default_model = str(self.default_model) if self.default_model else None
         self.theme = str(self.theme)
         self.workspace = str(self.workspace)
@@ -135,6 +141,7 @@ class Settings:
             "# Sovereign Code configuration",
             f"ollama_host = {_toml_value(self.ollama_host)}",
             f"gateway_url = {_toml_value(self.gateway_url)}",
+            f"router_url = {_toml_value(self.router_url)}",
             f"default_model = {_toml_value(self.default_model)}",
             f"default_task = {_toml_value(self.default_task)}",
             f"max_context = {int(self.max_context)}",

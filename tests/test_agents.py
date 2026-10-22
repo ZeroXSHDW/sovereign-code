@@ -51,13 +51,15 @@ def test_qwen_unattended_approves_everything(target):
     assert plan.argv[plan.argv.index("--approval-mode") + 1] == "yolo"
 
 
-def test_codex_uses_native_oss_mode(target):
-    # Codex's Responses translation through LiteLLM streams tool calls as text,
-    # so the local path uses its built-in OSS provider against Ollama instead.
+def test_codex_uses_the_tier_gateway(target):
+    # The local profile speaks the Responses API to 4010; the adapter emits real
+    # function_call events, so Codex executes tools without --oss.
     plan = _plan("codex", target=target)
     assert plan.argv[:2] == ["codex", "exec"]
-    assert "--oss" in plan.argv
-    assert plan.argv[plan.argv.index("--local-provider") + 1] == "ollama"
+    assert "--oss" not in plan.argv
+    assert plan.env["CODEX_HOME"].endswith("config/codex")
+    assert plan.env["SOVEREIGN_API_KEY"] == "local"
+    assert plan.argv[plan.argv.index("-m") + 1] == "qwen3.5:4b"
     assert "--skip-git-repo-check" in plan.argv
 
 
@@ -131,3 +133,13 @@ def test_runner_swallows_a_bad_client(target):
     ok, output = runner("hello")
     assert not ok
     assert "unknown client" in output
+
+
+def test_codex_read_only_delegate_uses_the_read_only_sandbox(target):
+    plan = _plan("codex", target=target, write=False)
+    assert plan.argv[plan.argv.index("--sandbox") + 1] == "read-only"
+
+
+def test_claude_read_only_delegate_uses_plan_mode(target):
+    plan = _plan("claude", target=target, write=False)
+    assert plan.argv[plan.argv.index("--permission-mode") + 1] == "plan"

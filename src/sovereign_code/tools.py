@@ -93,7 +93,9 @@ def opencode_models(text: str) -> list[str]:
     except ValueError:
         return []
     found: list[str] = []
-    for provider in (data.get("provider") or {}).values():
+    providers = data.get("provider") or {}
+    for key in ("local", "ollama"):
+        provider = providers.get(key)
         if not isinstance(provider, dict):
             continue
         found.extend(str(name) for name in (provider.get("models") or {}))

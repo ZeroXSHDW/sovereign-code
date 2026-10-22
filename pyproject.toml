@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sovereign-code"
-version = "0.1.0"
+version = "0.2.0"
 description = "Terminal-first, local-first AI coding console for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -72,3 +72,4 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/sovereign_code/browser/executor.py" = ["E501"]  # embedded JS
 "src/sovereign_code/cli.py" = ["E501"]               # plist template lines
+"src/sovereign_code/webchat.py" = ["E501"]           # inline HTML/CSS/JS

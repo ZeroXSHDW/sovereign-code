@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import LOCAL_AI_ROOT, PROJECT_ROOT
 
 WATCHDOG_LOG = Path("/tmp/sovereign-gateway-watchdog.log")
-TARGETS = ("gateway", "watchdog", "dashboard", "bridge")
+TARGETS = ("gateway", "watchdog", "dashboard", "bridge", "tier")
 
 
 def log_path(target: str) -> Path:
@@ -19,6 +19,8 @@ def log_path(target: str) -> Path:
         return PROJECT_ROOT / "logs" / "login.err.log"
     if target == "bridge":
         return LOCAL_AI_ROOT / "data" / "logs" / "bridge.log"
+    if target == "tier":
+        return LOCAL_AI_ROOT / "data" / "logs" / "tier-gateway.log"
     raise ValueError(f"unknown log target: {target}")
 
 

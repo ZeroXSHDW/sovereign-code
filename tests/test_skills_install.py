@@ -54,9 +54,7 @@ def test_install_writes_agent_skill_and_continue_prompt(tmp_path, monkeypatch) -
         "opencode": lambda: tmp_path / "opencode",
     }
     monkeypatch.setattr(skills_install, "TARGETS", targets)
-    monkeypatch.setattr(
-        skills_install, "CONTINUE_PROMPTS", lambda: tmp_path / "continue"
-    )
+    monkeypatch.setattr(skills_install, "CONTINUE_PROMPTS", lambda: tmp_path / "continue")
     # Point the curated loader at the fixture library.
     monkeypatch.setattr(skills_install, "LOCAL_AI_ROOT", tmp_path / "missing")
 

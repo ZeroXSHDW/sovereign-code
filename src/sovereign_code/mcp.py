@@ -12,8 +12,10 @@ Nothing is written to stdout except protocol messages.
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +50,7 @@ def _tool(
 TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_models",
-        "List installed local models, cloud models, and the gateway route each alias uses.",
+        "List installed local models, cloud models, and every name a client may ask for.",
         {},
     ),
     _tool(
@@ -64,7 +66,7 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "list_skills",
-        "List the curated skills available to the coding clients, optionally filtered.",
+        "List curated skills, or search all 22k library skills with a query.",
         {"query": {"type": "string"}},
     ),
     _tool(
@@ -80,11 +82,18 @@ TOOLS: list[dict[str, Any]] = [
         ["path"],
     ),
     _tool(
+        "local_status",
+        "Report whether this machine is running the local stack only: the tier "
+        "gateway, the Anthropic bridge, Ollama Cloud, and whether the ChatGPT "
+        "and Claude desktop apps are pointed at the local path without a sign-in.",
+        {},
+    ),
+    _tool(
         "ask",
         "Run a prompt through the local gateway using a model alias (local or cloud).",
         {
             "prompt": {"type": "string"},
-            "model": {"type": "string", "default": "local-chat"},
+            "model": {"type": "string", "default": "best"},
             "max_tokens": {"type": "integer", "default": 512},
         },
         ["prompt"],
@@ -102,18 +111,93 @@ TOOLS: list[dict[str, Any]] = [
         },
         ["path"],
     ),
+    _tool(
+        "delegate",
+        "Run a local coding agent on a project. Read-only by default; set write=true "
+        "to allow edits. Returns the agent's output and success flag.",
+        {
+            "prompt": {"type": "string"},
+            "path": {"type": "string"},
+            "client": {
+                "type": "string",
+                "enum": ["codex", "claude"],
+                "default": "codex",
+            },
+            "write": {
+                "type": "boolean",
+                "default": False,
+                "description": "Allow file edits; false runs read-only/plan mode",
+            },
+            "timeout": {"type": "integer", "default": 240},
+        },
+        ["prompt", "path"],
+    ),
+    _tool(
+        "browser_open",
+        "Open a visible local Chromium session at a URL and return the page state.",
+        {
+            "url": {"type": "string"},
+            "allow_local": {"type": "boolean", "default": False},
+            "headless": {"type": "boolean", "default": False},
+        },
+        ["url"],
+    ),
+    _tool(
+        "browser_observe",
+        "Return the current browser URL, visible text, and numbered interactive elements.",
+        {},
+    ),
+    _tool(
+        "browser_act",
+        "Perform one browser action: navigate, click, fill, select, press, scroll, "
+        "extract, handoff, or done. Destructive actions require confirm=true.",
+        {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "navigate",
+                    "click",
+                    "fill",
+                    "select",
+                    "press",
+                    "scroll",
+                    "extract",
+                    "handoff",
+                    "done",
+                ],
+            },
+            "url": {"type": "string"},
+            "id": {"type": "integer"},
+            "text": {"type": "string"},
+            "key": {"type": "string"},
+            "value": {"type": "string"},
+            "direction": {"type": "string", "enum": ["up", "down", "top", "bottom"]},
+            "amount": {"type": "integer"},
+            "confirm": {"type": "boolean", "default": False},
+        },
+        ["action"],
+    ),
+    _tool(
+        "browser_screenshot",
+        "Save a screenshot of the visible browser page; returns its path and PNG image content.",
+        {},
+    ),
+    _tool("browser_close", "Close the local browser session.", {}),
 ]
 
 
 def list_skills_payload(query: str = "") -> list[dict[str, str]]:
+    from .skills import search_skills
     from .skills_install import load_curated
 
-    needle = query.strip().lower()
+    needle = query.strip()
+    if needle:
+        return [
+            {"name": name, "description": description}
+            for name, description in search_skills(needle, limit=50)
+        ]
     rows = []
     for skill in load_curated():
-        haystack = f"{skill.name} {skill.description}".lower()
-        if needle and needle not in haystack:
-            continue
         rows.append({"name": skill.name, "description": skill.description})
     return rows
 
@@ -136,10 +220,25 @@ def _models_payload() -> dict[str, Any]:
         for view in snap.installed
         if view.spec.cloud
     ]
+    from .tier_gateway import catalog_models, installed_models
+
+    # The names a client may ask for: the tiers, the quality routes, the local
+    # aliases and the installed models, with the model behind each one.
+    routes = [
+        {
+            "id": entry["id"],
+            "tier": entry["tier"],
+            "model": entry["model"],
+            "context": entry["context"],
+        }
+        for entry in catalog_models(installed_models())
+    ]
     return {
         "local": local,
         "cloud": cloud,
+        "routes": routes,
         "gateway": snap.settings.gateway_url,
+        "router": snap.settings.router_url,
         "cloud_enabled": snap.cloud_enabled,
     }
 
@@ -194,11 +293,166 @@ def _ask(prompt: str, model: str, max_tokens: int) -> str:
 
     settings = Settings.load()
     return complete(
-        settings.gateway_url,
+        settings.router_url,
         model,
         [{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
     )
+
+
+_BROWSER_LOCK = threading.Lock()
+_BROWSER: Any = None
+_BROWSER_MODE: tuple[bool, bool] | None = None
+
+
+def _browser_policy(allow_local: bool):
+    from .browser.actions import BrowserPolicy
+
+    return BrowserPolicy(allow_local=allow_local)
+
+
+def _browser_open(url: str, allow_local: bool = False, headless: bool = False) -> dict:
+    global _BROWSER, _BROWSER_MODE
+    from .browser.actions import check_url
+    from .browser.executor import BrowserSession
+    from .config import LOCAL_AI_ROOT
+
+    with _BROWSER_LOCK:
+        mode = (allow_local, headless)
+        if _BROWSER is not None and mode != _BROWSER_MODE:
+            _BROWSER.close()
+            _BROWSER = None
+        policy = _browser_policy(allow_local)
+        target = check_url(url, policy)
+        if _BROWSER is None:
+            _BROWSER = BrowserSession(
+                profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
+                policy=policy,
+                headless=headless,
+                timeout_ms=15000,
+            )
+            _BROWSER.start(target)
+            _BROWSER_MODE = mode
+        else:
+            _BROWSER.goto(target)
+        return _browser_observation(_BROWSER.observe())
+
+
+def _browser_observation(observation: dict) -> dict:
+    return {
+        "url": observation.get("url"),
+        "title": observation.get("title"),
+        "captcha": observation.get("captcha"),
+        "text": str(observation.get("text") or "")[:4000],
+        "elements": observation.get("elements") or [],
+    }
+
+
+def _browser_observe() -> dict:
+    global _BROWSER
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        return _browser_observation(_BROWSER.observe())
+
+
+def _browser_act(arguments: dict[str, Any]) -> dict:
+    global _BROWSER
+    from .browser.actions import parse_action
+
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        payload = {
+            key: value
+            for key, value in arguments.items()
+            if key in {"action", "url", "id", "text", "key", "value", "direction", "amount"}
+        }
+        action = parse_action(payload)
+        confirm = bool(arguments.get("confirm", False))
+        result = _BROWSER.perform(action, confirm=lambda _message: confirm)
+        return {
+            "result": result,
+            "page": _browser_observation(_BROWSER.observe())
+            if action.kind not in {"done", "handoff"}
+            else None,
+        }
+
+
+def _browser_screenshot() -> list[dict[str, Any]]:
+    global _BROWSER
+    from .config import LOCAL_AI_ROOT
+
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        folder = LOCAL_AI_ROOT / "data" / "browser" / "screenshots"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"mcp-{int(__import__('time').time())}.png"
+        shot = _BROWSER.screenshot(path)
+        if shot is None:
+            raise ValueError("screenshot failed")
+        content: list[dict[str, Any]] = [{"type": "text", "text": str(shot)}]
+        try:
+            data = shot.read_bytes()
+            if len(data) <= 2_000_000:
+                content.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(data).decode(),
+                        "mimeType": "image/png",
+                    }
+                )
+        except OSError:
+            pass
+        return content
+
+
+def _browser_close() -> dict:
+    global _BROWSER, _BROWSER_MODE
+    with _BROWSER_LOCK:
+        if _BROWSER is not None:
+            _BROWSER.close()
+        _BROWSER = None
+        _BROWSER_MODE = None
+        return {"ok": True}
+
+
+def _delegate(
+    prompt: str,
+    path: str,
+    client: str = "codex",
+    write: bool = False,
+    timeout: int = 240,
+) -> dict[str, Any]:
+    from .agents import build_headless, run_headless
+    from .config import Settings
+
+    target = Path(path).expanduser().resolve()
+    if not target.is_dir():
+        raise ValueError(f"not a directory: {target}")
+    if client not in {"codex", "claude"}:
+        raise ValueError("delegate supports codex or claude")
+    seconds = max(30, min(int(timeout or 240), 600))
+    plan = build_headless(
+        client,
+        "local",
+        target,
+        prompt,
+        Settings.load(),
+        "auto",
+        unattended=write,
+        write=write,
+        wall_time=seconds,
+    )
+    ok, output = run_headless(plan, timeout=float(seconds))
+    return {
+        "ok": ok,
+        "client": client,
+        "write": write,
+        "seconds": seconds,
+        "output": output,
+    }
 
 
 def _checks(path: str, commands: list[str] | None) -> dict[str, Any]:
@@ -210,7 +464,46 @@ def _checks(path: str, commands: list[str] | None) -> dict[str, Any]:
     return {"ok": result.ok, "commands": chosen, "log": result.log[-6000:]}
 
 
-def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str:
+def _local_status() -> dict[str, Any]:
+    """Whether this machine is running the local stack only.
+
+    The desktop apps can answer this over their own MCP connection, which is
+    the one place a "no sign-in" claim can be checked from inside the app.
+    """
+    from . import bridge as bridge_mod
+    from .client_setup import claude_forced_local, codex_forced_local, codex_needs_openai_signin
+    from .cloud import env_cloud_disabled
+    from .config import Settings
+
+    settings = Settings.load()
+    gateway: dict[str, Any] = {"up": False, "local_only": False, "tiers": {}}
+    try:
+        import httpx
+
+        health = httpx.get(f"{settings.router_url.rstrip('/')}/health", timeout=3.0).json()
+        gateway = {
+            "up": True,
+            "local_only": bool(health.get("local_only")),
+            "tiers": health.get("tiers") or {},
+        }
+    except Exception:
+        pass
+    return {
+        "local_only": bool(gateway["up"] and gateway["local_only"] and env_cloud_disabled()),
+        "gateway": gateway,
+        "bridge_up": bridge_mod.port_open(port=4001),
+        "ollama_cloud": "disabled" if env_cloud_disabled() else "enabled",
+        "apps": {
+            "chatgpt": {
+                "local": codex_forced_local(),
+                "signin_required": codex_needs_openai_signin(),
+            },
+            "claude": {"local": claude_forced_local()},
+        },
+    }
+
+
+def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[dict[str, Any]]:
     args = arguments or {}
     if name == "list_models":
         return _text(_models_payload())
@@ -219,26 +512,52 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str:
     if name == "list_skills":
         return _text(list_skills_payload(str(args.get("query") or "")))
     if name == "get_skill":
-        from .skills_install import load_curated
+        from .skills_install import get_skill
 
         wanted = str(args.get("name") or "")
-        for skill in load_curated():
-            if skill.name == wanted:
-                return skill.body
-        raise ValueError(f"unknown skill: {wanted}")
+        skill = get_skill(wanted)
+        if skill is None:
+            raise ValueError(f"unknown skill: {wanted}")
+        return skill.body
     if name == "project_context":
         return _project_context(str(args.get("path") or "."))
+    if name == "local_status":
+        return _text(_local_status())
     if name == "ask":
         return _ask(
             str(args.get("prompt") or ""),
-            str(args.get("model") or "local-chat"),
+            str(args.get("model") or "best"),
             int(args.get("max_tokens") or 512),
         )
     if name == "run_checks":
         commands = args.get("commands")
         target = str(args.get("path") or ".")
+        return _text(_checks(target, commands if isinstance(commands, list) else None))
+    if name == "browser_open":
         return _text(
-            _checks(target, commands if isinstance(commands, list) else None)
+            _browser_open(
+                str(args.get("url") or ""),
+                bool(args.get("allow_local", False)),
+                bool(args.get("headless", False)),
+            )
+        )
+    if name == "browser_observe":
+        return _text(_browser_observe())
+    if name == "browser_act":
+        return _text(_browser_act(args))
+    if name == "browser_screenshot":
+        return _browser_screenshot()
+    if name == "browser_close":
+        return _text(_browser_close())
+    if name == "delegate":
+        return _text(
+            _delegate(
+                str(args.get("prompt") or ""),
+                str(args.get("path") or "."),
+                str(args.get("client") or "codex"),
+                bool(args.get("write", False)),
+                int(args.get("timeout") or 240),
+            )
         )
     raise ValueError(f"unknown tool: {name}")
 
@@ -322,6 +641,16 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 "serverInfo": {"name": "sovereign-code", "version": __version__},
+                "instructions": (
+                    "Sovereign Code exposes this Mac's local models, skills, project "
+                    "memory, and checks. Use list_models for availability, ask with "
+                    "model=fast for quick work or model=deep for code/reasoning, "
+                    "list_skills/get_skill for workflows, run_checks to verify, and "
+                    "delegate to run a real local Codex/Claude agent on a project "
+                    "(read-only unless write=true). Browser control is available via "
+                    "browser_open/observe/act/screenshot/close. Do not claim a local "
+                    "model ran if ask fails."
+                ),
             }
         elif method == "ping":
             result = {}
@@ -330,7 +659,8 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         elif method == "tools/call":
             name = str(params.get("name") or "")
             output = call_tool(name, params.get("arguments") or {})
-            result = {"content": [{"type": "text", "text": output}], "isError": False}
+            content = output if isinstance(output, list) else [{"type": "text", "text": output}]
+            result = {"content": content, "isError": False}
         elif method == "resources/list":
             result = {"resources": resources()}
         elif method == "resources/read":
@@ -364,6 +694,14 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
 
 def serve() -> None:
     """Read newline-delimited JSON-RPC from stdin, write to stdout."""
+    try:
+        from .config import Settings
+        from .tier_gateway import ensure_running as ensure_tier
+
+        settings = Settings.load()
+        ensure_tier(upstream=settings.gateway_url, ollama=settings.ollama_url)
+    except Exception:
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

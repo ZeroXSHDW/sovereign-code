@@ -27,21 +27,16 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .tier_gateway import CLAUDE_MODEL_ROUTES
+
 DEFAULT_PORT = 4001
-DEFAULT_GATEWAY = "http://127.0.0.1:4000"
+DEFAULT_GATEWAY = "http://127.0.0.1:4010"
 DEFAULT_ALIAS = "local-agent"
 
 # Claude Code sends a real Claude model id unless it is told otherwise. Map the
-# ids it knows onto the local aliases so a plain `claude` still works.
-MODEL_MAP: dict[str, str] = {
-    "claude-sonnet-4-5": "local-agent",
-    "claude-sonnet-4-5-20250929": "local-agent",
-    "claude-opus-4-1": "local-agent",
-    "claude-opus-4-1-20250805": "local-agent",
-    "claude-3-7-sonnet-latest": "local-agent",
-    "claude-3-5-haiku-latest": "local-chat",
-    "claude-haiku-4-5": "local-chat",
-}
+# ids it knows onto the local routes so a plain `claude` still works, and so
+# every name in the map is a name the tier gateway can route.
+MODEL_MAP: dict[str, str] = dict(CLAUDE_MODEL_ROUTES)
 
 
 def resolve_model(model: str | None, default: str = DEFAULT_ALIAS) -> str:
@@ -53,6 +48,25 @@ def resolve_model(model: str | None, default: str = DEFAULT_ALIAS) -> str:
     if name.startswith("claude-"):
         return default
     return name
+
+
+def local_models() -> list[dict[str, Any]]:
+    """The local models in the shape Anthropic's model list uses.
+
+    The list comes from the tier gateway's catalog, so Claude Code and ChatGPT
+    see the same local models, and every name in it can actually be routed.
+    """
+    from .tier_gateway import catalog_models, installed_models
+
+    return [
+        {
+            "type": "model",
+            "id": str(entry["id"]),
+            "display_name": str(entry["id"]),
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        for entry in catalog_models(installed_models())
+    ]
 
 
 def _text_of(content: Any) -> str:
@@ -274,10 +288,9 @@ def _event(name: str, data: dict[str, Any]) -> bytes:
     return f"event: {name}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
 
 
-def sse_events(message: dict[str, Any]) -> Iterable[bytes]:
-    """Render one Anthropic message as the SSE stream Claude Code expects."""
+def message_start_event(message: dict[str, Any]) -> bytes:
     usage = message.get("usage") or {}
-    yield _event(
+    return _event(
         "message_start",
         {
             "type": "message_start",
@@ -293,6 +306,13 @@ def sse_events(message: dict[str, Any]) -> Iterable[bytes]:
             },
         },
     )
+
+
+def sse_events(message: dict[str, Any], include_start: bool = True) -> Iterable[bytes]:
+    """Render one Anthropic message as the SSE stream Claude Code expects."""
+    usage = message.get("usage") or {}
+    if include_start:
+        yield message_start_event(message)
     for index, block in enumerate(message.get("content") or []):
         if block.get("type") == "text":
             yield _event(
@@ -406,16 +426,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "gateway": self.gateway_url})
             return
         if path == "/v1/models":
-            self._json(
-                200,
-                {
-                    "data": [
-                        {"id": "local-agent", "type": "model"},
-                        {"id": "local-code", "type": "model"},
-                        {"id": "local-chat", "type": "model"},
-                    ]
-                },
-            )
+            self._json(200, {"data": local_models()})
             return
         self._json(404, {"type": "error", "error": {"type": "not_found_error"}})
 
@@ -433,6 +444,57 @@ class _Handler(BaseHTTPRequestHandler):
         if path != "/v1/messages":
             self._json(404, {"type": "error", "error": {"type": "not_found_error"}})
             return
+        model = resolve_model(payload.get("model"), self.default_model)
+        if payload.get("stream"):
+            # Headers and message_start go out before the model runs. Claude
+            # closes a connection that has not produced a byte within its
+            # first-response timeout, and a local 34k-token prompt can take
+            # minutes to prefill.
+            message_id = f"msg_{uuid.uuid4().hex[:24]}"
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.close_connection = True
+                self.end_headers()
+                estimate = max(1, len(json.dumps(payload)) // 4)
+                self.wfile.write(
+                    message_start_event(
+                        {
+                            "id": message_id,
+                            "model": model,
+                            "usage": {"input_tokens": estimate},
+                        }
+                    )
+                )
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            try:
+                data = completion(self.gateway_url, payload)
+                message = to_anthropic_response(data, model)
+                message["id"] = message_id
+                for chunk in sse_events(message, include_start=False):
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except (RuntimeError, ValueError) as exc:
+                try:
+                    self.wfile.write(
+                        _event(
+                            "error",
+                            {
+                                "type": "error",
+                                "error": {"type": "api_error", "message": str(exc)[:400]},
+                            },
+                        )
+                    )
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            return
         try:
             data = completion(self.gateway_url, payload)
         except (RuntimeError, ValueError) as exc:
@@ -444,23 +506,7 @@ class _Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        model = resolve_model(payload.get("model"), self.default_model)
-        message = to_anthropic_response(data, model)
-        if payload.get("stream"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self.close_connection = True
-            self.end_headers()
-            try:
-                for chunk in sse_events(message):
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            return
-        self._json(200, message)
+        self._json(200, to_anthropic_response(data, model))
 
 
 def make_server(
@@ -507,6 +553,14 @@ def ensure_running(
     """Start the bridge in the background if it is not already listening."""
     if port_open(port=port):
         return True
+    # The bridge talks to the tier gateway by default; start it first.
+    if gateway_url.rstrip("/").endswith(":4010"):
+        try:
+            from .tier_gateway import ensure_running as ensure_tier
+
+            ensure_tier()
+        except Exception:
+            pass
     log = log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -558,6 +612,11 @@ def stop() -> bool:
 
 
 def serve(host: str, port: int, gateway_url: str, default_model: str) -> None:
+    if port_open(port=port):
+        # Another instance owns the port. Exiting cleanly keeps launchd from
+        # restarting this one into a fight with the server that is up.
+        print(f"bridge already serving on {port}", flush=True)
+        return
     pid_path().parent.mkdir(parents=True, exist_ok=True)
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
     server = make_server(host, port, gateway_url, default_model)

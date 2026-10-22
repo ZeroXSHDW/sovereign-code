@@ -12,15 +12,29 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from .config import LOCAL_AI_ROOT
+from .config import LOCAL_AI_ROOT, Settings
+from .tier_gateway import CLAUDE_MODEL_ROUTES, CLAUDE_SLOT_MODELS
+
+# A client config is kept beside the live one so `--cloud` can hand it back
+# exactly what it had before, instead of guessing at a default.
+CLOUD_BACKUP_SUFFIX = ".sovereign-cloud"
 
 
 def sovereign_argv() -> list[str]:
-    """Absolute command for the MCP server, safe for desktop app launchers."""
-    return [str(Path(sys.executable).resolve()), "-m", "sovereign_code", "mcp"]
+    """Absolute command for the MCP server, safe for desktop app launchers.
+
+    Do not resolve symlinks: `.venv/bin/python` is a symlink to Homebrew's
+    Python, and resolving it drops the virtualenv, so `sovereign_code` cannot
+    be imported by the launching app.
+    """
+    return [sys.executable, "-m", "sovereign_code", "mcp"]
 
 
 def _backup(path: Path) -> None:
@@ -141,15 +155,14 @@ def install_qwen_mcp() -> str:
 
 
 OPENCODE_MODELS = {
+    "qwen3.8:27b": ("Qwen 3.8 27B — current-gen coder/agent", 32768),
     "qwen3-coder:30b": ("Qwen3 Coder 30B — strongest coder", 32768),
     "glm-4.7-flash": ("GLM-4.7 Flash — strongest reasoning", 32768),
     "gpt-oss:20b": ("GPT-OSS 20B — fastest strong tool caller", 16384),
     "gemma4:12b": ("Gemma 4 12B — vision", 32768),
     "qwen3.5:9b": ("Qwen3.5 9B — fast general", 32768),
     "qwen3.5:4b": ("Qwen3.5 4B — fastest", 32768),
-    "deepseek-r1:8b": ("DeepSeek R1 8B — visible reasoning", 32768),
     "qwen2.5-coder:14b": ("Qwen2.5 Coder 14B — dense fallback", 32768),
-    "qwen2.5-coder:7b": ("Qwen2.5 Coder 7B — small / FIM", 32768),
 }
 
 
@@ -157,8 +170,8 @@ def opencode_config() -> dict:
     command = sovereign_argv()
     return {
         "$schema": "https://opencode.ai/config.json",
-        "model": "local/qwen3-coder:30b",
-        "small_model": "local/qwen2.5-coder:7b",
+        "model": "sovereign/best",
+        "small_model": "sovereign/balanced",
         "provider": {
             "local": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -174,6 +187,46 @@ def opencode_config() -> dict:
                         "limit": {"context": context, "output": 8192},
                     }
                     for name, (title, context) in OPENCODE_MODELS.items()
+                },
+            },
+            "sovereign": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Sovereign tier gateway",
+                "options": {
+                    "baseURL": "http://127.0.0.1:4010/v1",
+                    "apiKey": "local",
+                },
+                "models": {
+                    "best": {
+                        "name": "Best — 30B code / GLM reasoning",
+                        "tool_call": True,
+                        "limit": {"context": 32768, "output": 8192},
+                    },
+                    "auto": {
+                        "name": "Auto — fast for simple, deep for hard",
+                        "tool_call": True,
+                        "limit": {"context": 32768, "output": 8192},
+                    },
+                    "fast": {
+                        "name": "Fast — small model, short tasks",
+                        "tool_call": True,
+                        "limit": {"context": 8192, "output": 4096},
+                    },
+                    "balanced": {
+                        "name": "Balanced — 9B, tools and multi-turn",
+                        "tool_call": True,
+                        "limit": {"context": 16384, "output": 8192},
+                    },
+                    "deep": {
+                        "name": "Deep — 30B code / GLM reasoning",
+                        "tool_call": True,
+                        "limit": {"context": 32768, "output": 8192},
+                    },
+                    "ultra": {
+                        "name": "Ultra — 27B for the hardest reasoning",
+                        "tool_call": True,
+                        "limit": {"context": 16384, "output": 8192},
+                    },
                 },
             },
             "openrouter": {
@@ -240,10 +293,42 @@ def install_opencode_mcp(path: Path | None = None) -> Path:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    # Preserve a real user model choice, but make sure the working provider,
-    # OpenRouter models, and MCP server are present.
+    # Preserve the user's other settings and providers; add the working local
+    # provider, OpenRouter models, and MCP server.
     merged = opencode_config()
-    merged.update({key: value for key, value in data.items() if key in {"model", "small_model"}})
+    providers = merged["provider"]
+    for key, value in (data.get("provider") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        existing = providers.get(key, {})
+        merged_models = {**existing.get("models", {})}
+        for model_name, model_config in (value.get("models") or {}).items():
+            if isinstance(model_config, dict):
+                merged_models[model_name] = {
+                    **merged_models.get(model_name, {}),
+                    **model_config,
+                }
+        for retired in ("deepseek-r1:8b", "qwen2.5-coder:7b"):
+            merged_models.pop(retired, None)
+        providers[key] = {
+            **existing,
+            **{k: v for k, v in value.items() if k != "models"},
+            "models": merged_models,
+        }
+    merged.update(
+        {
+            key: value
+            for key, value in data.items()
+            if key not in {"provider", "mcp", "model", "small_model"}
+        }
+    )
+    # The tier gateway is the default: `auto` for work, the 9B for small
+    # background calls so OpenCode does not swap models on every turn.
+    merged["model"] = "sovereign/best"
+    merged["small_model"] = "sovereign/balanced"
+    # Our server entry must win over a stale command path, while other MCP
+    # servers the user added are preserved.
+    merged["mcp"] = {**(data.get("mcp") or {}), **merged.get("mcp", {})}
     return _write(target, json.dumps(merged, indent=2) + "\n")
 
 
@@ -253,6 +338,45 @@ version: 1.0.0
 schema: v1
 
 models:
+  - name: Sovereign Best — 30B code / GLM reasoning
+    provider: openai
+    model: best
+    apiBase: http://127.0.0.1:4010/v1
+    apiKey: local
+    roles: [chat, edit, apply]
+    defaultCompletionOptions:
+      contextLength: 32768
+  - name: Sovereign Auto — fast/deep tier gateway
+    provider: openai
+    model: auto
+    apiBase: http://127.0.0.1:4010/v1
+    apiKey: local
+    roles: [chat, edit, apply]
+    defaultCompletionOptions:
+      contextLength: 32768
+  - name: Sovereign Deep — code/reasoning
+    provider: openai
+    model: deep
+    apiBase: http://127.0.0.1:4010/v1
+    apiKey: local
+    roles: [chat]
+    defaultCompletionOptions:
+      contextLength: 32768
+  - name: Sovereign Ultra — hardest reasoning
+    provider: openai
+    model: ultra
+    apiBase: http://127.0.0.1:4010/v1
+    apiKey: local
+    roles: [chat]
+    defaultCompletionOptions:
+      contextLength: 16384
+  - name: Qwen 3.8 27B — current-gen coder
+    provider: ollama
+    model: qwen3.8:27b
+    apiBase: http://127.0.0.1:11434
+    roles: [chat, edit, apply]
+    defaultCompletionOptions:
+      contextLength: 32768
   - name: Qwen3 Coder 30B — best coder
     provider: ollama
     model: qwen3-coder:30b
@@ -274,9 +398,9 @@ models:
     roles: [chat]
     defaultCompletionOptions:
       contextLength: 32768
-  - name: Qwen2.5 Coder 7B — autocomplete
+  - name: Qwen3.5 4B — autocomplete
     provider: ollama
-    model: qwen2.5-coder:7b
+    model: qwen3.5:4b
     apiBase: http://127.0.0.1:11434
     roles: [autocomplete]
     defaultCompletionOptions:
@@ -292,9 +416,848 @@ context:
 """
 
 
+CONTINUE_RULES = """\
+# Sovereign local rules
+
+- Everything runs on this Mac through Ollama on 127.0.0.1; do not call a cloud API.
+- Prefer the strongest installed model for the task; `sovereign clients` shows it.
+- Keep changes minimal and reviewable; state files and verify with the project's own tests.
+- Available skills live in `~/.continue/prompts`; invoke them from the slash menu.
+"""
+
+
+def install_continue_rules(path: Path | None = None) -> Path:
+    target = path or (Path.home() / ".continue" / "rules" / "sovereign.md")
+    return _write(target, CONTINUE_RULES)
+
+
 def install_continue_config(path: Path | None = None) -> Path:
     target = path or continue_config_path()
+    # Continue's YAML has no safe merge without a YAML dependency. Keep an
+    # existing user config, but add Qwen 3.8 once when it is missing.
+    if target.is_file() and target.stat().st_size > 0:
+        text = target.read_text(encoding="utf-8")
+        original = text
+        prefix = ""
+        if "Sovereign Auto" not in text:
+            prefix += (
+                "  - name: Sovereign Auto — fast/deep tier gateway\n"
+                "    provider: openai\n"
+                "    model: auto\n"
+                "    apiBase: http://127.0.0.1:4010/v1\n"
+                "    apiKey: local\n"
+                "    roles: [chat, edit, apply]\n"
+                "    defaultCompletionOptions:\n"
+                "      contextLength: 32768\n"
+                "  - name: Sovereign Deep — code/reasoning\n"
+                "    provider: openai\n"
+                "    model: deep\n"
+                "    apiBase: http://127.0.0.1:4010/v1\n"
+                "    apiKey: local\n"
+                "    roles: [chat]\n"
+                "    defaultCompletionOptions:\n"
+                "      contextLength: 32768\n"
+                "  - name: Sovereign Ultra — hardest reasoning\n"
+                "    provider: openai\n"
+                "    model: ultra\n"
+                "    apiBase: http://127.0.0.1:4010/v1\n"
+                "    apiKey: local\n"
+                "    roles: [chat]\n"
+                "    defaultCompletionOptions:\n"
+                "      contextLength: 16384\n"
+            )
+        text = text.replace(
+            "Sovereign Deep — 27B for hard tasks", "Sovereign Deep — code/reasoning"
+        )
+        text = text.replace("Qwen2.5 Coder 7B — autocomplete", "Qwen3.5 4B — autocomplete").replace(
+            "model: qwen2.5-coder:7b", "model: qwen3.5:4b"
+        )
+        if "Sovereign Ultra" not in text:
+            ultra = (
+                "  - name: Sovereign Ultra — hardest reasoning\n"
+                "    provider: openai\n"
+                "    model: ultra\n"
+                "    apiBase: http://127.0.0.1:4010/v1\n"
+                "    apiKey: local\n"
+                "    roles: [chat]\n"
+                "    defaultCompletionOptions:\n"
+                "      contextLength: 16384\n"
+            )
+            marker = "  - name: Qwen 3.8 27B"
+            if marker in text:
+                text = text.replace(marker, ultra + marker, 1)
+        if "qwen3.8:27b" not in text:
+            prefix += (
+                "  - name: Qwen 3.8 27B — current-gen coder\n"
+                "    provider: ollama\n"
+                "    model: qwen3.8:27b\n"
+                "    apiBase: http://127.0.0.1:11434\n"
+                "    roles: [chat, edit, apply]\n"
+                "    defaultCompletionOptions:\n"
+                "      contextLength: 32768\n"
+            )
+        if prefix and "models:" in text:
+            text = text.replace("models:\n", "models:\n" + prefix, 1)
+        if text != original:
+            return _write(target, text)
+        return target
     return _write(target, CONTINUE_CONFIG)
+
+
+def qwen_settings_path() -> Path:
+    return Path.home() / ".qwen" / "settings.json"
+
+
+def install_qwen_router(path: Path | None = None) -> Path:
+    """Register the tier gateway as Qwen Code's default OpenAI provider."""
+    target = path or qwen_settings_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return target
+    if not isinstance(data, dict):
+        return target
+    providers = data.setdefault("modelProviders", {})
+    openai = providers.setdefault("openai", [])
+    if not isinstance(openai, list):
+        openai = []
+        providers["openai"] = openai
+    tier_ids = {"best", "auto", "fast", "balanced", "deep", "ultra"}
+    retired = {"qwen2.5-coder:7b", "deepseek-r1:8b"}
+    keep = [
+        entry
+        for entry in openai
+        if entry.get("id") not in tier_ids and entry.get("id") not in retired
+    ]
+    for model, name in (
+        ("best", "Best — 30B code / GLM reasoning"),
+        ("auto", "Auto — fast/deep tier gateway"),
+        ("fast", "Fast — small model"),
+        ("balanced", "Balanced — 9B"),
+        ("deep", "Deep — code/reasoning"),
+        ("ultra", "Ultra — 27B reasoning"),
+    ):
+        keep.append(
+            {
+                "baseUrl": "http://127.0.0.1:4010/v1",
+                "envKey": "SOVEREIGN_ROUTER_KEY",
+                "id": model,
+                "name": name,
+            }
+        )
+    providers["openai"] = keep
+    for provider_id, entries in list(providers.items()):
+        if provider_id == "openai" or not isinstance(entries, list):
+            continue
+        providers[provider_id] = [
+            entry
+            for entry in entries
+            if not (isinstance(entry, dict) and entry.get("id") in retired)
+        ]
+    data.setdefault("env", {})["SOVEREIGN_ROUTER_KEY"] = "local"
+    data["model"] = {"name": "best"}
+    security = data.setdefault("security", {})
+    auth = security.setdefault("auth", {})
+    auth["baseUrl"] = "http://127.0.0.1:4010/v1"
+    auth["selectedType"] = "openai"
+    return _write(target, json.dumps(data, indent=2) + "\n")
+
+
+def _mcp_entry() -> dict:
+    command, *args = sovereign_argv()
+    return {"command": command, "args": args}
+
+
+def install_mcp_manifest(path: Path) -> Path:
+    """Write/merge an `mcpServers.sovereign` JSON manifest."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        servers = {}
+        data["mcpServers"] = servers
+    servers["sovereign"] = _mcp_entry()
+    return _write(path, json.dumps(data, indent=2) + "\n")
+
+
+def install_chatgpt_connectors() -> list[Path]:
+    """Make the MCP server discoverable by the ChatGPT desktop app.
+
+    The app imports `claude_desktop_config.json` from its user-data directory
+    and also scans `.mcp.json` manifests. We write the same entry in all the
+    places it looks, without touching unrelated servers.
+    """
+    home = Path.home()
+    candidates = [
+        home / ".mcp.json",
+        home / ".codex" / ".mcp.json",
+        home / ".codex" / "claude_desktop_config.json",
+        home / "Library" / "Application Support" / "Codex" / "claude_desktop_config.json",
+    ]
+    written: list[Path] = []
+    for path in candidates:
+        try:
+            written.append(install_mcp_manifest(path))
+        except OSError:
+            continue
+    return written
+
+
+def claude_settings_path() -> Path:
+    return Path.home() / ".claude" / "settings.json"
+
+
+CLAUDE_LOCAL_ENV = {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
+    "ANTHROPIC_AUTH_TOKEN": "local",
+    "ANTHROPIC_API_KEY": "local",
+    # The default turn follows the quality route: the 30B coder for code, GLM
+    # for reasoning, the 9B for a short prompt.
+    "ANTHROPIC_MODEL": "best",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "DISABLE_AUTO_COMPACT": "1",
+}
+
+# The picker slots. Each one carries the model id Claude Code knows, and the
+# local route that id resolves to, so the picker offers the local models and
+# Claude never sees a model name it does not recognise.
+CLAUDE_MODEL_SLOTS: dict[str, tuple[str, str]] = dict(CLAUDE_SLOT_MODELS)
+CLAUDE_MODEL_SLOTS["ANTHROPIC_MODEL"] = ("best", "best")
+
+for _slot, (_model_id, _route) in CLAUDE_MODEL_SLOTS.items():
+    CLAUDE_LOCAL_ENV[_slot] = _model_id
+
+
+def install_claude_settings(path: Path | None = None) -> Path:
+    """Make Claude Code/Cowork default to the local bridge via settings.env."""
+    target = path or claude_settings_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    backup = claude_cloud_backup_path(target)
+    if not backup.exists() and not claude_forced_local(target):
+        # Keep the cloud settings so `restore_claude_cloud` can hand them back.
+        # A settings file that is already local is not a cloud copy.
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        backup.chmod(0o600)
+    env = data.setdefault("env", {})
+    if not isinstance(env, dict):
+        env = {}
+        data["env"] = env
+    env.update(CLAUDE_LOCAL_ENV)
+    return _write(target, json.dumps(data, indent=2) + "\n")
+
+
+def codex_needs_openai_signin(path: Path | None = None) -> bool:
+    """Whether the app would ask for an OpenAI account to run.
+
+    A custom provider that does not set `requires_openai_auth` and does not
+    read a key from the environment needs no account at all.
+    """
+    target = path or codex_config_path()
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return True
+    provider_id = data.get("model_provider")
+    if not provider_id:
+        # No provider chosen: the built-in OpenAI one is used.
+        return True
+    provider = (data.get("model_providers") or {}).get(provider_id) or {}
+    if not isinstance(provider, dict):
+        provider = {}
+    if provider.get("requires_openai_auth"):
+        return True
+    return provider_id == "openai"
+
+
+def _provider_token(provider: dict[str, Any]) -> str:
+    """The bearer token Codex would use for this provider."""
+    token = str(provider.get("experimental_bearer_token") or "")
+    if token:
+        return token
+    auth = provider.get("auth")
+    if not isinstance(auth, dict):
+        return ""
+    command = str(auth.get("command") or "")
+    if not command:
+        return ""
+    args = [str(item) for item in (auth.get("args") or [])]
+    try:
+        result = subprocess.run(
+            [command, *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def codex_probe_local(path: Path | None = None, timeout: float = 120.0) -> tuple[bool, str]:
+    """Send one short request through the app's own provider config.
+
+    This is the end-to-end proof that the local path works: the base URL and
+    the token come from the same file the app reads, so a pass means the app
+    would answer without an OpenAI sign-in.
+    """
+    target = path or codex_config_path()
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        return False, f"unreadable config: {exc}"
+    provider_id = str(data.get("model_provider") or "")
+    provider = (data.get("model_providers") or {}).get(provider_id) or {}
+    if not isinstance(provider, dict):
+        provider = {}
+    base = str(provider.get("base_url") or data.get("openai_base_url") or "").rstrip("/")
+    if not base:
+        return False, "no provider base_url"
+    token = _provider_token(provider)
+    if not token:
+        return False, "provider has no usable token"
+    model = str(data.get("model") or "auto")
+    body = json.dumps(
+        {"model": model, "input": "Reply with exactly: LOCAL", "stream": False}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}/responses",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+            tier = response.headers.get("x-sovereign-tier") or "?"
+            return True, f"{model} → {tier} tier · {_response_text(payload)}"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code} from {base}"
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _response_text(payload: Any) -> str:
+    """The plain text of a Responses API payload."""
+    if not isinstance(payload, dict):
+        return ""
+    for item in payload.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                return str(part.get("text") or "").strip()
+    return str(payload.get("output_text") or "").strip()
+
+
+def claude_cloud_backup_path(path: Path | None = None) -> Path:
+    target = path or claude_settings_path()
+    return target.with_name(target.name + CLOUD_BACKUP_SUFFIX)
+
+
+def claude_forced_local(path: Path | None = None) -> bool:
+    """Whether Claude Code/Cowork is pointed at the local bridge."""
+    target = path or claude_settings_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    env = data.get("env")
+    if not isinstance(env, dict):
+        return False
+    return env.get("ANTHROPIC_BASE_URL") == "http://127.0.0.1:4001"
+
+
+def restore_claude_cloud(path: Path | None = None) -> Path | None:
+    """Put the Claude settings back to their cloud default.
+
+    The saved cloud settings are used when there is one; otherwise the local
+    bridge keys are stripped from the live settings.
+    """
+    target = path or claude_settings_path()
+    backup = claude_cloud_backup_path(target)
+    if backup.is_file():
+        saved = backup.read_text(encoding="utf-8")
+        target.write_text(saved, encoding="utf-8")
+        target.chmod(0o600)
+        backup.unlink()
+        return target
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    env = data.get("env")
+    if isinstance(env, dict):
+        for key in CLAUDE_LOCAL_ENV:
+            env.pop(key, None)
+        if not env:
+            data.pop("env", None)
+    _write(target, json.dumps(data, indent=2) + "\n")
+    return target
+
+
+CODEX_LOCAL_PROVIDER = """\
+[model_providers.sovereign-tier]
+name = "Sovereign tier gateway"
+base_url = "http://127.0.0.1:4010/v1"
+wire_api = "responses"
+supports_websockets = false
+
+[model_providers.sovereign-tier.auth]
+command = "/bin/echo"
+args = ["local"]
+"""
+
+# Codex 0.163 v2 profiles live in <name>.config.toml, not `[profiles.name]`.
+CODEX_LOCAL_PROFILE = """\
+model = "best"
+model_provider = "sovereign-tier"
+model_context_window = 32768
+model_catalog_json = "__CATALOG__"
+
+[model_providers.sovereign-tier]
+name = "Sovereign tier gateway"
+base_url = "http://127.0.0.1:4010/v1"
+wire_api = "responses"
+supports_websockets = false
+
+[model_providers.sovereign-tier.auth]
+command = "/bin/echo"
+args = ["local"]
+"""
+
+# The provider the ChatGPT/Codex app is pinned to when it runs local-only.
+CODEX_LOCAL_PROVIDER_ID = "sovereign-tier"
+
+# Top-level keys that decide which model the app talks to. Forcing them to a
+# local provider with `requires_openai_auth = false` is what removes the
+# OpenAI sign-in gate.
+CODEX_ROUTING_KEYS = ("model", "model_provider", "model_context_window", "openai_base_url")
+
+# Marks the block this module owns, so re-running it replaces the block
+# instead of stacking a second copy on top.
+LOCAL_MARKER = "# sovereign:local-only"
+
+
+def install_codex_local_provider(path: Path | None = None) -> Path:
+    """Expose a local provider/profile to the ChatGPT app without changing its cloud default."""
+    from .clients import write_codex_catalog
+
+    target = path or codex_config_path()
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    import re
+
+    text = re.sub(r"(?ms)^\[model_providers\.sovereign-tier\].*?(?=^\[|\Z)", "", text)
+    text = re.sub(r"(?ms)^\[profiles\.sovereign\].*?(?=^\[|\Z)", "", text)
+    result = _write(target, text.rstrip() + "\n\n" + CODEX_LOCAL_PROVIDER)
+    # The profile names the local routes, so Codex needs a model catalog that
+    # describes them: without one it warns on every turn and guesses a
+    # context window that does not fit the model.
+    catalog = write_codex_catalog()
+    profile = CODEX_LOCAL_PROFILE.replace("__CATALOG__", str(catalog))
+    _write(target.with_name("sovereign.config.toml"), profile)
+    return result
+
+
+# --- TOML surgery -------------------------------------------------------
+#
+# The Codex config is hand-edited by the ChatGPT app itself, so it cannot be
+# rewritten from scratch: the app's plugins, marketplaces and MCP servers have
+# to survive. These helpers edit the document in place instead of parsing it
+# into a dict and writing it back, which would drop every comment and any key
+# this version of Codex does not know about.
+
+
+def _toml_bracket_delta(line: str) -> int:
+    """Net `[`/`]` count for one TOML line, ignoring quoted strings."""
+    depth = 0
+    quote = ""
+    escaped = False
+    for char in line:
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+        elif char == "#":
+            break
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+    return depth
+
+
+def _split_top_level(text: str) -> tuple[list[str], list[str]]:
+    """Split a TOML document into top-level key lines and table sections."""
+    head: list[str] = []
+    body: list[str] = []
+    in_table = False
+    depth = 0
+    for line in text.splitlines():
+        if not in_table and depth <= 0 and line.lstrip().startswith("["):
+            in_table = True
+        (body if in_table else head).append(line)
+        depth += _toml_bracket_delta(line)
+        if depth < 0:
+            depth = 0
+    return head, body
+
+
+def _drop_keys(lines: list[str], keys: tuple[str, ...]) -> list[str]:
+    """Remove top-level keys, including any multi-line value they own."""
+    import re
+
+    out: list[str] = []
+    depth = 0
+    dropping = False
+    for line in lines:
+        if depth <= 0 and not dropping:
+            match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*=", line)
+            dropping = bool(match and match.group(1) in keys)
+        if dropping:
+            depth += _toml_bracket_delta(line)
+            if depth <= 0:
+                dropping = False
+            continue
+        out.append(line)
+        depth += _toml_bracket_delta(line)
+    return out
+
+
+def _section_bounds(body: list[str], header: str) -> tuple[int, int] | None:
+    """Line range of a table section, or None when it is not there."""
+    start: int | None = None
+    depth = 0
+    for index, line in enumerate(body):
+        stripped = line.strip()
+        if depth <= 0 and stripped.startswith("["):
+            if start is None:
+                if stripped == header:
+                    start = index
+            else:
+                return start, index
+        depth += _toml_bracket_delta(line)
+        if depth < 0:
+            depth = 0
+    if start is None:
+        return None
+    return start, len(body)
+
+
+def _upsert_section(
+    body: list[str],
+    header: str,
+    section: list[str],
+    keep_unknown: bool = False,
+    drop: tuple[str, ...] = (),
+) -> list[str]:
+    """Replace a table section, or append it when it is missing.
+
+    `keep_unknown` carries over keys the section already had that this module
+    does not write, so a hand-tuned provider entry is not thrown away. Keys
+    in `drop` are removed even then: a leftover `env_key` would put the
+    sign-in gate back.
+    """
+    bounds = _section_bounds(body, header)
+    if bounds is None:
+        result = list(body)
+        if result and result[-1].strip():
+            result.append("")
+        result.extend(section)
+        return result
+    start, end = bounds
+    if keep_unknown:
+        managed = {line.split("=", 1)[0].strip() for line in section if "=" in line}
+        extra = [
+            line
+            for line in body[start + 1 : end]
+            if "=" in line
+            and not line.strip().startswith("#")
+            and line.split("=", 1)[0].strip() not in managed
+            and line.split("=", 1)[0].strip() not in drop
+        ]
+        section = section + extra
+    replacement = list(section)
+    if end < len(body) and replacement and replacement[-1].strip():
+        replacement.append("")
+    # A second copy of the same table would be a duplicate key in TOML.
+    return body[:start] + replacement + _remove_section(body[end:], header)
+
+
+def _tidy(lines: list[str]) -> list[str]:
+    """Collapse repeated blank lines and trim the edges."""
+    out: list[str] = []
+    for line in lines:
+        if not line.strip() and (not out or not out[-1].strip()):
+            continue
+        out.append(line.rstrip())
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
+def _remove_section(body: list[str], header: str) -> list[str]:
+    """Drop every copy of a table section."""
+    out = list(body)
+    while True:
+        bounds = _section_bounds(out, header)
+        if bounds is None:
+            return out
+        start, end = bounds
+        out = out[:start] + out[end:]
+
+
+def _insert_after(body: list[str], anchor: str, section: list[str]) -> list[str]:
+    """Put a section directly after the anchor section."""
+    bounds = _section_bounds(body, anchor)
+    if bounds is None:
+        return body
+    at = bounds[1]
+    prefix = [""] if at > 0 and body[at - 1].strip() else []
+    return body[:at] + prefix + section + [""] + body[at:]
+
+
+def forced_local_lines(router_url: str, catalog_path: str = "") -> list[str]:
+    """Top-level keys that pin the app to the local tier gateway."""
+    lines = [
+        f"{LOCAL_MARKER} every model call goes to the tier gateway on",
+        "# this Mac, so the app needs no OpenAI sign-in.",
+        'model = "best"',
+        f'model_provider = "{CODEX_LOCAL_PROVIDER_ID}"',
+        "model_context_window = 32768",
+        f'openai_base_url = "{router_url.rstrip("/")}/v1"',
+    ]
+    if catalog_path:
+        # Codex needs a model catalog to know the local routes. Without one it
+        # warns on every turn and assumes a context window that does not fit.
+        lines.append(f'model_catalog_json = "{catalog_path}"')
+    return lines
+
+
+def _strip_local_marker(lines: list[str]) -> list[str]:
+    """Remove the block this module wrote, so a rewrite does not stack copies."""
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(LOCAL_MARKER):
+            skipping = True
+            continue
+        if skipping and stripped.startswith("#"):
+            continue
+        skipping = False
+        out.append(line)
+    return out
+
+
+def local_provider_section(router_url: str) -> list[str]:
+    """The provider table for the local tier gateway.
+
+    The token is not read from an environment variable: an app launched from
+    Finder or the Dock inherits no shell environment, and a missing key puts
+    the sign-in gate straight back. Codex reads the token from a command
+    instead, so nothing has to be exported for the provider to work.
+    """
+    return [
+        f"[model_providers.{CODEX_LOCAL_PROVIDER_ID}]",
+        'name = "Sovereign tier gateway"',
+        f'base_url = "{router_url.rstrip("/")}/v1"',
+        'wire_api = "responses"',
+        "supports_websockets = false",
+    ]
+
+
+def local_provider_auth_section() -> list[str]:
+    """The command Codex runs to get the provider token.
+
+    Codex refuses to combine this with `env_key`, `experimental_bearer_token`
+    or `requires_openai_auth`, so the provider table stays free of them.
+    """
+    return [
+        f"[model_providers.{CODEX_LOCAL_PROVIDER_ID}.auth]",
+        'command = "/bin/echo"',
+        'args = ["local"]',
+    ]
+
+
+def codex_cloud_backup_path(path: Path | None = None) -> Path:
+    target = path or codex_config_path()
+    return target.with_name(target.name + CLOUD_BACKUP_SUFFIX)
+
+
+def codex_forced_local(path: Path | None = None, router_url: str | None = None) -> bool:
+    """Whether the app config is pinned to the local provider.
+
+    All parts have to hold: the routing keys point at the local provider, the
+    provider is there, it does not ask for OpenAI credentials, and it can get
+    a token without an environment variable.
+    """
+    target = path or codex_config_path()
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+    url = (router_url or Settings.load().router_url).rstrip("/")
+    if data.get("model_provider") != CODEX_LOCAL_PROVIDER_ID:
+        return False
+    if data.get("openai_base_url") != f"{url}/v1":
+        return False
+    provider = (data.get("model_providers") or {}).get(CODEX_LOCAL_PROVIDER_ID) or {}
+    if provider.get("requires_openai_auth"):
+        return False
+    if provider.get("env_key"):
+        # A missing environment variable would put the sign-in gate back.
+        return False
+    token = provider.get("experimental_bearer_token") or (provider.get("auth") or {}).get("command")
+    return bool(token)
+
+
+def install_codex_forced_local(path: Path | None = None, router_url: str | None = None) -> Path:
+    """Pin the ChatGPT/Codex app to the local tier gateway. No sign-in needed.
+
+    The first run keeps a copy of the untouched config so `restore_codex_cloud`
+    can hand the app back exactly what it had.
+    """
+    target = path or codex_config_path()
+    url = (router_url or Settings.load().router_url).rstrip("/")
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+
+    backup = codex_cloud_backup_path(target)
+    if not backup.exists() and not codex_forced_local(target, url):
+        # Keep the untouched config so `restore_codex_cloud` can hand the app
+        # back exactly what it had. A config that is already local is not a
+        # cloud copy.
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text(text, encoding="utf-8")
+        backup.chmod(0o600)
+
+    head, body = _split_top_level(text)
+    head = _strip_local_marker(head)
+    head = _drop_keys(head, CODEX_ROUTING_KEYS)
+    from .clients import write_codex_catalog
+
+    catalog = write_codex_catalog()
+    head = _drop_keys(head, ("model_catalog_json",))
+    header = f"[model_providers.{CODEX_LOCAL_PROVIDER_ID}]"
+    auth_header = f"[model_providers.{CODEX_LOCAL_PROVIDER_ID}.auth]"
+    body = _remove_section(body, auth_header)
+    body = _upsert_section(
+        body,
+        header,
+        local_provider_section(url),
+        keep_unknown=True,
+        drop=("env_key", "requires_openai_auth", "experimental_bearer_token"),
+    )
+    body = _insert_after(body, header, local_provider_auth_section())
+    body = _upsert_section(body, "[analytics]", ["[analytics]", "enabled = false"])
+    document = "\n".join(
+        [*_tidy([*forced_local_lines(url, str(catalog)), "", *head]), "", *_tidy(body)]
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _write(target, document.strip() + "\n")
+    target.chmod(0o600)
+    return target
+
+
+def restore_codex_cloud(path: Path | None = None) -> Path | None:
+    """Put the saved cloud config back. Returns None when there is no backup.
+
+    The backup is dropped afterwards, so the next force-local run snapshots the
+    config that is live right now instead of an older copy.
+    """
+    target = path or codex_config_path()
+    backup = codex_cloud_backup_path(target)
+    if not backup.is_file():
+        return None
+    saved = backup.read_text(encoding="utf-8")
+    target.write_text(saved, encoding="utf-8")
+    target.chmod(0o600)
+    backup.unlink()
+    return target
+
+
+def codex_configured_model(path: Path | None = None) -> str:
+    """The model the ChatGPT/Codex app is configured to use."""
+    target = path or codex_config_path()
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return ""
+    return str(data.get("model") or "").strip()
+
+
+def claude_configured_models(path: Path | None = None) -> dict[str, str]:
+    """The model each Claude slot points at."""
+    target = path or claude_settings_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    env = data.get("env") if isinstance(data, dict) else None
+    if not isinstance(env, dict):
+        return {}
+    slots: dict[str, str] = {}
+    for key in CLAUDE_MODEL_SLOTS:
+        value = str(env.get(key) or "").strip()
+        if value:
+            slots[key] = value
+    return slots
+
+
+def claude_slot_routes(path: Path | None = None) -> dict[str, str]:
+    """The local route each Claude slot ends up on."""
+    routes: dict[str, str] = {}
+    for key, value in claude_configured_models(path).items():
+        route = CLAUDE_MODEL_ROUTES.get(value)
+        if route is None:
+            route = CLAUDE_MODEL_SLOTS.get(key, ("", ""))[1]
+        routes[key] = route
+    return routes
+
+
+def unknown_client_models() -> list[str]:
+    """Configured model names the local stack cannot serve.
+
+    A client that asks for a name the gateway cannot route gets an error
+    instead of an answer, so the drift is worth reporting.
+    """
+    from .tier_gateway import catalog_ids, installed_models
+
+    known = catalog_ids(installed_models())
+    names = [codex_configured_model()]
+    names.extend(claude_slot_routes().values())
+    return sorted({name for name in names if name and name not in known})
 
 
 def install_all() -> list[tuple[str, str]]:
@@ -303,8 +1266,17 @@ def install_all() -> list[tuple[str, str]]:
     for label, fn in (
         ("Codex MCP", install_codex_mcp),
         ("Claude Desktop MCP", install_claude_desktop_mcp),
+        ("Claude local settings", install_claude_settings),
+        ("Codex local provider/profile", install_codex_local_provider),
+        ("ChatGPT app local (no sign-in)", install_codex_forced_local),
+        (
+            "ChatGPT MCP connectors",
+            lambda: f"{len(install_chatgpt_connectors())} manifests",
+        ),
         ("OpenCode config + MCP", install_opencode_mcp),
         ("Continue config", install_continue_config),
+        ("Continue rules", install_continue_rules),
+        ("Qwen Code tier provider", install_qwen_router),
     ):
         try:
             rows.append((label, str(fn())))

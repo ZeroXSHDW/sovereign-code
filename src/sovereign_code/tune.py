@@ -138,7 +138,7 @@ def _any_process(patterns: tuple[str, ...]) -> bool:
     return False
 
 
-def restart_ollama(timeout: float = 10.0) -> None:
+def restart_ollama(timeout: float = 10.0, env: dict[str, str] | None = None) -> None:
     """Fully restart the app so a fresh server inherits the new environment.
 
     The UI process must die too: `osascript quit` alone leaves it hidden, and it
@@ -148,6 +148,11 @@ def restart_ollama(timeout: float = 10.0) -> None:
     left no server running at all. Wait for both processes to disappear first,
     then launch, and retry once if the launch did not take.
     """
+    # `open -a Ollama` passes this process's environment to the app, which can
+    # override launchctl. Apply the desired tuning here so a stale shell value
+    # (for example OLLAMA_MAX_LOADED_MODELS=2) cannot win.
+    if env:
+        os.environ.update(env)
     # The quit can report "User cancelled" when the app is busy; the hard kill
     # below is authoritative, so keep that noise out of the CLI.
     subprocess.run(

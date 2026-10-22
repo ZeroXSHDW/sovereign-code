@@ -42,6 +42,7 @@ class Snapshot:
     # Ollama Cloud readiness is a machine setting, not a network probe; the
     # dashboard stays fast and `sovereign cloud --probe` does the live check.
     cloud_enabled: bool = False
+    router_up: bool = False
     code_selection: Selection | None = None
     chat_selection: Selection | None = None
     error: str = ""
@@ -143,6 +144,7 @@ async def collect(settings: Settings) -> Snapshot:
     snapshot.cloud_enabled = cloud_enabled()
     snapshot.ollama_port = port_open(*_host_port(settings.ollama_url, 11434))
     snapshot.gateway_port = port_open(*_host_port(settings.gateway_url, 4000))
+    snapshot.router_up = port_open(*_host_port(settings.router_url, 4010))
     snapshot.loopback = is_loopback(settings.ollama_url) and is_loopback(settings.gateway_url)
 
     version, tags, ps, gateway = await asyncio.gather(

@@ -84,7 +84,7 @@ def test_settings_escape_every_string_field(tmp_path, monkeypatch):
         gateway_url="http://x\\y",
         default_task="code",
         theme='a"b',
-        workspace="~/Some \"Folder\"",
+        workspace='~/Some "Folder"',
     )
     settings.save()
     body = settings.config_path.read_text(encoding="utf-8")

@@ -8,7 +8,12 @@
 | `models.py` | Model catalog, `/api/tags` + `/api/ps` merge, display views |
 | `router.py` | Task→model priority, context fitting against free RAM, system prompts |
 | `ollama.py` | Async Ollama client, NDJSON streaming, pull progress |
-| `cloud.py` | Ollama Cloud readiness, enable/disable, alias rendering, plan errors |
+| `cloud.py` | Ollama Cloud readiness, enable/disable, alias rendering, provider routes, plan errors |
+| `bridge.py` | Anthropic Messages → non-streaming gateway → Anthropic SSE, so Claude Code executes tools |
+| `tier_gateway.py` | Latency-aware OpenAI gateway: fast/balanced/deep/ultra routing, correct streamed tool calls, fallback, cache, metrics |
+| `mcp.py` | MCP stdio server: models, skills, project memory, checks, completions |
+| `skills_install.py` | One curated skill library → Claude/Codex/Qwen/OpenCode/Continue + project index |
+| `client_setup.py` | Codex/OpenCode/Continue/Claude config and MCP registration, forced-local app configs with reversible cloud copies, live provider probe |
 | `gateway.py` | LiteLLM `/v1/models` probe |
 | `system.py` | macOS memory, disk, ports, launch agent, client paths |
 | `status.py` | Single `Snapshot` used by CLI and TUI |
@@ -84,23 +89,57 @@ uses the project venv (or `python3 -m sovereign_code`) and is independent of the
 user's shell config. `install-login` is idempotent and `uninstall-login` removes
 both the plist and the loaded job.
 
+## The stack as services
+
+`sovereign autostart --install` writes one `~/Library/LaunchAgents` plist per
+service: the LiteLLM gateway, the tier gateway, the Anthropic bridge, the
+ChatGPT Local web UI and the guardian. Each has `RunAtLoad` (it starts at
+login, so it survives a reboot) and `KeepAlive` with `SuccessfulExit: false`
+(launchd restarts it after a crash, but leaves it alone after a clean exit —
+a clean exit means another instance already owns the port).
+
+The guardian is the second line of defence. Every 30 seconds it checks the
+ports and restarts what is missing, preferring `launchctl kickstart` when the
+job is loaded so the job launchd supervises is the one that gets restarted. It
+also republishes `CODEX_APP_SERVER_OPENAI_BASE_URL` and `SOVEREIGN_API_KEY`
+with `launchctl setenv`, which is the only way to reach an app launched from
+the Dock, and it puts the ChatGPT config and Claude's settings back on the
+local path when they drift — but only while the local mode is the current
+one, so `sovereign chatgpt --cloud` and `sovereign claude --cloud` are not
+undone.
+
 ## Gateway supervisor and TCC
 
-`~/Documents` is TCC-protected: a launchd job cannot read the gateway venv there
-(`Operation not permitted`). `com.user.ailocalgateway` therefore runs
-`open -gj -a Terminal start_gateway.command`, which detaches `run_gateway.sh`
-with `nohup` and exits. Terminal holds the user's Documents consent, and a
-detached child keeps that access after the window closes. The supervisor
-restarts LiteLLM on crash, backs off 3 s, rotates the log at 5 MB, and treats
-the listening port as its singleton lock, so duplicate starts exit instead of
-racing. No Full Disk Access grant is needed.
+`~/Documents` is TCC-protected, and a `launchd` job is stricter than a shell.
+Three rules decide what a job can do there, and they were all found by
+watching a job fail:
 
-`com.user.ailocalgateway.watchdog` checks `127.0.0.1:4000` every five minutes.
-It is the only agent that could run entirely under launchd, because it invokes
-only `/bin/bash`, `/usr/bin/curl`, and `/usr/bin/open`; the `.command` it opens
-is still executed by Terminal. If the supervisor is gone, the watchdog recreates
-it; if LiteLLM alone died, the existing supervisor handles the restart. The
-gateway venv uses Homebrew Python 3.13 (LiteLLM 1.83.x supports 3.10–3.13).
+- It may **read** a file by its full path, and it may **run a program** by its
+  full path. `…/sovereign-code/.venv/bin/python -m sovereign_code router`
+  works, even though the venv and the sources live in `~/Documents`.
+- It may not **execute a script** there: `/bin/bash …/run_gateway.sh` fails
+  with `Operation not permitted`. The gateway is therefore started through its
+  interpreter (`venv/bin/python3 venv/bin/litellm`).
+- It may not **list** a directory there (`ls` fails), and it may not open a
+  **log file another app created**: such a file carries
+  `com.apple.provenance`, and the job then fails to spawn with `EX_CONFIG`
+  (78) instead of starting. Every service uses a log file of its own, created
+  by launchd itself.
+
+`com.user.sovereign.gateway` runs the gateway through its interpreter and
+checks the port first, so a job that finds the gateway already serving exits
+cleanly and launchd leaves it alone instead of restarting it into a fight.
+
+The older `com.user.ailocalgateway` job used to run
+`open -gj -a Terminal start_gateway.command`, which detached `run_gateway.sh`
+with `nohup`. It is retired: the launchd services own the gateway now, and
+the retired plists are kept as `.superseded` so the old way can be restored.
+
+`com.user.ailocalgateway.watchdog` checked the gateway every five minutes
+and asked Terminal to restart the supervisor. The guardian does that job
+now, without a window: it checks the same ports, restarts a service through
+launchd when the job is loaded, and repairs the client configs. The watchdog
+is retired with the rest.
 
 ## Cloud path (opt-in)
 
@@ -132,6 +171,70 @@ Cloud, unless `--route` forces one. Provider entries use
 which the supervisor sources. A 402 from the Ollama plan is wrapped by LiteLLM
 as a 500; `summarize.complete()` reads the body and re-attaches the upgrade
 link.
+
+## Tier gateway
+
+`tier_gateway.py` listens on 4010 and is the default OpenAI endpoint. It
+classifies using user/tool messages only (not the agent's system prompt), keeps
+named aliases explicit, and talks to Ollama natively so streamed `tool_calls`
+are valid OpenAI deltas. A single-model lock evicts other residents before a
+tier switch; loading two 18 GB models on 24 GB otherwise triggers a Metal OOM
+panic. Models that are resident with too small a context are reloaded. Short,
+tool-free, low-temperature responses are cached; every request is logged to
+`data/logs/tiers.jsonl`. Explicit `cloud-*`/provider aliases are proxied to
+LiteLLM unchanged.
+
+## Client compatibility layer
+
+The clients disagree about how tools are streamed. LiteLLM's streamed Ollama
+translation returns a tool call as `content` text; Codex 0.163 dropped
+`wire_api = "chat"` and its Responses translation has the same defect;
+OpenCode's built-in `ollama` provider does too. The working paths are:
+
+- **Codex**: local profile points at the tier gateway's `/v1/responses` adapter,
+  which translates to a non-streaming chat completion and emits Responses SSE
+  with real `function_call` items. `--cloud` uses the ChatGPT login.
+- **OpenCode**: a custom `local/` OpenAI-compatible provider pointing at
+  `127.0.0.1:11434/v1`, not the built-in `ollama` provider.
+- **Claude Code**: `bridge.py` accepts Anthropic `/v1/messages`, calls the
+  gateway's `/v1/chat/completions` with `stream: false` (where LiteLLM's tool
+  translation is correct), then emits Anthropic SSE with `tool_use` blocks.
+  `message_start` is sent before the model runs so Claude's first-byte timeout
+  does not close the connection during a long local prefill.
+- **Qwen Code**: native Ollama model, no proxy.
+- **Continue/VS Codium**: Ollama provider for chat/edit/autocomplete; prompts
+  are installed under `~/.continue/prompts`.
+- **ChatGPT / Claude Desktop**: MCP via `sovereign mcp`; Codex's config is
+  shared by the ChatGPT app.
+
+## Forced-local desktop apps
+
+Both desktop apps read a config file that Sovereign Code can rewrite, and both
+have a cloud default worth keeping:
+
+| App | File | Local switch | Cloud copy |
+| --- | --- | --- | --- |
+| ChatGPT / Codex | `~/.codex/config.toml` | `model_provider = "sovereign-tier"`, `openai_base_url` on 4010 | `~/.codex/config.toml.sovereign-cloud` |
+| Claude Code / Cowork | `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` on 4001 | `~/.claude/settings.json.sovereign-cloud` |
+
+Two rules make the switch safe:
+
+- **The copy is taken before the first edit, and only when the file is not
+  already local.** Saving an already-local config as the "cloud" copy would
+  make `--cloud` hand back a local config as if it were the original.
+- **The Codex provider takes its token from a command**
+  (`[model_providers.sovereign-tier.auth]`), not from an environment variable.
+  Codex refuses to combine `auth` with `env_key`, and an app launched from
+  Finder or the Dock inherits no shell environment — with `env_key`, Codex
+  aborts with "Missing environment variable" and the sign-in gate comes back.
+
+`sovereign chatgpt --verify` proves the result end to end: the config, that no
+OpenAI account is required, the running app-server's base URL, and a live turn
+sent through the app's own provider config (same base URL, same token command).
+`sovereign status --json` exposes the same state for scripts and the menu bar.
+
+`install-clients` writes all of these. The paths and the MCP server are
+idempotent; backups are written next to edited configs.
 
 ## Storage layout
 

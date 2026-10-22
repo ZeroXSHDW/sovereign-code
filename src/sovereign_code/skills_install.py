@@ -22,6 +22,7 @@ INDEX_END = "<!-- sovereign-skills:end -->"
 # A deliberately small set: 22k skills would overwhelm every client's context.
 CURATED_PATTERNS = (
     "addy--*.md",
+    "sovereign--*.md",
     "accessibility-compliance--*.md",
     "agent--architect.md",
     "agent--architect-review.md",
@@ -78,11 +79,7 @@ def load_skill(path: Path) -> Skill:
     text = path.read_text(encoding="utf-8", errors="replace")
     meta, body = split_frontmatter(text)
     name = slugify(meta.get("name") or path.stem.split("--")[-1])
-    description = (
-        meta.get("description")
-        or meta.get("title")
-        or f"Skill from {path.name}"
-    )
+    description = meta.get("description") or meta.get("title") or f"Skill from {path.name}"
     description = " ".join(description.split())
     return Skill(name=name, description=description[:600], body=body.strip() + "\n", source=path)
 
@@ -117,13 +114,7 @@ def load_curated(source: Path | None = None) -> list[Skill]:
 
 
 def render_skill(skill: Skill) -> str:
-    return (
-        "---\n"
-        f"name: {skill.name}\n"
-        f"description: {skill.description}\n"
-        "---\n\n"
-        f"{skill.body}"
-    )
+    return f"---\nname: {skill.name}\ndescription: {skill.description}\n---\n\n{skill.body}"
 
 
 def install_skill(skill: Skill, target: Path) -> Path:
@@ -160,9 +151,24 @@ def install(
     if names:
         wanted = {slugify(name) for name in names}
         skills = [skill for skill in skills if skill.name in wanted]
+        found = {skill.name for skill in skills}
+        for name in names:
+            slug = slugify(name)
+            if slug in found:
+                continue
+            for candidate in (
+                PROJECT_ROOT / SKILL_DIR / f"{name}.md",
+                PROJECT_ROOT / SKILL_DIR / f"{slug}.md",
+            ):
+                if candidate.is_file():
+                    skills.append(load_skill(candidate))
+                    found.add(slug)
+                    break
 
-    selected = ["continue", *TARGETS] if targets == "all" else (
-        [targets] if isinstance(targets, str) else list(targets)
+    selected = (
+        ["continue", *TARGETS]
+        if targets == "all"
+        else ([targets] if isinstance(targets, str) else list(targets))
     )
     result: dict[str, list[str]] = {}
     for key in selected:
@@ -231,7 +237,7 @@ def install_project(
         raise ValueError(f"not a directory: {target}")
     skills = skills or load_curated()
     written: list[str] = []
-    for folder_name in ("claude", "opencode"):
+    for folder_name in ("claude", "codex", "qwen", "opencode"):
         for skill in skills:
             if not dry_run:
                 written.append(str(install_skill(skill, target / f".{folder_name}" / "skills")))
@@ -249,3 +255,18 @@ def installed_counts() -> dict[str, int]:
     prompts = CONTINUE_PROMPTS()
     counts["continue"] = len(list(prompts.glob("*.prompt"))) if prompts.is_dir() else 0
     return counts
+
+
+def get_skill(name: str) -> Skill | None:
+    """Find a skill in the curated set or anywhere in the 22k library."""
+    wanted = slugify(name)
+    for skill in load_curated():
+        if skill.name == wanted or skill.name == name:
+            return skill
+    for candidate in (
+        PROJECT_ROOT / SKILL_DIR / f"{name}.md",
+        PROJECT_ROOT / SKILL_DIR / f"{wanted}.md",
+    ):
+        if candidate.is_file():
+            return load_skill(candidate)
+    return None

@@ -154,11 +154,25 @@ def _status(snap: Snapshot) -> None:
         "Gateway",
         f"{snap.settings.gateway_url}  [{'green' if snap.gateway.up else 'yellow'}]{gateway}[/]",
     )
+    router = "online" if snap.router_up else "offline"
+    table.add_row(
+        "Tier gateway",
+        f"{snap.settings.router_url}  [{'green' if snap.router_up else 'yellow'}]{router}[/]",
+    )
     table.add_row("Memory", snap.memory.label)
     table.add_row("GPU budget", f"{wired_limit_gb(snap.memory.total_gb):.1f} GB wired")
     table.add_row("Disk free", f"{snap.disk_free_gb:.0f} GB")
     table.add_row("Loopback", "yes" if snap.loopback else "[red]NO[/]")
     table.add_row("Login terminal", "installed" if snap.login_installed else "not installed")
+    from .services import service_states
+
+    services = service_states(snap.settings)
+    if services:
+        up = sum(1 for state in services if state.pid > 0 or state.serving)
+        table.add_row(
+            "Services",
+            f"{up}/{len(services)} running [dim](sovereign autostart)[/]",
+        )
     local_installed = [view for view in snap.installed if not view.spec.cloud]
     cloud_registered = [view for view in snap.installed if view.spec.cloud]
     models_line = f"{len(local_installed)} local installed · {len(snap.loaded)} loaded"
@@ -191,6 +205,70 @@ def _status(snap: Snapshot) -> None:
             f"[bold]Chat [/]  {snap.chat_selection.model.tag}  "
             f"[dim]({snap.chat_selection.context} ctx)[/]"
         )
+
+
+def _status_json(snap: Snapshot) -> int:
+    """Machine-readable status, for scripts and the menu bar app."""
+    import json as _json
+
+    from .client_setup import claude_forced_local, codex_forced_local, codex_needs_openai_signin
+    from .services import service_states, session_env_values
+
+    payload = {
+        "version": __version__,
+        "ollama": {
+            "up": snap.ollama_up,
+            "url": snap.settings.ollama_url,
+            "version": snap.version,
+        },
+        "gateway": {
+            "up": snap.gateway.up,
+            "url": snap.settings.gateway_url,
+            "models": len(snap.gateway.models),
+        },
+        "router": {"up": snap.router_up, "url": snap.settings.router_url},
+        "memory": {
+            "total_gb": round(snap.memory.total_gb, 1),
+            "free_gb": round(snap.memory.free_gb, 1),
+            "free_pct": round(snap.memory.free_pct, 1),
+            "known": snap.memory.known,
+        },
+        "disk_free_gb": round(snap.disk_free_gb, 1),
+        "loopback": snap.loopback,
+        "cloud_enabled": snap.cloud_enabled,
+        "loaded": [
+            {
+                "tag": view.tag,
+                "context": view.context,
+                "size_gb": round(view.size_gb, 2),
+                "runner": view.runner or "",
+            }
+            for view in snap.loaded
+        ],
+        "installed": sorted({view.tag for view in snap.installed if not view.spec.cloud}),
+        "apps": {
+            "chatgpt": {
+                "local": codex_forced_local(),
+                "signin_required": codex_needs_openai_signin(),
+            },
+            "claude": {"local": claude_forced_local()},
+        },
+        "services": [
+            {
+                "name": state.service.name,
+                "label": state.service.label,
+                "installed": state.installed,
+                "loaded": state.loaded,
+                "running": state.pid > 0,
+                "serving": state.serving,
+                "port": state.service.port,
+            }
+            for state in service_states()
+        ],
+        "session_env": session_env_values(),
+    }
+    print(_json.dumps(payload, indent=2))
+    return 0
 
 
 def _models_remote(snap: Snapshot, query: str | None = None) -> int:
@@ -1006,7 +1084,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
             from .tune import current_server_env, restart_ollama
 
             def _restart() -> str:
-                restart_ollama()
+                restart_ollama(env=desired_env())
                 for _ in range(30):
                     if probe_liveness(settings.ollama_url).ok:
                         break
@@ -1019,6 +1097,20 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
         run("login agent", lambda: (_install_login(False), "installed")[1])
     run("client wrappers", lambda: f"{len(install_client_wrappers())} wrappers")
     run("codex profile", lambda: write_codex_profile())
+
+    # The desktop apps can drift back to the cloud when their own settings are
+    # changed, so the doctor puts them back on the local path.
+    from .client_setup import (
+        claude_forced_local,
+        codex_forced_local,
+        install_claude_settings,
+        install_codex_forced_local,
+    )
+
+    if not codex_forced_local():
+        run("chatgpt local config", lambda: install_codex_forced_local())
+    if not claude_forced_local():
+        run("claude local settings", lambda: install_claude_settings())
 
     def _launcher() -> str:
         command = dashboard_command_path()
@@ -1203,7 +1295,7 @@ def _tune(context: int, dry_run: bool = False) -> int:
     if db_change:
         write_context_length(target)
     console.print("[dim]Restarting Ollama so the server inherits the new env…[/]")
-    restart_ollama()
+    restart_ollama(env=desired)
     for _ in range(30):
         if port_open("127.0.0.1", 11434):
             break
@@ -1348,20 +1440,40 @@ def _doctor(snap: Snapshot) -> int:
     referenced.update(_opencode_models(_read_text(home / ".config" / "opencode" / "opencode.json")))
     referenced.update(_qwen_models(_read_text(home / ".qwen" / "settings.json")))
     referenced.update(_continue_models(_read_text(home / ".continue" / "config.yaml")))
+    # Cloud aliases are expected to be absent from the local model list.
+    referenced = {
+        name for name in referenced if not name.startswith("cloud-") and not name.endswith(":cloud")
+    }
+    from .tier_gateway import MODEL_CONTEXT, catalog_ids
+
+    referenced.update(MODEL_CONTEXT)
+    # The models ChatGPT and Claude are configured to use are references too:
+    # they are the names a client actually asks for.
+    from .client_setup import claude_slot_routes, codex_configured_model
+
+    codex_model = codex_configured_model()
+    if codex_model:
+        referenced.add(codex_model)
+    # The Claude slots hold a Claude model id; the local route behind it is
+    # what has to exist.
+    referenced.update(claude_slot_routes().values())
     installed_names: set[str] = set()
     for view in snap.installed:
         installed_names.update({view.tag, view.tag.removesuffix(":latest")})
+    # A name the catalog knows is a route; a name Ollama knows is a model.
+    # Either one can be asked for, so only the rest is dangling.
+    known = catalog_ids(set(installed_names)) | installed_names
     dangling = sorted(
         name
         for name in referenced
-        if name not in installed_names
-        and name.removesuffix(":latest") not in installed_names
-        and f"{name}:latest" not in installed_names
+        if name not in known
+        and name.removesuffix(":latest") not in known
+        and f"{name}:latest" not in known
     )
     add(
         not dangling,
         "Client models",
-        f"{len(referenced)} referenced · all installed"
+        f"{len(referenced)} referenced · all available"
         if not dangling
         else f"missing: {', '.join(dangling[:3])}",
         "pull the model or point the client at an installed one",
@@ -1372,6 +1484,42 @@ def _doctor(snap: Snapshot) -> int:
         "LiteLLM gateway",
         f"{len(snap.gateway.models)} models",
         "launchctl kickstart -k gui/$(id -u)/com.user.ailocalgateway",
+        warn=True,
+    )
+    add(
+        snap.router_up,
+        "Tier gateway",
+        f"{snap.settings.router_url} · auto/fast/balanced/deep/ultra",
+        "sovereign router --start",
+        warn=True,
+    )
+    # The bridge and the web chat are the same kind of detached process: a
+    # dead one looks exactly like a broken app.
+    from .guardian import check as _guardian_check
+
+    for state in _guardian_check(snap.settings, autostart=False):
+        if state.name == "tier gateway":
+            continue
+        add(
+            state.up,
+            state.name,
+            f":{state.port} · {state.detail}",
+            "sovereign guardian",
+            warn=True,
+        )
+    # The desktop app is only local when its own config says so, and it must
+    # not need an OpenAI account to run.
+    from .client_setup import codex_forced_local, codex_needs_openai_signin
+
+    app_local = codex_forced_local()
+    app_signin = codex_needs_openai_signin()
+    add(
+        app_local and not app_signin,
+        "ChatGPT app local",
+        "local, no sign-in"
+        if app_local and not app_signin
+        else ("local but still needs a sign-in" if app_local else "pointed at the cloud"),
+        "sovereign chatgpt --local",
         warn=True,
     )
     browser_exe = chromium_path()
@@ -1463,11 +1611,17 @@ def _doctor(snap: Snapshot) -> int:
         "sovereign install-login",
         warn=True,
     )
+    from .services import service_states
+
+    services = service_states(snap.settings)
+    up = [state for state in services if state.pid > 0 or state.serving]
+    installed = [state for state in services if state.installed]
     add(
-        GATEWAY_WATCHDOG.is_file(),
-        "Gateway watchdog",
-        "5-minute health check" if GATEWAY_WATCHDOG.is_file() else "not installed",
-        "install local-ai/launchd/com.user.ailocalgateway.watchdog.plist",
+        bool(installed) and len(up) == len(services),
+        "Autostart services",
+        f"{len(up)}/{len(services)} running"
+        + (f" · {len(installed)} installed" if installed else " · not installed"),
+        "sovereign autostart --install",
         warn=True,
     )
     add(
@@ -1665,7 +1819,9 @@ def _cloud(
             return 1
         console.print(f"[green]Saved {provider.name} key[/] to {path} [dim](mode 600)[/]")
         console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
-        console.print("[dim]Then route the aliases through it:[/] sovereign cloud --install-aliases")
+        console.print(
+            "[dim]Then route the aliases through it:[/] sovereign cloud --install-aliases"
+        )
         probe = True
     if enable:
         console.print("[bold]Enabling Ollama Cloud[/] (persists across restarts)")
@@ -1687,16 +1843,13 @@ def _cloud(
         provider = PROVIDERS[prefer]
         if not provider_key(provider):
             console.print(
-                f"[red]No {provider.name} key.[/] Run: "
-                f"sovereign cloud --set-key {provider.key}"
+                f"[red]No {provider.name} key.[/] Run: sovereign cloud --set-key {provider.key}"
             )
             return 1
     if install_aliases:
         paths = install_gateway_aliases(prefer=prefer)
         if not paths:
-            console.print(
-                f"[yellow]No gateway config found under[/] {LOCAL_AI_ROOT / 'gateway'}"
-            )
+            console.print(f"[yellow]No gateway config found under[/] {LOCAL_AI_ROOT / 'gateway'}")
         for path in paths:
             console.print(f"[green]Cloud aliases written[/] {path}")
         if paths:
@@ -1829,7 +1982,10 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
 
 def _gateway(snap: Snapshot) -> int:
     """Show where the gateway lives, whether it is up, and how it is supervised."""
+    from .services import GATEWAY_LABEL, is_loaded, service_pid
+
     gateway_dir = LOCAL_AI_ROOT / "gateway"
+    supervised = bool(service_pid(GATEWAY_LABEL)) or is_loaded(GATEWAY_LABEL)
     supervisor = bool(
         subprocess.run(
             ["pgrep", "-f", "run_gateway.sh"],
@@ -1845,15 +2001,28 @@ def _gateway(snap: Snapshot) -> int:
     table.add_row(
         state, "Gateway", f"{snap.settings.gateway_url} · {len(snap.gateway.models)} aliases"
     )
+    if supervisor:
+        table.add_row("[green]PASS[/]", "Supervisor", "run_gateway.sh running")
+    else:
+        table.add_row(
+            "[green]PASS[/]" if supervised else "[yellow]WARN[/]",
+            "Supervisor",
+            "launchd service" if supervised else "not running (sovereign autostart --install)",
+        )
+    from .services import service_states
+
+    services = service_states(snap.settings)
+    up = [state for state in services if state.pid > 0 or state.serving]
     table.add_row(
-        "[green]PASS[/]" if supervisor else "[yellow]WARN[/]",
-        "Supervisor",
-        "run_gateway.sh running" if supervisor else "not running (watchdog restarts it)",
+        "[green]PASS[/]" if up and len(up) == len(services) else "[yellow]WARN[/]",
+        "Services",
+        f"{len(up)}/{len(services)} running [dim](sovereign autostart)[/]",
     )
+    router_up = port_open("127.0.0.1", 4010)
     table.add_row(
-        "[green]PASS[/]" if GATEWAY_WATCHDOG.is_file() else "[yellow]WARN[/]",
-        "Watchdog",
-        "every 5 minutes" if GATEWAY_WATCHDOG.is_file() else "not installed",
+        "[green]PASS[/]" if router_up else "[yellow]WARN[/]",
+        "Tier gateway",
+        f"{snap.settings.router_url} · auto/fast/balanced/deep/ultra",
     )
     table.add_row("", "Config", str(gateway_dir / "config.yaml"))
     table.add_row("", "Log", str(gateway_dir / "gateway.log"))
@@ -1894,6 +2063,10 @@ def _gateway_restart(settings: Settings) -> int:
         if up():
             time.sleep(0.5)
             console.print("[green]Gateway restarted.[/]")
+            from .tier_gateway import ensure_running as ensure_tier
+
+            if ensure_tier(upstream=settings.gateway_url):
+                console.print("[green]Tier gateway running.[/]")
             return _gateway(_snapshot(settings))
         time.sleep(1)
 
@@ -1931,12 +2104,639 @@ def _bridge(
         if not ok:
             console.print("[dim]Check:[/] sovereign logs bridge -n 60")
         return 0 if ok else 1
+    if gateway.rstrip("/").endswith(":4010"):
+        from .tier_gateway import ensure_running as ensure_tier
+
+        ensure_tier()
     console.print(
-        f"[bold]Claude bridge[/] · http://{host}:{port} → {gateway} "
-        f"[dim](Ctrl+C to stop)[/]"
+        f"[bold]Claude bridge[/] · http://{host}:{port} → {gateway} [dim](Ctrl+C to stop)[/]"
     )
     bridge_mod.serve(host, port, gateway, model)
     return 0
+
+
+def _router(
+    host: str,
+    port: int,
+    ollama: str,
+    upstream: str,
+    start: bool,
+    stop: bool,
+    status: bool,
+    stats: bool,
+    restart: bool = False,
+) -> int:
+    """Run or manage the latency-aware tier gateway."""
+    from . import tier_gateway as tg
+
+    if restart:
+        tg.stop()
+        time.sleep(1)
+        start = True
+    if stop:
+        stopped = tg.stop()
+        console.print("[green]Tier gateway stopped.[/]" if stopped else "[dim]Not running.[/]")
+        return 0 if stopped else 1
+    if status:
+        running = tg.port_open(host, port)
+        state = "[green]running[/]" if running else "[dim]stopped[/]"
+        console.print(f"Tier gateway  {state}  [dim]http://{host}:{port}/v1[/]")
+        if running:
+            import httpx
+
+            try:
+                health = httpx.get(f"http://{host}:{port}/health", timeout=3.0).json()
+            except (httpx.HTTPError, ValueError):
+                health = {}
+            for tier, model in (health.get("tiers") or {}).items():
+                console.print(f"  [bold]{tier:8}[/] {model}")
+            console.print("  [dim]deep: code=qwen3-coder:30b · reasoning=glm-4.7-flash[/]")
+            console.print(
+                f"  [dim]local-only: {'yes' if health.get('local_only') else 'no'} · "
+                f"upstream {upstream} · ollama {ollama}[/]"
+            )
+        return 0 if running else 1
+    if stats:
+        summary = tg.metrics_summary()
+        if not summary.get("requests"):
+            console.print("[dim]No tier requests recorded yet.[/]")
+            return 0
+        table = Table(title="Tier gateway · recent requests", header_style="bold #b794f4")
+        table.add_column("Tier", style="bold")
+        table.add_column("Requests", justify="right")
+        table.add_column("Avg ms", justify="right")
+        table.add_column("p50", justify="right")
+        table.add_column("p95", justify="right")
+        for tier, bucket in (summary.get("by_tier") or {}).items():
+            table.add_row(
+                tier,
+                str(bucket["count"]),
+                str(bucket["avg_ms"]),
+                str(bucket.get("p50_ms", 0)),
+                str(bucket.get("p95_ms", 0)),
+            )
+        console.print(table)
+        return 0
+    if start:
+        ok = tg.ensure_running(upstream=upstream, ollama=ollama, port=port)
+        state = "[green]running[/]" if ok else "[red]failed[/]"
+        console.print(f"Tier gateway  {state}  [dim]http://{host}:{port}/v1[/]")
+        if not ok:
+            console.print("[dim]Check:[/] sovereign logs tier -n 60")
+        return 0 if ok else 1
+    console.print(
+        f"[bold]Tier gateway[/] · http://{host}:{port} → {upstream} [dim](Ctrl+C to stop)[/]"
+    )
+    tg.serve(host, port, ollama, upstream)
+    return 0
+
+
+def _chatgpt(
+    restart: bool = False,
+    fix: bool = False,
+    local: bool = False,
+    cloud: bool = False,
+    repair: bool = False,
+) -> int:
+    """Status and setup for the ChatGPT desktop app: MCP plus local-only mode."""
+    from .client_setup import (
+        claude_desktop_config_path,
+        codex_config_path,
+        codex_forced_local,
+        install_chatgpt_connectors,
+        install_claude_desktop_mcp,
+        install_codex_forced_local,
+        install_codex_mcp,
+        restore_codex_cloud,
+    )
+
+    if fix:
+        install_codex_mcp()
+        install_claude_desktop_mcp()
+        paths = install_chatgpt_connectors()
+        console.print(f"[green]MCP manifests written[/] {len(paths)}")
+    if repair:
+        # The app rewrites its own config when settings change in its UI, which
+        # can silently send it back to the cloud. Repair without a restart.
+        if codex_forced_local():
+            console.print("[green]ChatGPT is already local.[/]")
+        else:
+            install_codex_forced_local()
+            console.print(
+                "[green]ChatGPT config repaired.[/] It points at the tier gateway "
+                "again; restart the app to pick it up."
+            )
+    if restart or local or cloud:
+        subprocess.run(
+            ["pkill", "-f", "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"], check=False
+        )
+        time.sleep(3)
+        env = None
+        if local:
+            from .config import Settings
+
+            # Two switches, because the app reads its model from two places:
+            # the config file decides the provider, and the app-server env
+            # decides where the built-in OpenAI provider points.
+            install_codex_forced_local()
+            router = Settings.load().router_url
+            env = {
+                **os.environ,
+                "CODEX_APP_SERVER_OPENAI_BASE_URL": f"{router}/v1",
+                "SOVEREIGN_API_KEY": "local",
+            }
+            # Launched from Finder or the Dock the app gets no shell
+            # environment, so the key is published to the login session.
+            subprocess.run(["launchctl", "setenv", "SOVEREIGN_API_KEY", "local"], check=False)
+            subprocess.run(
+                ["launchctl", "setenv", "CODEX_APP_SERVER_OPENAI_BASE_URL", f"{router}/v1"],
+                check=False,
+            )
+            console.print(
+                "[green]ChatGPT forced local.[/] The app talks to the tier gateway on "
+                f"{router}/v1 and needs no OpenAI sign-in. Restore with: "
+                "sovereign chatgpt --cloud"
+            )
+        if cloud:
+            restored = restore_codex_cloud()
+            for name in ("SOVEREIGN_API_KEY", "CODEX_APP_SERVER_OPENAI_BASE_URL"):
+                subprocess.run(["launchctl", "unsetenv", name], check=False)
+            console.print(
+                "[green]ChatGPT restored to cloud.[/]"
+                if restored
+                else "[yellow]No cloud backup found; the app config was left alone.[/]"
+            )
+        subprocess.run(["open", "-a", "ChatGPT"], check=False, env=env)
+        console.print("[green]ChatGPT restarted.[/]")
+
+    table = Table(title="ChatGPT desktop · local MCP", header_style="bold #b794f4")
+    table.add_column("Item", style="bold")
+    table.add_column("Status")
+    table.add_column("Path", overflow="fold")
+    codex = codex_config_path()
+    codex_ok = codex.is_file() and "[mcp_servers.sovereign]" in codex.read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    table.add_row("Codex MCP", "yes" if codex_ok else "no", str(codex))
+    forced = codex_forced_local()
+    table.add_row(
+        "App model",
+        "local · no sign-in" if forced else "cloud",
+        "sovereign-tier → 4010" if forced else "OpenAI account",
+    )
+    from .client_setup import codex_configured_model
+    from .tier_gateway import catalog_ids, installed_models
+
+    app_model = codex_configured_model()
+    known_models = catalog_ids(installed_models())
+    table.add_row(
+        "Catalog model",
+        app_model or "unset",
+        "in the local catalog" if app_model in known_models else "not in the catalog",
+    )
+    claude = claude_desktop_config_path()
+    claude_ok = claude.is_file() and "sovereign" in claude.read_text(
+        encoding="utf-8", errors="ignore"
+    )
+    table.add_row("Claude Desktop config", "yes" if claude_ok else "no", str(claude))
+    manifests = [
+        Path.home() / ".mcp.json",
+        Path.home() / ".codex" / ".mcp.json",
+        Path.home() / ".codex" / "claude_desktop_config.json",
+        Path.home() / "Library" / "Application Support" / "Codex" / "claude_desktop_config.json",
+    ]
+    for path in manifests:
+        ok = path.is_file() and "sovereign" in path.read_text(encoding="utf-8", errors="ignore")
+        table.add_row("Manifest", "yes" if ok else "no", str(path))
+    running = (
+        subprocess.run(
+            ["pgrep", "-f", "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        != ""
+    )
+    table.add_row("App", "running" if running else "stopped", "/Applications/ChatGPT.app")
+    console.print(table)
+    console.print(
+        "[dim]In local mode the app's model calls go to the tier gateway on this "
+        "Mac, so it works with no OpenAI sign-in and its MCP tools are the "
+        "sovereign ones. Enable the `sovereign` connector in ChatGPT, or use "
+        "Import from Claude Desktop. Switch back with: sovereign chatgpt --cloud[/]"
+    )
+    return 0 if (codex_ok and running) else 1
+
+
+def _app_server_base() -> str:
+    """The base URL the running ChatGPT app-server was started with."""
+    result = subprocess.run(
+        ["pgrep", "-f", "codex app-server"], capture_output=True, text=True, check=False
+    )
+    for pid in (line.strip() for line in result.stdout.splitlines()):
+        if not pid:
+            continue
+        args = subprocess.run(
+            ["ps", "-o", "command=", "-p", pid], capture_output=True, text=True, check=False
+        ).stdout
+        match = re.search(r'openai_base_url="([^"]+)"', args)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _chatgpt_verify() -> int:
+    """Prove the ChatGPT app runs on this Mac and needs no OpenAI sign-in."""
+    from .client_setup import (
+        codex_config_path,
+        codex_forced_local,
+        codex_needs_openai_signin,
+        codex_probe_local,
+    )
+    from .config import Settings
+
+    router = Settings.load().router_url.rstrip("/")
+    rows: list[tuple[str, bool, str]] = []
+
+    config = codex_config_path()
+    forced = codex_forced_local()
+    rows.append(
+        (
+            "App config",
+            forced,
+            f"{config} → sovereign-tier" if forced else f"{config} still points at the cloud",
+        )
+    )
+
+    signin = codex_needs_openai_signin()
+    rows.append(
+        (
+            "OpenAI sign-in",
+            not signin,
+            "not required" if not signin else "the app will ask for an account",
+        )
+    )
+
+    app_up = (
+        subprocess.run(
+            ["pgrep", "-f", "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        != ""
+    )
+    rows.append(("App", app_up, "running" if app_up else "stopped"))
+
+    server = _app_server_base()
+    rows.append(
+        (
+            "App server",
+            server.startswith(router) if server else False,
+            server or "not running",
+        )
+    )
+
+    ok, detail = codex_probe_local()
+    rows.append(("Local round trip", ok, detail))
+
+    local_only = False
+    try:
+        import httpx
+
+        health = httpx.get(f"{router}/health", timeout=3.0).json()
+        local_only = bool(health.get("local_only"))
+        tiers = health.get("tiers") or {}
+        detail = ", ".join(f"{tier}={model}" for tier, model in tiers.items())
+    except Exception:
+        detail = "gateway not reachable"
+    rows.append(
+        (
+            "Tier gateway",
+            local_only,
+            ("local-only · " if local_only else "cloud allowed · ") + detail,
+        )
+    )
+
+    table = Table(title="ChatGPT desktop · local proof", header_style="bold #b794f4")
+    table.add_column("Check", style="bold")
+    table.add_column("Result")
+    table.add_column("Detail", overflow="fold")
+    for name, ok, detail in rows:
+        table.add_row(
+            name,
+            "[green]ok[/]" if ok else "[red]fail[/]",
+            detail,
+        )
+    console.print(table)
+    failed = [name for name, ok, _detail in rows if not ok]
+    if failed:
+        console.print(
+            f"[yellow]Not fully local:[/] {', '.join(failed)}. Fix with: sovereign chatgpt --local"
+        )
+        return 1
+    console.print(
+        "[green]The ChatGPT desktop app is fully local.[/] Its model calls go to the "
+        "tier gateway on this Mac and it needs no OpenAI sign-in."
+    )
+    return 0
+
+
+def _claude(
+    restart: bool = False, fix: bool = False, local: bool = False, cloud: bool = False
+) -> int:
+    """Status/setup for local Claude Code and the Claude desktop integration."""
+    from . import bridge as bridge_mod
+    from .client_setup import (
+        claude_forced_local,
+        install_claude_code_mcp,
+        install_claude_settings,
+        restore_claude_cloud,
+    )
+
+    if fix:
+        path = install_claude_settings()
+        console.print(f"[green]Claude local settings[/] {path}")
+        console.print(f"[green]Claude Code MCP[/] {install_claude_code_mcp()}")
+    if local:
+        path = install_claude_settings()
+        from .client_setup import claude_cloud_backup_path
+
+        saved = claude_cloud_backup_path(path).exists()
+        console.print(
+            f"[green]Claude pointed at the local bridge.[/] {path} "
+            + (
+                "(the cloud settings are kept for `--cloud`)"
+                if saved
+                else "(`--cloud` removes the local keys again)"
+            )
+        )
+    if cloud:
+        restored = restore_claude_cloud()
+        console.print(
+            "[green]Claude restored to cloud.[/]"
+            if restored
+            else "[yellow]No cloud backup found; the settings were left alone.[/]"
+        )
+    if restart or local or cloud:
+        subprocess.run(
+            ["pkill", "-f", "/Applications/Claude.app/Contents/MacOS/Claude"], check=False
+        )
+        time.sleep(3)
+        subprocess.run(["open", "-a", "Claude"], check=False)
+        console.print("[green]Claude restarted.[/]")
+
+    from .client_setup import claude_settings_path
+
+    path = claude_settings_path()
+    local_env = claude_forced_local()
+    bridge_up = bridge_mod.port_open(port=4001)
+    app_up = (
+        subprocess.run(
+            ["pgrep", "-f", "/Applications/Claude.app/Contents/MacOS/Claude"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        != ""
+    )
+    table = Table(title="Local Claude", header_style="bold #b794f4")
+    table.add_column("Item", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", overflow="fold")
+    table.add_row("Claude settings", "local" if local_env else "not local", str(path))
+    table.add_row(
+        "Anthropic bridge",
+        "running" if bridge_up else "stopped",
+        "http://127.0.0.1:4001/v1",
+    )
+    table.add_row("Claude Code CLI", "installed", shutil.which("claude") or "missing")
+    table.add_row("Claude desktop", "running" if app_up else "stopped", "/Applications/Claude.app")
+    from .client_setup import claude_configured_models, claude_slot_routes
+    from .tier_gateway import catalog_ids, installed_models
+
+    slots = claude_configured_models()
+    routes = claude_slot_routes()
+    known_models = catalog_ids(installed_models())
+    for key, value in slots.items():
+        route = routes.get(key, value)
+        table.add_row(
+            key.replace("ANTHROPIC_", "").replace("_MODEL", ""),
+            f"{value} → {route}",
+            "in the catalog" if route in known_models else "not in the local catalog",
+        )
+    missing = sorted({route for route in routes.values() if route not in known_models})
+    if missing:
+        table.add_row("Unknown models", ", ".join(missing), "not in the local catalog")
+    console.print(table)
+    console.print(
+        "[dim]`claude` and `claude-local` use the local bridge. Claude Desktop's chat "
+        "still uses Anthropic cloud; its Claude Code/Cowork agent follows settings.json "
+        "and the MCP server. Switch with: sovereign claude --local / --cloud[/]"
+    )
+    return 0 if (local_env and bridge_up) else 1
+
+
+def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> int:
+    """Verify that every local-capable agent path is actually local."""
+    import json as _json
+
+    from . import bridge as bridge_mod
+    from .client_setup import (
+        claude_settings_path,
+        codex_config_path,
+        install_claude_code_mcp,
+        install_claude_settings,
+        install_codex_forced_local,
+        install_codex_local_provider,
+        install_codex_mcp,
+        install_continue_config,
+        install_opencode_mcp,
+        install_qwen_router,
+        opencode_config_path,
+    )
+
+    if fix:
+        install_claude_settings()
+        install_codex_local_provider()
+        install_codex_forced_local()
+        install_claude_code_mcp()
+        install_codex_mcp()
+        install_opencode_mcp()
+        install_qwen_router()
+        install_continue_config()
+        console.print("[green]All local client configurations rewritten.[/]")
+
+    rows: list[tuple[str, str, str]] = []
+
+    def add(name: str, ok: bool, detail: str, cloud: bool = False) -> None:
+        rows.append((name, "cloud" if cloud else ("local" if ok else "NOT local"), detail))
+
+    # Claude Code: settings.json must point at the bridge, and every model it
+    # names must be one the local stack can serve.
+    claude_local = False
+    try:
+        from .client_setup import claude_slot_routes
+        from .tier_gateway import catalog_ids, installed_models
+
+        path = claude_settings_path()
+        settings = _json.loads(path.read_text(encoding="utf-8"))
+        env = settings.get("env") or {}
+        routes = claude_slot_routes(path)
+        known = catalog_ids(installed_models())
+        claude_local = (
+            env.get("ANTHROPIC_BASE_URL") == "http://127.0.0.1:4001"
+            and bool(routes)
+            and all(route in known for route in routes.values())
+        )
+        detail = env.get("ANTHROPIC_BASE_URL", "unset")
+    except (OSError, ValueError):
+        detail = "missing ~/.claude/settings.json"
+    add("Claude Code agent", claude_local, detail)
+
+    bridge_up = bridge_mod.port_open(port=4001)
+    add("Anthropic bridge", bridge_up, "http://127.0.0.1:4001/v1")
+
+    from .cloud import env_cloud_disabled
+
+    ollama_local = env_cloud_disabled()
+    add(
+        "Ollama Cloud",
+        ollama_local,
+        "disabled" if ollama_local else "enabled; run sovereign cloud --disable",
+    )
+
+    # Codex local profile: provider must be the tier gateway on 4010.
+    profile = Path.home() / ".codex" / "sovereign.config.toml"
+    codex_local = False
+    try:
+        profile_text = profile.read_text(encoding="utf-8")
+        codex_local = "sovereign-tier" in profile_text and 'model = "best"' in profile_text
+        detail = str(profile)
+    except OSError:
+        detail = "missing ~/.codex/sovereign.config.toml"
+    add("Codex local profile", codex_local, detail)
+
+    base = codex_config_path()
+    provider_local = False
+    try:
+        base_text = base.read_text(encoding="utf-8")
+        provider_local = (
+            "[model_providers.sovereign-tier]" in base_text
+            and "http://127.0.0.1:4010/v1" in base_text
+        )
+    except OSError:
+        base_text = ""
+    add("Codex local provider", provider_local, str(base))
+
+    wrappers = LOCAL_AI_ROOT / "bin"
+    add(
+        "chatgpt-local wrapper",
+        (wrappers / "chatgpt-local").is_file(),
+        str(wrappers / "chatgpt-local"),
+    )
+    add(
+        "claude-local wrapper",
+        (wrappers / "claude-local").is_file(),
+        str(wrappers / "claude-local"),
+    )
+
+    # OpenCode: default must be the local tier provider.
+    opencode_local = False
+    opencode_detail = str(opencode_config_path())
+    try:
+        config = _json.loads(opencode_config_path().read_text(encoding="utf-8"))
+        model = config.get("model")
+        if isinstance(model, dict):
+            model = f"{model.get('providerID')}/{model.get('model')}"
+        provider = (config.get("provider") or {}).get("sovereign") or {}
+        options = provider.get("options") or {}
+        opencode_local = (
+            str(model) in {"sovereign/best", "sovereign/auto"}
+            and options.get("baseURL") == "http://127.0.0.1:4010/v1"
+        )
+        opencode_detail = f"{model} → {options.get('baseURL', 'unset')}"
+    except (OSError, ValueError):
+        opencode_detail = "unreadable opencode.json"
+    add("OpenCode default", opencode_local, opencode_detail)
+
+    # Gateway must be live and serving local models.
+    gateway_local = False
+    gateway_detail = "not running"
+    try:
+        import httpx
+
+        health = httpx.get("http://127.0.0.1:4010/health", timeout=3.0).json()
+        tiers = health.get("tiers") or {}
+        enforced = bool(health.get("local_only"))
+        gateway_local = (
+            bool(tiers)
+            and enforced
+            and all(not str(model).endswith(":cloud") for model in tiers.values())
+        )
+        gateway_detail = ("local-only · " if enforced else "cloud allowed · ") + ", ".join(
+            f"{tier}={model}" for tier, model in tiers.items()
+        )
+    except (httpx.HTTPError, ValueError):
+        pass
+    add("Tier gateway", gateway_local, gateway_detail)
+
+    # Desktop app chat windows are closed cloud clients; report separately.
+    add("Claude Desktop chat", False, "Anthropic cloud (closed app)", cloud=True)
+
+    # The ChatGPT app can be pinned to the local provider, so it is checked
+    # like any other agent path instead of being assumed cloud.
+    from .client_setup import codex_forced_local, codex_needs_openai_signin
+
+    forced = codex_forced_local()
+    add(
+        "ChatGPT desktop chat",
+        forced,
+        "local · no sign-in" if forced else "OpenAI cloud; fix: sovereign chatgpt --local",
+    )
+    signin = codex_needs_openai_signin()
+    add(
+        "ChatGPT sign-in",
+        not signin,
+        "not required" if not signin else "the app will ask for an OpenAI account",
+    )
+
+    required = [row for row in rows if row[0] != "Claude Desktop chat"]
+    ok = all(status == "local" for _name, status, _detail in required)
+    if as_json:
+        import json as _json
+
+        print(
+            _json.dumps(
+                {
+                    "ok": ok,
+                    "surfaces": [
+                        {"name": name, "status": status, "detail": detail}
+                        for name, status, detail in rows
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return 0 if ok else 1
+    table = Table(title="Local-only audit", header_style="bold #b794f4")
+    table.add_column("Surface", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", overflow="fold")
+    for name, status, detail in rows:
+        table.add_row(name, status, detail)
+    console.print(table)
+    if ok:
+        console.print(
+            "[green]All local agent paths are local.[/] The ChatGPT desktop app runs "
+            "on the tier gateway with no OpenAI sign-in; only the Claude Desktop "
+            "chat window stays cloud because that app is a closed client."
+        )
+    else:
+        console.print("[yellow]Some local paths are not configured.[/] Fix: sovereign local --fix")
+    if strict and not ok:
+        return 1
+    return 0 if ok else 1
 
 
 def _clients(snap: Snapshot) -> None:
@@ -1959,8 +2759,9 @@ def _clients(snap: Snapshot) -> None:
         )
     console.print(table)
     console.print(
-        "[dim]Agent clients can write files. Chat clients are verified for local "
-        "conversation; use Qwen Code for reliable local edits.[/]"
+        "[dim]Qwen, Codex, Claude Code, and OpenCode execute local tools; Codex uses "
+        "the tier gateway Responses API and Claude uses the sovereign bridge. "
+        "VS Codium/Continue handles chat, edit, and autocomplete.[/]"
     )
     if any(tag for _alias, tag in resolved.values()):
         console.print(
@@ -2051,9 +2852,20 @@ def _best(snap: Snapshot) -> int:
 
 
 def _watchdog(settings: Settings, restart: bool = True, interval: float = 8.0) -> int:
-    """Recover a wedged Ollama, but never interrupt one that is merely busy."""
+    """Recover a wedged Ollama or a dead tier gateway, without interrupting work."""
+    from urllib.parse import urlsplit
+
+    from .tier_gateway import ensure_running as ensure_tier
+    from .tier_gateway import port_open as tier_port
     from .tune import restart_ollama
     from .watchdog import STUCK, classify, sample
+
+    router = urlsplit(settings.router_url)
+    if router.hostname and router.port and not tier_port(router.hostname, router.port):
+        if ensure_tier(upstream=settings.gateway_url, ollama=settings.ollama_url):
+            console.print("[green]tier gateway restarted[/]")
+        else:
+            console.print("[yellow]tier gateway is down and did not restart[/]")
 
     base = settings.ollama_url
     live = probe_liveness(base, timeout=12.0)
@@ -2079,7 +2891,7 @@ def _watchdog(settings: Settings, restart: bool = True, interval: float = 8.0) -
         return 1
 
     console.print("[dim]Restarting Ollama…[/]")
-    restart_ollama()
+    restart_ollama(env=desired_env())
     for _ in range(30):
         if probe_liveness(base, timeout=8.0).ok:
             console.print("[green]recovered[/]")
@@ -2087,6 +2899,220 @@ def _watchdog(settings: Settings, restart: bool = True, interval: float = 8.0) -
         time.sleep(1)
     console.print("[red]Still not serving after restart.[/]")
     return 1
+
+
+def _guardian(
+    settings: Settings,
+    status_only: bool = False,
+    watch: bool = False,
+    interval: float = 30.0,
+    as_json: bool = False,
+) -> int:
+    """Keep the tier gateway, the Anthropic bridge and the web chat alive.
+
+    A dead tier gateway is what makes the ChatGPT app look like it wants a
+    sign-in, and a dead bridge does the same to Claude. Both are detached
+    processes with no supervisor, so the guardian is the supervisor.
+    """
+    import json as _json
+
+    from . import guardian as guardian_mod
+
+    if watch:
+        if not as_json:
+            console.print("[dim]Guardian watching. Ctrl-C to stop.[/]")
+        try:
+            guardian_mod.watch(interval=interval, settings=settings)
+        except KeyboardInterrupt:
+            if not as_json:
+                console.print("[dim]Guardian stopped.[/]")
+        return 0
+
+    states = guardian_mod.check(settings, autostart=not status_only)
+    guardian_mod.log(states)
+
+    if as_json:
+        payload = {
+            "ok": all(state.up for state in states),
+            "services": [state.as_dict() for state in states],
+        }
+        print(_json.dumps(payload, indent=2))
+    else:
+        for state in states:
+            mark = "[green]up[/]" if state.up else "[red]down[/]"
+            if state.restarted:
+                mark = "[green]restarted[/]"
+            console.print(f"{state.name:<20} {mark:<14} :{state.port}  {state.detail}")
+            if state.note:
+                console.print(f"  [dim]{state.note}[/]")
+
+    return 0 if all(state.up for state in states) else 1
+
+
+def _autostart_report(settings: Settings) -> dict:
+    """What the machine will look like after a reboot.
+
+    The report answers the question a user actually has: if the Mac restarts
+    now, do ChatGPT, Claude and Codex still run on this Mac, and does the
+    stack come back on its own?
+    """
+    from .client_setup import (
+        claude_forced_local,
+        codex_forced_local,
+        unknown_client_models,
+    )
+    from .services import service_states, session_env_values
+
+    states = service_states(settings)
+    env = session_env_values()
+    services = {
+        state.service.name: {
+            "label": state.service.label,
+            "installed": state.installed,
+            "loaded": state.loaded,
+            "running": state.pid > 0,
+            "serving": state.serving,
+            "port": state.service.port,
+        }
+        for state in states
+    }
+    unknown = unknown_client_models()
+    clients = {
+        "ChatGPT": {
+            "local": codex_forced_local(),
+            "config": "~/.codex/config.toml",
+            "needs": "the tier gateway",
+        },
+        "Claude": {
+            "local": claude_forced_local(),
+            "config": "~/.claude/settings.json",
+            "needs": "the Anthropic bridge",
+        },
+        "Codex": {
+            "local": codex_forced_local(),
+            "config": "~/.codex/config.toml + the local profile",
+            "needs": "the tier gateway",
+        },
+    }
+    stack_ready = all(state.installed and state.loaded for state in states)
+    session_ready = bool(env.get("CODEX_APP_SERVER_OPENAI_BASE_URL"))
+    return {
+        "ok": stack_ready and session_ready and not unknown,
+        "stack": {
+            "autostarts": stack_ready,
+            "services": services,
+        },
+        "session_env": env,
+        "clients": clients,
+        "unknown_models": unknown,
+        "verdict": (
+            "The stack comes back on its own and every client stays local."
+            if stack_ready and session_ready and not unknown
+            else "Not everything survives a reboot yet — run: sovereign autostart --install"
+        ),
+    }
+
+
+def _autostart(
+    settings: Settings,
+    install: bool = False,
+    uninstall: bool = False,
+    repair: bool = False,
+    restart: bool = False,
+    as_json: bool = False,
+) -> int:
+    """Install, inspect and remove the launchd services behind the local stack."""
+    import json as _json
+
+    from . import services as services_mod
+
+    if restart:
+        rows = services_mod.restart_services(settings)
+        table = Table(title="Local stack services", header_style="bold #b794f4")
+        table.add_column("Service", style="bold")
+        table.add_column("Result", overflow="fold")
+        for label, result in rows:
+            table.add_row(label, result)
+        console.print(table)
+        return 0
+    if install or repair:
+        rows = (
+            services_mod.repair_services(settings)
+            if repair
+            else services_mod.install_services(settings)
+        )
+        if install:
+            # The old Terminal-based gateway job would open a window at every
+            # login to start a supervisor the launchd service now owns.
+            rows.extend(services_mod.retire_superseded())
+        env = services_mod.set_session_env(settings)
+        table = Table(title="Local stack services", header_style="bold #b794f4")
+        table.add_column("Service", style="bold")
+        table.add_column("Result", overflow="fold")
+        for label, result in rows:
+            table.add_row(label, result)
+        console.print(table)
+        console.print(
+            f"[green]Session environment set[/] {', '.join(sorted(env))} — the ChatGPT "
+            "app inherits it, so it is local from the first launch after a reboot."
+        )
+        return 0
+    if uninstall:
+        rows = services_mod.uninstall_services(settings)
+        rows.extend(services_mod.restore_superseded())
+        services_mod.clear_session_env()
+        table = Table(title="Local stack services", header_style="bold #b794f4")
+        table.add_column("Service", style="bold")
+        table.add_column("Result", overflow="fold")
+        for label, result in rows:
+            table.add_row(label, result)
+        console.print(table)
+        console.print(
+            "[dim]The session environment was cleared; the apps fall back to the cloud.[/]"
+        )
+        return 0
+
+    report = _autostart_report(settings)
+    if as_json:
+        print(_json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+
+    table = Table(title="Autostart · after a reboot", header_style="bold #b794f4")
+    table.add_column("Service", style="bold")
+    table.add_column("State")
+    table.add_column("Port", justify="right")
+    for name, info in report["stack"]["services"].items():
+        if not info["installed"]:
+            state = "[dim]not installed[/]"
+        elif not info["loaded"]:
+            state = "[yellow]not loaded[/]"
+        elif info["running"]:
+            state = "[green]running[/]"
+        else:
+            state = "[yellow]loaded[/]"
+        table.add_row(name, state, str(info["port"] or "—"))
+    for name, info in report["clients"].items():
+        state = "[green]local[/]" if info["local"] else "[red]cloud[/]"
+        table.add_row(name, state, info["needs"])
+    console.print(table)
+    env = report["session_env"]
+    if env.get("CODEX_APP_SERVER_OPENAI_BASE_URL"):
+        console.print(
+            f"[green]Session environment[/] {env['CODEX_APP_SERVER_OPENAI_BASE_URL']} "
+            "· the ChatGPT app inherits it"
+        )
+    else:
+        console.print(
+            "[yellow]No session environment[/] — the ChatGPT app would start against "
+            "the cloud. Run: sovereign autostart --install"
+        )
+    if report["unknown_models"]:
+        console.print(
+            f"[yellow]Unknown models[/] {', '.join(report['unknown_models'])} — a client "
+            "points at a model the gateway cannot route."
+        )
+    console.print(f"[dim]{report['verdict']}[/]")
+    return 0 if report["ok"] else 1
 
 
 def _prune(snap: Snapshot, apply: bool = False) -> int:
@@ -2198,11 +3224,28 @@ def _launch(
     yolo: bool = False,
     dry_run: bool = False,
     model: str | None = None,
+    cloud: bool = False,
 ) -> int:
     target = Path(path).expanduser().resolve()
     if not target.is_dir():
         console.print(f"[red]Not a directory:[/] {target}")
         return 1
+    if cloud and client not in {"codex", "claude"}:
+        console.print("[red]--cloud is only supported for codex and claude.[/]")
+        return 1
+    if cloud and client == "codex":
+        from .clients import chatgpt_login_status
+
+        state = chatgpt_login_status()
+        if state != "logged-in":
+            console.print("[red]Real ChatGPT needs a login.[/] Run: [bold]codex login[/]")
+            if state == "missing":
+                console.print("[dim]`codex` is not on PATH.[/]")
+            return 1
+        console.print(
+            "[yellow]Cloud mode:[/] prompts, code and diffs are sent to OpenAI. "
+            "The local router is not involved."
+        )
     info = {item.key: item for item in local_clients()}.get(client)
     if info is None:
         console.print(f"[red]Unknown client:[/] {client}")
@@ -2218,18 +3261,46 @@ def _launch(
         max_context=snap.settings.max_context,
     )
     agent_model = model or selection.tag or "gemma4:12b"
+    if client == "codex" and not model and not cloud:
+        # The local Codex profile points at the tier gateway; `auto` lets the
+        # gateway pick the model per turn.
+        agent_model = "auto"
+    if cloud and client not in {"codex", "claude"}:
+        console.print(f"[red]{client} has no cloud mode.[/] Use codex or claude.")
+        return 1
+    if client in {"qwen", "opencode"} and not model:
+        # Both clients have a tier provider; let the gateway pick per request.
+        agent_model = "auto"
+    if client == "claude" and not model and not cloud:
+        # The bridge maps Claude's own model slots onto the local models, so
+        # the picker in Claude Code offers them and the default turn follows
+        # the quality route.
+        agent_model = "auto"
 
-    if client == "claude" and not dry_run:
+    if client in {"qwen", "opencode", "codex"} and not cloud and not dry_run:
+        from .tier_gateway import ensure_running as ensure_tier
+
+        ensure_tier(upstream=snap.settings.gateway_url, ollama=snap.settings.ollama_url)
+
+    if client == "claude" and not cloud and not dry_run:
         from .bridge import ensure_running
 
-        if not ensure_running(snap.settings.gateway_url):
+        if not ensure_running(snap.settings.router_url):
             console.print("[red]Claude bridge did not start.[/] See: sovereign logs bridge")
             return 1
+    # Claude always runs the 64k chat model behind `local-claude`, so make room
+    # for that instead of the router's 32k coder. VS Codium loads no model.
+    if client == "codium":
+        room_model = ""
+    elif client == "claude":
+        room_model = "qwen3.5:9b"
     else:
-        _make_room(snap, agent_model, dry_run)
+        room_model = agent_model
+    if room_model and not cloud:
+        _make_room(snap, room_model, dry_run)
 
     try:
-        plan = plan_launch(client, target, snap.settings, agent_model, yolo=yolo)
+        plan = plan_launch(client, target, snap.settings, agent_model, yolo=yolo, cloud=cloud)
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
         if client == "codex":
@@ -2363,9 +3434,7 @@ def _backends(settings: Settings) -> int:
             ", ".join(status.models) if status.models else "-",
         )
     console.print(table)
-    console.print(
-        "[dim]Everything here is on loopback. Sovereign Code never calls a cloud API.[/]"
-    )
+    console.print("[dim]Everything here is on loopback. Sovereign Code never calls a cloud API.[/]")
     return 0
 
 
@@ -2408,8 +3477,29 @@ def _skills(
     include_all: bool = False,
     names: list[str] | None = None,
     dry_run: bool = False,
+    query: str | None = None,
+    limit: int = 30,
 ) -> int:
     from .skills_install import TARGETS, install, installed_counts, load_curated
+
+    if action == "search":
+        from .skills import search_skills
+
+        if not query:
+            console.print("[red]Usage:[/] sovereign skills search <words>")
+            return 1
+        found = search_skills(query, limit=limit)
+        if not found:
+            console.print(f"[yellow]No skills match[/] {query!r}")
+            return 1
+        table = Table(title=f"Skills matching {query!r}", header_style="bold #b794f4")
+        table.add_column("Name", style="bold")
+        table.add_column("Description", overflow="fold")
+        for name, description in found:
+            table.add_row(name, description[:160])
+        console.print(table)
+        console.print("[dim]Install one with: sovereign skills install --name <name>[/]")
+        return 0
 
     if action == "install":
         targets = (
@@ -2444,10 +3534,17 @@ def _skills(
     table = Table(title="Skills", header_style="bold #b794f4")
     table.add_column("Name", style="bold")
     table.add_column("Description")
-    for name, description in rows:
+    # The checkout ships tens of thousands of skills; printing all of them is
+    # not a listing, it is a wall. Show a useful slice and point at search.
+    for name, description in rows[:40]:
         table.add_row(name, description)
     if rows:
         console.print(table)
+        if len(rows) > 40:
+            console.print(
+                f"[dim]… {len(rows) - 40} more. Run one by name: "
+                "sovereign skill <name> --prompt '…'[/]"
+            )
     else:
         console.print("[yellow]No prompt skills in config/skills yet.[/]")
 
@@ -2659,9 +3756,7 @@ def _pipeline(
             max_tokens=tokens,
         )
 
-    def _direct_implementation(
-        prompt_text: str, plan_text: str, failure: str
-    ) -> tuple[bool, str]:
+    def _direct_implementation(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
         """One request, whole files, no agent loop (seconds instead of minutes)."""
         files = relevant_files(target, prompt_text)
         messages = build_messages(prompt_text, plan_text, files, failure)
@@ -2694,9 +3789,7 @@ def _pipeline(
             lines.append("rejected (unsafe path or too large): " + ", ".join(rejected))
         return bool(written), "\n".join(lines)
 
-    def _agent_implementation(
-        prompt_text: str, plan_text: str, failure: str
-    ) -> tuple[bool, str]:
+    def _agent_implementation(prompt_text: str, plan_text: str, failure: str) -> tuple[bool, str]:
         context = project_context(target)
         combined = (
             f"{prompt_text}\n\nImplementation plan:\n{plan_text}\n\n"
@@ -2888,15 +3981,41 @@ def _pipeline(
 
 
 def _install_clients() -> int:
+    from .client_setup import install_all
     from .clients import write_codex_profile
+    from .skills_install import install as install_skills
 
     profile = write_codex_profile()
     console.print(f"[green]Codex profile[/] {profile}")
     for path in install_client_wrappers():
         console.print(f"[green]Wrapper      [/] {path}")
+
+    from .tier_gateway import ensure_running as ensure_tier
+
+    router_ok = ensure_tier()
     console.print(
-        "[dim]Use qwen-local, codex-local, or claude-local from any terminal. "
-        "They do not change cloud app settings.[/]"
+        f"[{'green' if router_ok else 'yellow'}]{'Tier gateway started' if router_ok else 'Tier gateway not running'}[/] "
+        "[dim](http://127.0.0.1:4010/v1 · auto/fast/balanced/deep)[/]"
+    )
+    rows = install_all()
+    table = Table(title="Client integrations", header_style="bold #b794f4")
+    table.add_column("Component", style="bold")
+    table.add_column("Result", overflow="fold")
+    for label, result in rows:
+        table.add_row(label, result)
+    console.print(table)
+
+    try:
+        installed = install_skills(targets="all")
+    except OSError as exc:
+        console.print(f"[yellow]Skills install skipped:[/] {exc}")
+        installed = {}
+    console.print(
+        "[green]Skills[/] " + ", ".join(f"{key}={len(paths)}" for key, paths in installed.items())
+    )
+    console.print(
+        "[dim]Launch: sovereign launch codex|claude|opencode|qwen|codium [path]. "
+        "Restart Claude Desktop and ChatGPT to pick up the MCP server.[/]"
     )
     return 0
 
@@ -2923,29 +4042,33 @@ def _free(settings: Settings) -> int:
 def _env(settings: Settings) -> None:
     snap = _snapshot(settings)
     resolved = resolve_client_models(snap.views, snap.potential_free_gb, snap.settings.max_context)
-    chat_alias, chat_tag = resolved["chatgpt"]
+    _chat_alias, chat_tag = resolved["chatgpt"]
     code_alias, _code_tag = resolved["codex"]
-    claude_alias, _claude_tag = resolved["claude"]
     fallback_tag = snap.chat_selection.tag if snap.chat_selection else "qwen3.5:4b"
     lines = [
         f'export OLLAMA_HOST="{settings.ollama_host}"',
         f'export SOVEREIGN_OLLAMA_HOST="{settings.ollama_host}"',
         f'export SOVEREIGN_MODEL="{chat_tag or fallback_tag}"',
-        # OpenAI-compatible — ChatGPT / Codex CLI / any OpenAI SDK
-        f'export OPENAI_BASE_URL="{settings.gateway_url}/v1"',
+        # OpenAI-compatible — tier gateway chooses fast/balanced/deep per request
+        f'export SOVEREIGN_ROUTER_URL="{settings.router_url}"',
+        f'export OPENAI_BASE_URL="{settings.router_url}/v1"',
         'export OPENAI_API_KEY="local"',
-        f'export OPENAI_MODEL="{chat_alias}"',
-        f'export SOVEREIGN_CODE_MODEL="{code_alias}"',  # best local coder alias
-        # Anthropic-compatible — Claude Code
-        f'export ANTHROPIC_BASE_URL="{settings.gateway_url}"',
+        'export OPENAI_MODEL="best"',
+        f'export SOVEREIGN_CODE_MODEL="{code_alias}"',  # explicit strong alias
+        # Anthropic-compatible — Claude Code through the sovereign bridge
+        'export ANTHROPIC_BASE_URL="http://127.0.0.1:4001"',
         'export ANTHROPIC_AUTH_TOKEN="local"',
         'export ANTHROPIC_API_KEY="local"',
-        f'export ANTHROPIC_MODEL="{claude_alias}"',
-        f'export ANTHROPIC_SMALL_FAST_MODEL="{chat_alias}"',
-        f'export ANTHROPIC_DEFAULT_SONNET_MODEL="{claude_alias}"',
-        f'export ANTHROPIC_DEFAULT_HAIKU_MODEL="{chat_alias}"',
+        'export ANTHROPIC_MODEL="local-claude"',
+        'export ANTHROPIC_SMALL_FAST_MODEL="local-claude"',
+        'export ANTHROPIC_DEFAULT_SONNET_MODEL="local-claude"',
+        'export ANTHROPIC_DEFAULT_OPUS_MODEL="local-claude"',
+        'export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-claude"',
         'export CLAUDE_CODE_MAX_CONTEXT_TOKENS="65536"',
+        'export CLAUDE_CODE_MAX_OUTPUT_TOKENS="8192"',
         'export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"',
+        'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1"',
+        'export DISABLE_AUTO_COMPACT="1"',
         'export DISABLE_TELEMETRY="1"',
     ]
     print("\n".join(lines))
@@ -2960,7 +4083,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("dashboard", help="open the live terminal dashboard (default)")
-    sub.add_parser("status", help="one-shot system status")
+    status = sub.add_parser("status", help="one-shot system status")
+    status.add_argument("--json", action="store_true", help="machine-readable output")
     models = sub.add_parser("models", help="list installed and recommended models")
     models.add_argument("--remote", action="store_true", help="list downloadable models")
     models.add_argument("query", nargs="?", default=None, help="filter by name")
@@ -3017,11 +4141,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bridge.add_argument("--host", default="127.0.0.1")
     bridge.add_argument("--port", type=int, default=4001)
-    bridge.add_argument("--gateway", default="http://127.0.0.1:4000")
+    bridge.add_argument("--gateway", default="http://127.0.0.1:4010")
     bridge.add_argument("--model", default="local-agent", help="default gateway alias")
     bridge.add_argument("--start", action="store_true", help="start in the background")
     bridge.add_argument("--stop", action="store_true", help="stop the background bridge")
     bridge.add_argument("--status", action="store_true", help="show whether it is running")
+    router = sub.add_parser(
+        "router",
+        help="latency-aware tier gateway: fast model for small tasks, big model for hard ones",
+    )
+    router.add_argument("--host", default="127.0.0.1")
+    router.add_argument("--port", type=int, default=4010)
+    router.add_argument("--ollama", default="http://127.0.0.1:11434")
+    router.add_argument("--upstream", default="http://127.0.0.1:4000")
+    router.add_argument("--start", action="store_true", help="start in the background")
+    router.add_argument("--restart", action="store_true", help="restart the background gateway")
+    router.add_argument("--stop", action="store_true", help="stop the background gateway")
+    router.add_argument("--status", action="store_true", help="show tiers and whether it is up")
+    router.add_argument("--stats", action="store_true", help="show recent latency by tier")
+    local = sub.add_parser("local", help="audit every local agent path")
+    local.add_argument("--fix", action="store_true", help="rewrite local settings/MCP")
+    local.add_argument("--strict", action="store_true", help="exit non-zero if not local")
+    local.add_argument("--json", action="store_true", help="machine-readable output")
+    claude = sub.add_parser("claude", help="check/restart local Claude Code settings")
+    claude.add_argument("--restart", action="store_true", help="restart the Claude app")
+    claude.add_argument("--fix", action="store_true", help="rewrite local Claude settings/MCP")
+    claude.add_argument(
+        "--local",
+        action="store_true",
+        help="point Claude Code/Cowork at the local bridge and restart",
+    )
+    claude.add_argument(
+        "--cloud", action="store_true", help="restore the saved cloud settings and restart"
+    )
+    chatgpt = sub.add_parser("chatgpt", help="check/restart the ChatGPT desktop app")
+    chatgpt.add_argument("--restart", action="store_true", help="restart the ChatGPT app")
+    chatgpt.add_argument("--fix", action="store_true", help="rewrite the MCP manifests")
+    chatgpt.add_argument(
+        "--local",
+        action="store_true",
+        help="force the app onto the local tier gateway (no sign-in) and restart",
+    )
+    chatgpt.add_argument(
+        "--cloud", action="store_true", help="restore the cloud config and restart"
+    )
+    chatgpt.add_argument(
+        "--verify",
+        action="store_true",
+        help="prove the app runs locally and needs no OpenAI sign-in",
+    )
+    chatgpt.add_argument(
+        "--repair",
+        action="store_true",
+        help="rewrite the local app config if it drifted back to the cloud",
+    )
     sub.add_parser(
         "mcp",
         help="serve MCP over stdio (models, skills, memory, checks) for desktop clients",
@@ -3035,6 +4208,20 @@ def build_parser() -> argparse.ArgumentParser:
     dog = sub.add_parser("watchdog", help="recover a wedged Ollama without killing a busy one")
     dog.add_argument("--no-restart", action="store_true", help="report only")
     dog.add_argument("--interval", type=float, default=8.0, help="seconds between samples")
+    guard = sub.add_parser("guardian", help="keep the tier gateway, bridge and web chat alive")
+    guard.add_argument("--status", action="store_true", help="report only, start nothing")
+    guard.add_argument("--watch", action="store_true", help="keep checking until interrupted")
+    guard.add_argument("--interval", type=float, default=30.0, help="seconds between checks")
+    guard.add_argument("--json", action="store_true", help="print machine readable output")
+    auto = sub.add_parser(
+        "autostart",
+        help="start the local stack at login, keep it alive, and survive a reboot",
+    )
+    auto.add_argument("--install", action="store_true", help="install and load the services")
+    auto.add_argument("--uninstall", action="store_true", help="remove the services")
+    auto.add_argument("--repair", action="store_true", help="rewrite the plists and reload")
+    auto.add_argument("--restart", action="store_true", help="restart every service")
+    auto.add_argument("--json", action="store_true", help="print machine readable output")
     prune = sub.add_parser("prune", help="list installed models nothing references")
     prune.add_argument("--apply", action="store_true", help="remove them (default: dry run)")
     warm = sub.add_parser("warm", help="preload a model so the first prompt is fast")
@@ -3222,8 +4409,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     skills = sub.add_parser("skills", help="list or install the curated skill library")
     skills.add_argument(
-        "action", nargs="?", default="list", choices=("list", "install"), help="default: list"
+        "action",
+        nargs="?",
+        default="list",
+        choices=("list", "install", "search"),
+        help="default: list",
     )
+    skills.add_argument("query", nargs="?", default=None, help="words to search for")
     skills.add_argument(
         "--target",
         default="all",
@@ -3235,6 +4427,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skills.add_argument("--name", action="append", default=[], help="install only these names")
     skills.add_argument("--dry-run", action="store_true")
+    skills.add_argument("--limit", type=int, default=30)
 
     skill = sub.add_parser("skill", help="show or run a saved skill prompt")
     skill.add_argument("name", nargs="?", default=None)
@@ -3265,9 +4458,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show the model, eviction and command without launching",
     )
+    launch.add_argument(
+        "--cloud",
+        action="store_true",
+        help="codex or claude: use the real subscription (prompts leave this Mac)",
+    )
     sub.add_parser("pull-recommended", help="pull qwen2.5-coder:14b")
     sub.add_parser("init", help="create config/data directories and default config")
 
+    localbar = sub.add_parser("local-bar", help="macOS menu bar controller for the local stack")
+    localbar.add_argument("--install", action="store_true", help="compile/install the app")
+    localbar.add_argument("--open", action="store_true", help="open the menu bar app")
+    localbar.add_argument("--status", action="store_true", help="show whether it is running")
+    chat_web = sub.add_parser("chat-web", help="fully local ChatGPT-style web client (127.0.0.1)")
+    chat_web.add_argument("--port", type=int, default=4020)
+    chat_web.add_argument("--start", action="store_true", help="start in the background")
+    chat_web.add_argument("--stop", action="store_true", help="stop the background server")
+    chat_web.add_argument("--status", action="store_true", help="show the URL/status")
+    chat_web.add_argument("--open", action="store_true", help="open in the browser")
+    chat_web.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
+    chat_web.add_argument(
+        "--install-app", action="store_true", help="create ~/Applications/ChatGPT Local.app"
+    )
     chat = sub.add_parser("chat", help="open the dashboard in chat mode")
     chat.add_argument("--model", default=None)
 
@@ -3301,6 +4513,46 @@ def main(argv: list[str] | None = None) -> int:
 
         SovereignApp(settings=settings).run()
         return 0
+    if command == "local-bar":
+        from . import localbar
+
+        if args.status:
+            console.print(
+                f"Sovereign Local {'[green]running[/]' if localbar.running() else '[dim]stopped[/]'}"
+            )
+            return 0 if localbar.running() else 1
+        if args.install:
+            console.print(f"[green]Installed[/] {localbar.install()}")
+        if args.open or not args.install:
+            localbar.open_app()
+            console.print(f"[green]Sovereign Local[/] {localbar.app_path()}")
+        return 0
+    if command == "chat-web":
+        from . import webchat
+
+        if args.stop:
+            return 0 if webchat.stop(args.port) else 1
+        if args.status:
+            up = webchat.port_open("127.0.0.1", args.port)
+            console.print(
+                f"ChatGPT Local  {'[green]running[/]' if up else '[dim]stopped[/]'}  "
+                f"http://127.0.0.1:{args.port}"
+            )
+            return 0 if up else 1
+        if args.serve:
+            webchat.serve(args.port, settings.router_url)
+            return 0
+        if args.install_app:
+            app = webchat.install_app(args.port)
+            console.print(f"[green]Installed[/] {app}")
+        ok = webchat.ensure_running(args.port, settings.router_url)
+        if not ok:
+            console.print("[red]ChatGPT Local did not start.[/] See: sovereign logs webchat")
+            return 1
+        console.print(f"[green]ChatGPT Local[/] http://127.0.0.1:{args.port}")
+        if args.open or not args.start:
+            webchat.open_browser(args.port)
+        return 0
     if command == "chat":
         from .tui.app import SovereignApp
 
@@ -3309,7 +4561,10 @@ def main(argv: list[str] | None = None) -> int:
         SovereignApp(settings=settings, mode="chat").run()
         return 0
     if command == "status":
-        _status(_snapshot(settings))
+        snapshot = _snapshot(settings)
+        if args.json:
+            return _status_json(snapshot)
+        _status(snapshot)
         return 0
     if command == "models":
         snap = _snapshot(settings)
@@ -3358,6 +4613,32 @@ def main(argv: list[str] | None = None) -> int:
             stop=args.stop,
             status=args.status,
         )
+    if command == "router":
+        return _router(
+            args.host,
+            args.port,
+            args.ollama,
+            args.upstream,
+            start=args.start,
+            stop=args.stop,
+            status=args.status,
+            stats=args.stats,
+            restart=args.restart,
+        )
+    if command == "local":
+        return _local(fix=args.fix, strict=args.strict, as_json=args.json)
+    if command == "claude":
+        return _claude(restart=args.restart, fix=args.fix, local=args.local, cloud=args.cloud)
+    if command == "chatgpt":
+        if args.verify:
+            return _chatgpt_verify()
+        return _chatgpt(
+            restart=args.restart,
+            fix=args.fix,
+            local=args.local,
+            cloud=args.cloud,
+            repair=args.repair,
+        )
     if command == "mcp":
         from .mcp import serve
 
@@ -3380,11 +4661,29 @@ def main(argv: list[str] | None = None) -> int:
             yolo=args.yolo,
             dry_run=args.dry_run,
             model=args.model,
+            cloud=getattr(args, "cloud", False),
         )
     if command == "best":
         return _best(_snapshot(settings))
     if command == "watchdog":
         return _watchdog(settings, restart=not args.no_restart, interval=args.interval)
+    if command == "guardian":
+        return _guardian(
+            settings,
+            status_only=args.status,
+            watch=args.watch,
+            interval=args.interval,
+            as_json=args.json,
+        )
+    if command == "autostart":
+        return _autostart(
+            settings,
+            install=args.install,
+            uninstall=args.uninstall,
+            repair=args.repair,
+            restart=args.restart,
+            as_json=args.json,
+        )
     if command == "prune":
         return _prune(_snapshot(settings), apply=args.apply)
     if command == "warm":
@@ -3476,6 +4775,8 @@ def main(argv: list[str] | None = None) -> int:
             include_all=args.include_all,
             names=args.name,
             dry_run=args.dry_run,
+            query=args.query,
+            limit=args.limit,
         )
     if command == "skill":
         return _skill(settings, args.name, args.prompt, args.model, args.tokens)

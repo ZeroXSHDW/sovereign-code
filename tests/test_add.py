@@ -7,6 +7,7 @@ def test_add():
     assert add(0, 0) == 0
     assert add(100, 200) == 300
 
+
 if __name__ == "__main__":
     test_add()
     print("Tests passed!")

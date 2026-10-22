@@ -62,3 +62,39 @@ def render_skill(name: str, user_input: str) -> str:
     if template is None:
         raise KeyError(name)
     return template.replace("{{prompt}}", user_input)
+
+
+def search_skills(query: str, limit: int = 30) -> list[tuple[str, str]]:
+    """Search names and the first screen of every skill in both directories."""
+    terms = [term.lower() for term in query.split() if term.strip()]
+    if not terms:
+        return []
+    matches: list[tuple[int, str, str]] = []
+    for directory in _skill_dirs():
+        if not directory.is_dir():
+            continue
+        for path in directory.glob("*.md"):
+            name = path.stem
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")[:4000]
+            except OSError:
+                continue
+            description = ""
+            for line in text.splitlines():
+                if line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    break
+                if line.startswith("# "):
+                    description = line[2:].strip()
+                    break
+            haystack = f"{name}\n{description}\n{text}".lower()
+            if not all(term in haystack for term in terms):
+                continue
+            score = 0
+            if all(term in name.lower() for term in terms):
+                score += 10
+            if all(term in description.lower() for term in terms):
+                score += 5
+            matches.append((-score, name, description))
+    matches.sort()
+    return [(name, description) for _score, name, description in matches[: max(1, limit)]]

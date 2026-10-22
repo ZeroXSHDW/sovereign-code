@@ -67,9 +67,7 @@ def test_context_shrinks_when_memory_is_tight():
 def test_context_never_exceeds_the_model_limit():
     views = _views("qwen2.5-coder:14b")
     view = views["qwen2.5-coder:14b"]
-    assert context_for(view, 64.0, max_context=32768) <= min(
-        CATALOG[view.tag].max_context, 32768
-    )
+    assert context_for(view, 64.0, max_context=32768) <= min(CATALOG[view.tag].max_context, 32768)
 
 
 def test_preferred_tags_exist_in_the_catalog():

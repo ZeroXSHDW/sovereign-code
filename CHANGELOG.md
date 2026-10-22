@@ -11,6 +11,12 @@ All notable changes to Sovereign Code.
   file-selective, resumable downloads through the `hf` CLI. MCP adds
   `hf_status`, `search_hf_models`, and `hf_model_info`; the `sovereign-huggingface`
   skill documents the workflow and the on-disk layout.
+- **Live monitor v2**: a health verdict with reasons, five-minute RAM/load/VRAM
+  sparklines, model inventory with resident and potential-free memory, aggregate
+  gateway throughput (tokens, p50/p95 latency, tool calls, streams, requests per
+  minute), `p` pause, `y` copy, `--json`, and `--demo` for deterministic
+  screenshots. The skill/prompt cards now size correctly so live projects and
+  activity are visible without scrolling through blank space.
 
 ## [0.3.0] - 2026-10-22
 

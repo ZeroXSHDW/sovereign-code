@@ -5253,34 +5253,6 @@ def build_parser() -> argparse.ArgumentParser:
         "harness", help="show which model serves which job, plus live downloads and runs"
     )
     orchestrate = sub.add_parser(
-        "orchestrate", help="route a coding task across planner, implementer, reviewer"
-    )
-    orchestrate.add_argument("prompt", help="task to implement")
-    orchestrate.add_argument("--dir", default=".", help="project directory")
-    orchestrate.add_argument("--plan-model", default=None)
-    orchestrate.add_argument("--agent", default=None)
-    orchestrate.add_argument("--review-model", default=None)
-    orchestrate.add_argument("--fix-model", default=None)
-    orchestrate.add_argument(
-        "--agent-client", default="qwen", choices=("qwen", "codex", "claude", "opencode")
-    )
-    orchestrate.add_argument("--tokens", type=int, default=8192)
-    orchestrate.add_argument("--review-tokens", type=int, default=4096)
-    orchestrate.add_argument("--max-fixes", type=int, default=2)
-    orchestrate.add_argument("--timeout", type=int, default=120)
-    orchestrate.add_argument("--agent-timeout", type=int, default=300)
-    orchestrate.add_argument("--no-review", action="store_true")
-    orchestrate.add_argument("--checks", action="store_true")
-    orchestrate.add_argument("--no-verify", action="store_true")
-    orchestrate.add_argument("--dry-run", action="store_true")
-    orchestrate.add_argument("--mode", default="implement", choices=("implement", "plan", "review"))
-    orchestrate.add_argument("--direct-tokens", type=int, default=0)
-    orchestrate.add_argument("--yes", "-y", action="store_true")
-    sub.add_parser(
-        "harness", help="show which model serves which job, plus downloads and recent runs"
-    )
-
-    orchestrate = sub.add_parser(
         "orchestrate", help="hand a coding task to a small fixer and larger workers"
     )
     orchestrate.add_argument("prompt")

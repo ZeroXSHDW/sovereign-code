@@ -67,11 +67,23 @@ Everything the system owns lives in `~/Documents/local-ai`:
 | `F5` / `r` | refresh the live report now |
 | `F6` | open Claude Code against the local gateway |
 | `F9` / `f` | unload every resident model (free RAM) |
+| `p` | pause or resume the 5-second refresh |
+| `y` | copy the current snapshot to the clipboard |
 | `Ctrl+Q` | quit |
 
+The monitor also shows a health verdict with the reasons behind it, five-minute
+sparklines for RAM/load/resident GPU memory, model inventory, and aggregate
+gateway throughput (requests, tokens, p50/p95 latency, tool calls, and streams).
 The login monitor is read-only: no chat prompt, no slash commands, no model
 load, and no background guardian tick. Use `sovereign chat` when you want a
 conversation and `sovereign code` when you want the coding agent.
+
+For scripts and screenshots:
+
+```sh
+sovereign monitor --json            # one machine-readable report
+sovereign monitor --demo            # deterministic UI for screenshots/tests
+```
 
 `workspace` lives in `~/Documents/local-ai/config/sovereign/config.toml` and defaults to
 `~/Documents`; `sovereign code /path/to/repo` overrides it for one session.

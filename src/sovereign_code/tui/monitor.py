@@ -35,21 +35,9 @@ from ..status import Snapshot, collect
 REFRESH_SECONDS = 5.0
 
 HELP_TEXT = """\
-Live monitor keys
-
-F5 / r    refresh now
-p         pause or resume live refresh
-y         copy the current snapshot to the clipboard
-F9 / f    unload every resident model (free RAM)
-F2        open Qwen Code in the workspace
-F4        open the local Codex / ChatGPT profile
-F6        open Claude Code against the local gateway
-Ctrl+Q    quit
-
-This dashboard is read-only. It does not chat, does not load a model, and does
-not keep any service alive in the background. Sparklines cover the last five
-minutes. For a chat turn, run `sovereign chat`; for coding, press F2 or run
-`sovereign code`.
+F5/r refresh   p pause   y copy snapshot   F9/f free RAM
+F2 Qwen Code   F4 Codex   F6 Claude   Ctrl+Q quit
+Read-only: no chat, no model load, no service restarts. Sparklines cover 5 min.
 """
 
 
@@ -66,7 +54,7 @@ class MonitorApp(App[None]):
         Binding("f9", "free", "Free RAM"),
         Binding("r", "refresh", "Refresh", show=False),
         Binding("f", "free", "Free RAM", show=False),
-        Binding("p", "pause", "Pause", show=False),
+        Binding("p", "pause", "Pause"),
         Binding("y", "copy", "Copy", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]

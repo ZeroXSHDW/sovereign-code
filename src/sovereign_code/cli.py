@@ -612,6 +612,7 @@ def _setup(
     login: bool = True,
     migrate: bool = True,
     dry_run: bool = False,
+    open_monitor: bool = False,
 ) -> int:
     from . import setup as setup_mod
 
@@ -634,6 +635,10 @@ def _setup(
         return 1
     for line in setup_mod.ready_summary(settings):
         console.print(line)
+    if open_monitor:
+        from .tui.monitor import MonitorApp
+
+        MonitorApp(settings=settings).run()
     return 0
 
 
@@ -4407,6 +4412,8 @@ def _pipeline(
     )
     if fix_model:
         console.print(f"[dim]Small repair model:[/] {fix_model}")
+    from .harness import RunRecorder
+
     recorder = RunRecorder(prompt, str(target))
     recorder.start()
 
@@ -4474,6 +4481,128 @@ def _pipeline(
         f"{len(result.stages)} stages · [dim]{run_dir}[/]"
     )
     return 0 if result.succeeded else 1
+
+
+def _harness(settings: Settings) -> int:
+    """Show which model serves which job, plus live downloads and runs."""
+    from .harness import plan_roles, recent_downloads, recent_runs
+
+    snap = _snapshot(settings)
+    roles = plan_roles(snap.views, snap.potential_free_gb, settings.max_context)
+    title = Text("Sovereign runtime harness", style="bold")
+    title.append(f"  ·  {LOCAL_AI_ROOT}", style="dim")
+    console.print(Panel(title, border_style="#b794f4"))
+
+    table = Table(header_style="bold #b794f4", expand=True)
+    table.add_column("Job", style="bold")
+    table.add_column("Tier")
+    table.add_column("Model", style="cyan")
+    table.add_column("Context", justify="right")
+    table.add_column("Size", justify="right")
+    table.add_column("Why")
+    for role in roles:
+        table.add_row(
+            role.label,
+            role.tier,
+            role.tag,
+            str(role.context or "—"),
+            f"{role.size_gb:.1f}G" if role.size_gb else "—",
+            role.reason,
+        )
+    console.print(table)
+
+    if snap.loaded:
+        loaded = ", ".join(f"{view.tag} ({view.context or '?'} ctx)" for view in snap.loaded)
+        console.print(f"[green]Resident[/] {loaded}")
+    else:
+        console.print("[dim]No model resident — RAM is free.[/]")
+
+    downloads = recent_downloads(4)
+    if downloads:
+        console.print("[bold]Downloads[/]")
+        for item in downloads:
+            console.print(f"  {item.tag:<28} {item.source:<10} {item.state}")
+
+    runs = recent_runs(5)
+    if runs:
+        console.print("[bold]Recent orchestrations[/]")
+        run_table = Table(header_style="bold #b794f4")
+        run_table.add_column("When")
+        run_table.add_column("Status")
+        run_table.add_column("Stage")
+        run_table.add_column("Model", style="cyan")
+        run_table.add_column("Work")
+        for run in runs:
+            style = (
+                "green"
+                if run.status == "complete"
+                else ("red" if run.status == "failed" else "yellow")
+            )
+            run_table.add_row(
+                run.age,
+                Text(run.status, style=style),
+                run.stage or "—",
+                run.model or "—",
+                run.label,
+            )
+        console.print(run_table)
+    else:
+        console.print(
+            '[dim]No orchestration runs yet — try:[/] sovereign orchestrate "fix the failing test"'
+        )
+
+    if not any(role.model for role in roles):
+        console.print("[yellow]No models installed.[/] Run: sovereign setup")
+    return 0
+
+
+def _orchestrate(settings: Settings, args) -> int:
+    """Route a coding task across a small repair model and larger workers."""
+    from .harness import plan_roles
+
+    snap = _snapshot(settings)
+    roles = {
+        role.key: role
+        for role in plan_roles(snap.views, snap.potential_free_gb, settings.max_context)
+    }
+    edit, plan, review, fix = roles["edit"], roles["plan"], roles["review"], roles["fix"]
+    if not edit.model and not args.agent:
+        console.print("[red]No local coding model is installed.[/]")
+        console.print("[dim]Run:[/] sovereign setup --yes --models recommended")
+        return 1
+
+    plan_model = args.plan_model or plan.model or edit.model
+    agent = args.agent or edit.model
+    review_model = args.review_model or review.model or edit.model
+    fix_model = args.fix_model or fix.model or agent
+
+    console.print(
+        f"[bold]Orchestrator[/] plan=[cyan]{plan_model}[/] · "
+        f"implement=[cyan]{agent}[/] · fix=[cyan]{fix_model}[/] · "
+        f"review=[cyan]{review_model}[/]"
+    )
+    return _pipeline(
+        settings,
+        args.prompt,
+        args.dir,
+        plan_model,
+        agent,
+        review_model,
+        args.yes,
+        args.no_review,
+        args.tokens,
+        checks=args.checks,
+        no_verify=args.no_verify,
+        max_fixes=args.max_fixes,
+        timeout=args.timeout,
+        review_tokens=args.review_tokens,
+        agent_client=args.agent_client,
+        agent_timeout=args.agent_timeout,
+        dry_run=args.dry_run,
+        mode=args.mode,
+        direct_tokens=args.direct_tokens,
+        fix_model=fix_model,
+    )
 
 
 def _install_clients() -> int:
@@ -4874,6 +5003,84 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--no-login", action="store_true", help="skip login agent")
     setup.add_argument("--no-migrate", action="store_true", help="skip legacy migration")
     setup.add_argument("--dry-run", action="store_true", help="show what would happen")
+    setup.add_argument("--open", action="store_true", help="open the live monitor when ready")
+    sub.add_parser(
+        "harness", help="show which model serves which job, plus live downloads and runs"
+    )
+    orchestrate = sub.add_parser(
+        "orchestrate", help="route a coding task across planner, implementer, reviewer"
+    )
+    orchestrate.add_argument("prompt", help="task to implement")
+    orchestrate.add_argument("--dir", default=".", help="project directory")
+    orchestrate.add_argument("--plan-model", default=None)
+    orchestrate.add_argument("--agent", default=None)
+    orchestrate.add_argument("--review-model", default=None)
+    orchestrate.add_argument("--fix-model", default=None)
+    orchestrate.add_argument(
+        "--agent-client", default="qwen", choices=("qwen", "codex", "claude", "opencode")
+    )
+    orchestrate.add_argument("--tokens", type=int, default=8192)
+    orchestrate.add_argument("--review-tokens", type=int, default=4096)
+    orchestrate.add_argument("--max-fixes", type=int, default=2)
+    orchestrate.add_argument("--timeout", type=int, default=120)
+    orchestrate.add_argument("--agent-timeout", type=int, default=300)
+    orchestrate.add_argument("--no-review", action="store_true")
+    orchestrate.add_argument("--checks", action="store_true")
+    orchestrate.add_argument("--no-verify", action="store_true")
+    orchestrate.add_argument("--dry-run", action="store_true")
+    orchestrate.add_argument("--mode", default="implement", choices=("implement", "plan", "review"))
+    orchestrate.add_argument("--direct-tokens", type=int, default=0)
+    orchestrate.add_argument("--yes", "-y", action="store_true")
+    sub.add_parser(
+        "harness", help="show which model serves which job, plus downloads and recent runs"
+    )
+
+    orchestrate = sub.add_parser(
+        "orchestrate", help="hand a coding task to a small fixer and larger workers"
+    )
+    orchestrate.add_argument("prompt")
+    orchestrate.add_argument("--dir", default=".")
+    orchestrate.add_argument("--plan-model", default=None, help="override the planner")
+    orchestrate.add_argument("--agent", default=None, help="override the implementer")
+    orchestrate.add_argument("--review-model", default=None, help="override the reviewer")
+    orchestrate.add_argument("--fix-model", default=None, help="override the small repair model")
+    orchestrate.add_argument("--yes", action="store_true", help="yolo-approve agent tool calls")
+    orchestrate.add_argument("--no-review", action="store_true")
+    orchestrate.add_argument("--tokens", type=int, default=700)
+    orchestrate.add_argument(
+        "--checks",
+        default=None,
+        help="semicolon-separated check commands (default: auto-detect from the project)",
+    )
+    orchestrate.add_argument("--no-verify", action="store_true", help="skip project checks")
+    orchestrate.add_argument(
+        "--max-fixes", type=int, default=1, help="repair rounds after a failed check"
+    )
+    orchestrate.add_argument("--timeout", type=float, default=900.0, help="per-check timeout")
+    orchestrate.add_argument(
+        "--dry-run", action="store_true", help="show the resolved models and checks only"
+    )
+    orchestrate.add_argument(
+        "--mode",
+        choices=("auto", "direct", "agent"),
+        default="auto",
+        help="direct = one request writes whole files; agent = CLI loop; auto = direct then agent",
+    )
+    orchestrate.add_argument(
+        "--direct-tokens", type=int, default=4000, help="output budget for direct mode"
+    )
+    orchestrate.add_argument(
+        "--review-tokens", type=int, default=1600, help="budget for the reviewer"
+    )
+    orchestrate.add_argument(
+        "--agent-client",
+        default="qwen",
+        choices=sorted(AGENT_CLIENTS),
+        help="which local coding client writes the code",
+    )
+    orchestrate.add_argument(
+        "--agent-timeout", type=float, default=900.0, help="timeout for one agent run"
+    )
     sub.add_parser("gateway-aliases", help="show which gateway aliases route to installed models")
 
     rm = sub.add_parser("rm", help="remove an installed model")
@@ -5793,7 +6000,12 @@ def main(argv: list[str] | None = None) -> int:
             login=not args.no_login,
             migrate=not args.no_migrate,
             dry_run=args.dry_run,
+            open_monitor=args.open,
         )
+    if command == "harness":
+        return _harness(settings)
+    if command == "orchestrate":
+        return _orchestrate(settings, args)
     if command == "gateway-aliases":
         return _gateway_aliases(settings, _snapshot(settings))
     if command == "rm":

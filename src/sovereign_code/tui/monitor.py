@@ -388,8 +388,7 @@ class MonitorApp(App[None]):
         self._render_status()
 
     def action_help(self) -> None:
-        self._notice = "see the read-only help panel below"
-        self._render_status()
+        self.push_screen(MonitorHelp())
 
     def _summary_text(self) -> str:
         report = self.report

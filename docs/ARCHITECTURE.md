@@ -8,6 +8,7 @@
 | `models.py` | Model catalog, `/api/tags` + `/api/ps` merge, display views |
 | `router.py` | Task→model priority, context fitting against free RAM, system prompts |
 | `ollama.py` | Async Ollama client, NDJSON streaming, pull progress |
+| `hf.py` | Hugging Face token storage, Hub search/inspection, resumable downloads |
 | `cloud.py` | Ollama Cloud readiness, enable/disable, alias rendering, provider routes, plan errors |
 | `bridge.py` | Anthropic Messages → streamed gateway completion → Anthropic SSE, so Claude Code shows text as it is generated and executes tools |
 | `tier_gateway.py` | Latency-aware OpenAI gateway: fast/balanced/deep/ultra routing, correct streamed tool calls, fallback, cache, metrics |

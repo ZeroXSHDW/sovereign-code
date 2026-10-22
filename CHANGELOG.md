@@ -4,6 +4,14 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+### Added
+- **Hugging Face Hub integration** (`sovereign hf`): secure token login in the
+  standard `~/.cache/huggingface/token` (mode 0600), public/private model
+  search, repository inspection with GGUF metadata and file sizes, and
+  file-selective, resumable downloads through the `hf` CLI. MCP adds
+  `hf_status`, `search_hf_models`, and `hf_model_info`; the `sovereign-huggingface`
+  skill documents the workflow and the on-disk layout.
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
@@ -126,6 +134,12 @@ All notable changes to Sovereign Code.
   it is cloud, and `sovereign local --fix` forces it local.
 
 ### Changed
+- **A stalled model can no longer hold the stack for ten minutes**:
+  non-streaming calls give each fallback model 300 s (`SOVEREIGN_REQUEST_TIMEOUT`)
+  and streaming calls fail after 180 s without a byte
+  (`SOVEREIGN_STREAM_IDLE_TIMEOUT`). The gateway emits a clear
+  `upstream_timeout` error and releases the single-resident lock, so the next
+  queued request can run instead of waiting behind a wedged model.
 - **The tier gateway listens before it warms**: the fast model used to load
   before the port opened, so every restart refused connections for up to a
   minute. The server binds first and warms the 4B in a background thread;

@@ -76,6 +76,39 @@ TOOLS: list[dict[str, Any]] = [
         ["name"],
     ),
     _tool(
+        "hf_status",
+        "Report whether Hugging Face is authenticated (never the token), where the "
+        "token, Hub cache, and downloads live, and whether the hf CLI is installed.",
+        {},
+    ),
+    _tool(
+        "search_hf_models",
+        "Search Hugging Face Hub models. Public search works without a token; a token "
+        "adds private and gated results. Use hf_model_info before downloading.",
+        {
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "default": 20},
+            "gguf_only": {"type": "boolean", "default": False},
+            "author": {"type": "string"},
+            "sort": {
+                "type": "string",
+                "enum": ["downloads", "likes", "last_modified", "created_at", "trending_score"],
+                "default": "downloads",
+            },
+        },
+        ["query"],
+    ),
+    _tool(
+        "hf_model_info",
+        "Inspect one Hugging Face model: gated status, storage, GGUF metadata, and "
+        "files. Set files=true to list every file.",
+        {
+            "repo_id": {"type": "string"},
+            "files": {"type": "boolean", "default": False},
+        },
+        ["repo_id"],
+    ),
+    _tool(
         "project_context",
         "Return the saved project memory and a short file index for a directory.",
         {"path": {"type": "string"}},
@@ -200,6 +233,45 @@ def list_skills_payload(query: str = "") -> list[dict[str, str]]:
     for skill in load_curated():
         rows.append({"name": skill.name, "description": skill.description})
     return rows
+
+
+def _hf_status_payload() -> dict[str, Any]:
+    from . import hf
+
+    status = hf.token_status(verify=False)
+    return {
+        "token": status.to_dict(),
+        "cli": {"path": hf.hf_cli_path() or "", "version": hf.hf_cli_version()},
+        "cache_dir": str(hf.hub_cache_dir()),
+        "download_dir": str(hf.DOWNLOAD_ROOT),
+    }
+
+
+def _hf_search_payload(
+    query: str,
+    limit: int,
+    gguf_only: bool,
+    author: str | None,
+    sort: str,
+) -> list[dict[str, Any]]:
+    from . import hf
+
+    rows = hf.search_models(
+        query,
+        limit=limit,
+        gguf_only=gguf_only,
+        author=author,
+        sort=sort,
+        token=hf.resolve_token()[0] or None,
+    )
+    return [row.to_dict() for row in rows]
+
+
+def _hf_info_payload(repo_id: str, include_files: bool) -> dict[str, Any]:
+    from . import hf
+
+    info = hf.info_model(repo_id, token=hf.resolve_token()[0] or None)
+    return info.to_dict(include_files=include_files)
 
 
 def _models_payload() -> dict[str, Any]:
@@ -519,6 +591,25 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         if skill is None:
             raise ValueError(f"unknown skill: {wanted}")
         return skill.body
+    if name == "hf_status":
+        return _text(_hf_status_payload())
+    if name == "search_hf_models":
+        return _text(
+            _hf_search_payload(
+                str(args.get("query") or ""),
+                int(args.get("limit") or 20),
+                bool(args.get("gguf_only", False)),
+                str(args.get("author") or "") or None,
+                str(args.get("sort") or "downloads"),
+            )
+        )
+    if name == "hf_model_info":
+        return _text(
+            _hf_info_payload(
+                str(args.get("repo_id") or ""),
+                bool(args.get("files", False)),
+            )
+        )
     if name == "project_context":
         return _project_context(str(args.get("path") or "."))
     if name == "local_status":
@@ -648,8 +739,10 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "list_skills/get_skill for workflows, run_checks to verify, and "
                     "delegate to run a real local Codex/Claude agent on a project "
                     "(read-only unless write=true). Browser control is available via "
-                    "browser_open/observe/act/screenshot/close. Do not claim a local "
-                    "model ran if ask fails."
+                    "browser_open/observe/act/screenshot/close. Use hf_status and "
+                    "search_hf_models/hf_model_info to discover Hugging Face models; "
+                    "downloads are an explicit CLI action (`sovereign hf download`). "
+                    "Do not claim a local model ran if ask fails."
                 ),
             }
         elif method == "ping":

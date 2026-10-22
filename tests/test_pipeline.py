@@ -107,3 +107,30 @@ def test_verification_is_skipped_when_implementation_failed() -> None:
 
     result = run_pipeline("x", _plan, failing_implement, None, verify=verify)
     assert [s.name for s in result.stages] == ["plan", "implement"]
+
+
+def test_on_stage_reports_results_as_they_finish() -> None:
+    seen: list[str] = []
+
+    def verify() -> tuple[bool, str]:
+        return True, "ok"
+
+    result = run_pipeline(
+        "x",
+        _plan,
+        _implement,
+        lambda plan_text, implementation: "review",
+        verify=verify,
+        on_stage=lambda stage: seen.append(stage.name),
+    )
+    assert seen == ["plan", "implement", "verify", "review"]
+    assert [stage.name for stage in result.stages] == seen
+
+
+def test_on_stage_failure_does_not_abort_the_run() -> None:
+    def explode(stage) -> None:
+        raise RuntimeError("monitor went away")
+
+    result = run_pipeline("x", _plan, _implement, on_stage=explode)
+    assert result.succeeded
+    assert [stage.name for stage in result.stages] == ["plan", "implement"]

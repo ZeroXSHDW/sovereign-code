@@ -104,7 +104,7 @@ from .sessions import (
 )
 from .skilldb import SkillDB
 from .skills import list_skills, read_skill, render_skill
-from .stats import collect_stats, dir_size, human_size
+from .stats import collect_stats, human_size
 from .status import Snapshot, collect
 from .summarize import SourceError, complete, read_text_source, summarize_text
 from .system import (
@@ -3523,8 +3523,8 @@ def _hf_status(args, hub) -> int:
     status = hub.token_status(verify=not args.no_verify)
     cache = hub.hub_cache_dir()
     downloads = hub.DOWNLOAD_ROOT
-    cache_bytes = dir_size(cache) if cache.is_dir() else 0
-    download_bytes = dir_size(downloads) if downloads.is_dir() else 0
+    cache_bytes = hub.directory_size(cache) if cache.is_dir() else 0
+    download_bytes = hub.directory_size(downloads) if downloads.is_dir() else 0
     payload = {
         "token": status.to_dict(),
         "cli": {"path": hub.hf_cli_path() or "", "version": hub.hf_cli_version()},
@@ -3567,7 +3567,9 @@ def _hf_status(args, hub) -> int:
     table.add_row("Disk free", f"{disk_free_gb():.1f} GB")
     console.print(table)
     if not status.present:
-        console.print("[dim]Public search works without a token. Log in for gated/private models:[/]")
+        console.print(
+            "[dim]Public search works without a token. Log in for gated/private models:[/]"
+        )
         console.print("  sovereign hf login")
     elif status.error:
         console.print("[dim]Replace the token with:[/] sovereign hf login")
@@ -3593,9 +3595,7 @@ def _hf_login(args, hub) -> int:
         token = getpass.getpass("Hugging Face token (hidden, not echoed): ")
     status = hub.save_token(token, verify=not args.no_verify)
     if status.verified:
-        console.print(
-            f"[green]Logged in[/] as {status.account or 'Hugging Face account'}"
-        )
+        console.print(f"[green]Logged in[/] as {status.account or 'Hugging Face account'}")
     else:
         console.print("[green]Token saved[/] (not verified)")
     console.print(f"[dim]Stored in[/] {status.path} [dim]mode 0600[/]")
@@ -3641,7 +3641,7 @@ def _hf_search(args, hub) -> int:
         console.print(f"[yellow]No models match[/] {query!r}")
         return 1
     table = Table(title=f"Hugging Face models · {query!r}", header_style="bold #b794f4")
-    table.add_column("Model", style="bold")
+    table.add_column("Model", style="bold", overflow="fold")
     table.add_column("Downloads", justify="right")
     table.add_column("Likes", justify="right")
     table.add_column("Updated")
@@ -3672,9 +3672,10 @@ def _hf_info(args, hub) -> int:
         print(json.dumps(info.to_dict(), indent=2, default=str))
         return 0
 
-    table = Table(title=f"Hugging Face · {info.id}", header_style="bold #b794f4", box=None)
+    table = Table(title="Hugging Face model", header_style="bold #b794f4", box=None)
     table.add_column("Field", style="bold #8a8aa0")
-    table.add_column("Value")
+    table.add_column("Value", overflow="fold")
+    table.add_row("Repository", info.id)
     table.add_row("Downloads", f"{info.downloads:,}")
     table.add_row("Likes", f"{info.likes:,}")
     table.add_row("Pipeline", info.pipeline_tag or "-")
@@ -3703,8 +3704,7 @@ def _hf_info(args, hub) -> int:
             limit=None if args.files else 15,
         )
     console.print(
-        "[dim]Download a subset:[/] sovereign hf download "
-        f"{info.id} --include \"*Q4_K_M.gguf\""
+        f'[dim]Download a subset:[/] sovereign hf download {info.id} --include "*Q4_K_M.gguf"'
     )
     return 0
 
@@ -3760,10 +3760,7 @@ def _hf_download(args, hub) -> int:
             "[yellow]Pick files explicitly.[/] Add --include PATTERN (repeatable) "
             "or --all for the whole repository."
         )
-        console.print(
-            "[dim]Example:[/] sovereign hf download "
-            f"{repo} --include \"*Q4_K_M.gguf\""
-        )
+        console.print(f'[dim]Example:[/] sovereign hf download {repo} --include "*Q4_K_M.gguf"')
         return 1
 
     selected = _hf_selected_files(info, args.include, args.download_all) if info else []
@@ -3771,9 +3768,7 @@ def _hf_download(args, hub) -> int:
         raise hub.HFError("no files matched the include patterns; check `sovereign hf info`")
     total = sum(item.size for item in selected)
     if info is not None:
-        console.print(
-            f"[dim]Selected[/] {len(selected)} file(s), {human_size(total)}"
-        )
+        console.print(f"[dim]Selected[/] {len(selected)} file(s), {human_size(total)}")
         if total > 20 * 1024**3 and not args.yes:
             if not sys.stdin.isatty():
                 raise hub.HFError("large download; re-run with --yes to confirm")
@@ -3783,9 +3778,7 @@ def _hf_download(args, hub) -> int:
                 return 1
 
     destination = (
-        Path(args.local_dir).expanduser()
-        if args.local_dir
-        else hub.default_download_dir(repo)
+        Path(args.local_dir).expanduser() if args.local_dir else hub.default_download_dir(repo)
     )
     command = hub.build_download_command(
         repo,
@@ -3831,7 +3824,7 @@ def _hf_list(args, hub) -> int:
         return 0
     table = Table(title="Local Hugging Face models", header_style="bold #b794f4")
     table.add_column("Kind")
-    table.add_column("Repository", style="bold")
+    table.add_column("Repository", style="bold", overflow="fold")
     table.add_column("Size", justify="right")
     table.add_column("Modified")
     table.add_column("Path", overflow="fold")
@@ -3844,8 +3837,10 @@ def _hf_list(args, hub) -> int:
             str(row.path),
         )
     console.print(table)
-    console.print(f"[dim]{len(rows)} entr{'y' if len(rows) == 1 else 'ies'} · "
-                  f"total {human_size(sum(row.bytes for row in rows))}[/]")
+    console.print(
+        f"[dim]{len(rows)} entr{'y' if len(rows) == 1 else 'ies'} · "
+        f"total {human_size(sum(row.bytes for row in rows))}[/]"
+    )
     return 0
 
 
@@ -4794,6 +4789,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="show which domain a prompt would be routed to",
     )
 
+    hf = sub.add_parser("hf", help="Hugging Face Hub: login, search, inspect, download")
+    hf.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("status", "login", "logout", "search", "info", "download", "list"),
+        help="default: status",
+    )
+    hf.add_argument("target", nargs="?", default=None, help="search query or repository id")
+    hf.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="read the token from stdin instead of a hidden prompt",
+    )
+    hf.add_argument("--browser", action="store_true", help="use `hf auth login` browser flow")
+    hf.add_argument("--no-verify", action="store_true", help="skip the whoami token check")
+    hf.add_argument("--gguf", action="store_true", help="only show GGUF repositories")
+    hf.add_argument("--author", default=None, help="filter by organization or user")
+    hf.add_argument(
+        "--sort",
+        default="downloads",
+        choices=("downloads", "likes", "last_modified", "created_at", "trending_score"),
+    )
+    hf.add_argument("--limit", type=int, default=20, help="search results (max 100)")
+    hf.add_argument("--include", action="append", default=[], help="file glob to download")
+    hf.add_argument(
+        "--all",
+        dest="download_all",
+        action="store_true",
+        help="download every file in the repository",
+    )
+    hf.add_argument("--revision", default=None, help="branch, tag, or commit")
+    hf.add_argument("--local-dir", default=None, help="destination (default: local-ai/models)")
+    hf.add_argument("--cache-dir", default=None, help="override the Hub cache")
+    hf.add_argument("--dry-run", action="store_true", help="show the download command only")
+    hf.add_argument("--files", action="store_true", help="info: list every file")
+    hf.add_argument("--yes", action="store_true", help="skip the large-download confirmation")
+    hf.add_argument("--json", action="store_true")
+
     skills = sub.add_parser("skills", help="list or install the curated skill library")
     skills.add_argument(
         "action",
@@ -5643,6 +5677,8 @@ def main(argv: list[str] | None = None) -> int:
         return _consult(settings, args.prompt, models, args.tokens, args.domain)
     if command == "domains":
         return _domains(args.detect)
+    if command == "hf":
+        return _hf(args)
     if command == "skills":
         return _skills(
             settings,

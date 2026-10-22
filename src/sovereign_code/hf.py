@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,7 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import LOCAL_AI_ROOT
-from .stats import dir_size, human_size
+from .stats import human_size
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
 DOWNLOAD_ROOT = LOCAL_AI_ROOT / "models" / "huggingface"
@@ -574,6 +575,28 @@ def download_model(
     return destination, command
 
 
+def directory_size(path: Path) -> int:
+    """Bytes in ``path`` without counting symlinked snapshot files twice.
+
+    Hugging Face keeps the real LFS blobs in ``blobs/`` and exposes them as
+    symlinks under ``snapshots/``. ``Path.stat()`` follows those links, which
+    made the cache look twice as large. ``lstat`` plus ``followlinks=False``
+    counts the bytes that actually occupy the disk.
+    """
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path, followlinks=False):
+        for name in filenames:
+            file_path = Path(dirpath) / name
+            try:
+                info = file_path.lstat()
+            except OSError:
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            total += info.st_size
+    return total
+
+
 def local_models() -> list[LocalHFModel]:
     """List visible downloads and the standard Hub cache, largest last."""
     rows: list[LocalHFModel] = []
@@ -601,6 +624,6 @@ def _local_row(path: Path, repo_id: str, kind: str) -> LocalHFModel:
         repo_id=repo_id,
         path=path,
         kind=kind,
-        bytes=dir_size(path),
+        bytes=directory_size(path),
         modified=modified,
     )

@@ -39,6 +39,29 @@ DEFAULT_PORT = 4010
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 DEFAULT_UPSTREAM = "http://127.0.0.1:4000"
 
+# A wedged model used to hold the single-resident lock for ten minutes. These
+# bounds turn "looks hung" into either a fallback model or an explicit error.
+DEFAULT_REQUEST_TIMEOUT = 300.0
+DEFAULT_STREAM_IDLE_TIMEOUT = 180.0
+
+
+def _seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def request_timeout() -> float:
+    """Total time one non-streaming model may take before the next is tried."""
+    return _seconds("SOVEREIGN_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
+
+
+def stream_idle_timeout() -> float:
+    """How long a stream may produce no bytes before it is treated as stuck."""
+    return _seconds("SOVEREIGN_STREAM_IDLE_TIMEOUT", DEFAULT_STREAM_IDLE_TIMEOUT)
+
 
 def local_only() -> bool:
     """Local-only is the default; set SOVEREIGN_LOCAL_ONLY=0 to allow cloud."""
@@ -1688,7 +1711,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(b": sovereign\n\n")
             self.wfile.write(_chunk(route.model, {"role": "assistant", "content": ""}, cid=cid))
             self.wfile.flush()
-            with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
+            with httpx.Client(timeout=httpx.Timeout(stream_idle_timeout(), connect=5)) as client:
                 with client.stream(
                     "POST", f"{self.ollama.rstrip('/')}/api/chat", json=payload
                 ) as response:
@@ -1756,6 +1779,21 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except httpx.HTTPError as exc:
+            # The read timeout is per byte, so this is a stalled model rather
+            # than a slow prefill: say so and release the model lock instead of
+            # leaving the client and every queued request waiting.
+            message = (
+                f"model stalled with no output for {stream_idle_timeout():.0f}s "
+                f"({type(exc).__name__})"
+            )
+            try:
+                error = {"error": {"message": message, "type": "upstream_timeout"}}
+                self.wfile.write(f"data: {json.dumps(error)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         finally:
             _MODEL_LOCK.release()
             log_metric(
@@ -1801,7 +1839,7 @@ class _Handler(BaseHTTPRequestHandler):
                 response = httpx.post(
                     f"{self.ollama.rstrip('/')}/api/chat",
                     json=payload,
-                    timeout=httpx.Timeout(600, connect=5),
+                    timeout=httpx.Timeout(request_timeout(), connect=5),
                 )
                 if response.status_code >= 400:
                     last_error = response.text[:500]
@@ -1898,7 +1936,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._cors()
                 self.close_connection = True
                 self.end_headers()
-                with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
+                with httpx.Client(
+                    timeout=httpx.Timeout(stream_idle_timeout(), connect=5)
+                ) as client:
                     with client.stream(
                         "POST",
                         f"{self.upstream.rstrip('/')}/v1/chat/completions",
@@ -1916,7 +1956,7 @@ class _Handler(BaseHTTPRequestHandler):
                     f"{self.upstream.rstrip('/')}/v1/chat/completions",
                     headers=headers,
                     json=request,
-                    timeout=httpx.Timeout(600, connect=5),
+                    timeout=httpx.Timeout(request_timeout(), connect=5),
                 )
                 self.send_response(response.status_code)
                 self.send_header("Content-Type", "application/json")
@@ -1965,7 +2005,9 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
+                with httpx.Client(
+                    timeout=httpx.Timeout(stream_idle_timeout(), connect=5)
+                ) as client:
                     with client.stream("POST", target, json=chat) as result:
                         if result.status_code != 200:
                             body = result.read().decode("utf-8", "replace")[:400]
@@ -2002,7 +2044,7 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            with httpx.Client(timeout=httpx.Timeout(600, connect=5)) as client:
+            with httpx.Client(timeout=httpx.Timeout(request_timeout(), connect=5)) as client:
                 result = client.post(target, json=chat)
             if result.status_code != 200:
                 raise RuntimeError(result.text[:400])

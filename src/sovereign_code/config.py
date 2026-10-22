@@ -24,14 +24,6 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-CONFIG_DIR = _env_path(
-    "SOVEREIGN_CONFIG_DIR", _home() / "Documents" / "local-ai" / "config" / "sovereign"
-)
-DATA_DIR = _env_path("SOVEREIGN_DATA_DIR", _home() / "Documents" / "local-ai" / "data")
-SESSIONS_DIR = DATA_DIR / "sessions"
-LOG_DIR = DATA_DIR / "logs"
-
-
 def find_project_root() -> Path:
     """Locate the checkout (works for editable installs and source runs)."""
     env = os.environ.get("SOVEREIGN_PROJECT_ROOT")
@@ -52,7 +44,30 @@ def find_project_root() -> Path:
 
 
 PROJECT_ROOT = find_project_root()
-LOCAL_AI_ROOT = Path.home() / "Documents" / "local-ai"
+# The checkout owns its runtime by default: one folder contains the code, the
+# gateway, the model catalog, sessions and logs. An older install under
+# ~/Documents/local-ai is still honoured until `sovereign setup` moves it in,
+# so upgrading does not strand a working stack (or 90 GB of model weights).
+RUNTIME_ROOT = PROJECT_ROOT / "runtime"
+LEGACY_LOCAL_AI_ROOT = _home() / "Documents" / "local-ai"
+
+
+def _runtime_root() -> Path:
+    value = os.environ.get("SOVEREIGN_HOME")
+    if value:
+        return Path(value).expanduser()
+    if RUNTIME_ROOT.is_dir():
+        return RUNTIME_ROOT
+    if LEGACY_LOCAL_AI_ROOT.is_dir():
+        return LEGACY_LOCAL_AI_ROOT
+    return RUNTIME_ROOT
+
+
+LOCAL_AI_ROOT = _runtime_root()
+CONFIG_DIR = _env_path("SOVEREIGN_CONFIG_DIR", LOCAL_AI_ROOT / "config" / "sovereign")
+DATA_DIR = _env_path("SOVEREIGN_DATA_DIR", LOCAL_AI_ROOT / "data")
+SESSIONS_DIR = DATA_DIR / "sessions"
+LOG_DIR = DATA_DIR / "logs"
 
 
 @dataclass
@@ -202,7 +217,17 @@ def _toml_value(value: str | None) -> str:
 
 
 def ensure_layout() -> None:
-    for directory in (CONFIG_DIR, DATA_DIR, SESSIONS_DIR, LOG_DIR):
+    for directory in (
+        CONFIG_DIR,
+        DATA_DIR,
+        SESSIONS_DIR,
+        LOG_DIR,
+        DATA_DIR / "runs",
+        LOCAL_AI_ROOT / "gateway",
+        LOCAL_AI_ROOT / "bin",
+        LOCAL_AI_ROOT / "models",
+        LOCAL_AI_ROOT / "config" / "skills",
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
 

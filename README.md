@@ -631,6 +631,36 @@ Continue receives `~/.continue/prompts/<name>.prompt`. The project install also
 writes a shared index into `AGENTS.md`, `CLAUDE.md`, and `QWEN.md` between
 markers, so re-running updates it instead of duplicating it.
 
+### Hugging Face Hub
+
+The Hub is available without adding a second model manager. `sovereign hf`
+uses the standard Hugging Face token and cache, so logins and downloads are
+shared with `hf`, `transformers`, `vllm`, `mlx-lm`, and any other Hub client.
+
+```sh
+sovereign hf status                    # token, account, cache, download paths
+sovereign hf login                     # hidden prompt; stores the standard 0600 token
+pbpaste | sovereign hf login --token-stdin
+sovereign hf login --browser           # `hf auth login` OAuth flow
+sovereign hf search "qwen coder" --gguf --limit 10
+sovereign hf info Qwen/Qwen2.5-Coder-7B-Instruct-GGUF --files
+sovereign hf download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
+  --include "*Q4_K_M.gguf"
+sovereign hf list                      # downloads + Hub cache, with sizes
+```
+
+Downloads are file-selective by default; `--all` is required to take every
+file in a repository, and downloads over 20 GB ask for confirmation. The
+default destination is
+`~/Documents/local-ai/models/huggingface/<org>--<repo>`. Use `--local-dir` to
+change it, `--dry-run` to inspect the command, and `--revision` to pin a
+branch, tag, or commit. A GGUF can be imported into Ollama with
+`ollama create <name> -f <(printf 'FROM /path/model.gguf\n')`.
+
+The token is never written to `config.toml` or printed. `HF_TOKEN` takes
+precedence over the saved file when it is exported. Gated repositories still
+require accepting their licence on the model page.
+
 ### Model selection
 
 `sovereign clients` prints the auto-resolved pick per client.
@@ -666,6 +696,9 @@ sovereign setup-stack <name>       # pull stack + verify gateway aliases
 sovereign gateway-aliases          # show which aliases route to installed models
 sovereign rm <model>               # remove an installed model
 sovereign models --remote          # list downloadable models (--remote coder)
+sovereign hf status                # Hugging Face token, cache, and download paths
+sovereign hf search "qwen" --gguf  # search the Hub
+sovereign hf download ORG/REPO --include "*.gguf"
 sovereign consult "…"      # run one prompt across several models
 sovereign skills           # prompt templates + installed counts
 sovereign skills install --target all       # SKILL.md in every client

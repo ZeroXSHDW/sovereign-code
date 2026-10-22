@@ -32,7 +32,7 @@ _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS prompts (
         id           TEXT PRIMARY KEY,
-        name         TEXT NOT NULL UNIQUE,
+        name         TEXT NOT NULL,
         category     TEXT NOT NULL DEFAULT 'general',
         tags         TEXT NOT NULL DEFAULT '',
         content      TEXT NOT NULL,
@@ -51,6 +51,12 @@ _SCHEMA = (
     """,
     """
     CREATE INDEX IF NOT EXISTS prompts_updated_idx ON prompts(updated_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS prompts_name_idx ON prompts(name)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS prompts_name_version_uidx ON prompts(name, version)
     """,
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(
@@ -158,6 +164,13 @@ class PromptDB:
         now = _now()
         tags_csv = _tag_list(tags)
         variables = _variables(content)
+        if not replace:
+            exists = self._conn.execute(
+                "SELECT 1 FROM prompts WHERE name = ? AND version = ?",
+                (name, int(version)),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError(f"prompt already exists: {name}") from None
         pid = str(uuid.uuid4())
         row = (
             pid,
@@ -353,15 +366,17 @@ class PromptDB:
         )
         self._conn.commit()
 
-    def render(self, name: str, *, version: int | None = None, **variables: str) -> str:
+    def render(self, prompt_name: str, *, version: int | None = None, **variables: str) -> str:
         """Render a prompt with ``{{variable}}`` substitution.
 
         Records a usage hit so the hot prompts surface first in listings.
         """
-        prompt = self.get_version(name, version) if version is not None else self.get(name)
+        prompt = (
+            self.get_version(prompt_name, version) if version is not None else self.get(prompt_name)
+        )
         if prompt is None:
-            raise KeyError(f"no such prompt: {name}")
-        self.touch(name)
+            raise KeyError(f"no such prompt: {prompt_name}")
+        self.touch(prompt_name)
         return _render(prompt.content, variables)
 
     # ---------------------------------------------------------------- delete

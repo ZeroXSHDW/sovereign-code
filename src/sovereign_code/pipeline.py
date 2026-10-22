@@ -51,34 +51,49 @@ def run_pipeline(
     verify: Callable[[], tuple[bool, str]] | None = None,
     fix: Callable[[str, str, str], tuple[bool, str]] | None = None,
     max_fixes: int = 1,
+    on_stage: Callable[[StageResult], None] | None = None,
 ) -> PipelineResult:
     """Orchestrate the stages, returning each stage's output in order.
 
     `verify` runs the project's checks; when it fails and `fix` is supplied, the
     failure log is handed back to the implementer and checks run again, up to
     `max_fixes` times.
+
+    `on_stage` is called as soon as each stage finishes, so a terminal or the
+    live monitor can show a result without waiting for the whole run.
     """
+    result = PipelineResult()
+
+    def emit(stage: StageResult) -> None:
+        result.stages.append(stage)
+        if on_stage is not None:
+            try:
+                on_stage(stage)
+            except Exception:
+                # Observability must never abort the work it observes.
+                pass
+
     plan_text = plan(prompt)
-    stages = [StageResult("plan", True, plan_text)]
+    emit(StageResult("plan", True, plan_text))
 
     ok, implementation = implement(prompt, plan_text)
-    stages.append(StageResult("implement", ok, implementation))
+    emit(StageResult("implement", ok, implementation))
 
     if verify is not None and ok:
         attempt = 0
         while True:
             passed, verify_output = verify()
             name = "verify" if attempt == 0 else f"verify {attempt}"
-            stages.append(StageResult(name, passed, verify_output))
+            emit(StageResult(name, passed, verify_output))
             if passed or fix is None or attempt >= max_fixes:
                 break
             attempt += 1
             repaired, fix_output = fix(prompt, plan_text, verify_output)
-            stages.append(StageResult(f"fix {attempt}", repaired, fix_output))
+            emit(StageResult(f"fix {attempt}", repaired, fix_output))
             if not repaired:
                 break
 
     if review is not None:
-        stages.append(StageResult("review", True, review(plan_text, implementation)))
+        emit(StageResult("review", True, review(plan_text, implementation)))
 
-    return PipelineResult(stages)
+    return result

@@ -574,3 +574,17 @@ def test_gateway_binds_before_it_warms_the_model(tmp_path, monkeypatch) -> None:
     assert order[0] == "bound"
     assert "warming" in order
     assert "serving" in order
+
+
+def test_model_timeouts_are_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("SOVEREIGN_REQUEST_TIMEOUT", "12.5")
+    monkeypatch.setenv("SOVEREIGN_STREAM_IDLE_TIMEOUT", "7")
+    assert tg.request_timeout() == 12.5
+    assert tg.stream_idle_timeout() == 7.0
+
+    # A bad or zero value falls back to the reviewed default instead of
+    # disabling the guard entirely.
+    monkeypatch.setenv("SOVEREIGN_REQUEST_TIMEOUT", "not-a-number")
+    monkeypatch.setenv("SOVEREIGN_STREAM_IDLE_TIMEOUT", "0")
+    assert tg.request_timeout() == tg.DEFAULT_REQUEST_TIMEOUT
+    assert tg.stream_idle_timeout() == tg.DEFAULT_STREAM_IDLE_TIMEOUT

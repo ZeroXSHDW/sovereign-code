@@ -26,7 +26,7 @@ _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS skills (
         id            TEXT PRIMARY KEY,
-        name          TEXT NOT NULL UNIQUE,
+        name          TEXT NOT NULL,
         category      TEXT NOT NULL DEFAULT 'general',
         tags          TEXT NOT NULL DEFAULT '',
         description   TEXT NOT NULL DEFAULT '',
@@ -46,6 +46,12 @@ _SCHEMA = (
     """,
     """
     CREATE INDEX IF NOT EXISTS skills_updated_idx ON skills(updated_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS skills_name_idx ON skills(name)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS skills_name_version_uidx ON skills(name, version)
     """,
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
@@ -143,6 +149,13 @@ class SkillDB:
         now = _now()
         tags_csv = _csv(tags)
         description = description or _first_heading(content) or name
+        if not replace:
+            exists = self._conn.execute(
+                "SELECT 1 FROM skills WHERE name = ? AND version = ?",
+                (name, int(version)),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError(f"skill already exists: {name}") from None
         pid = str(uuid.uuid4())
         row = (
             pid,
@@ -286,6 +299,13 @@ class SkillDB:
         row = self._conn.execute(
             "SELECT * FROM skills WHERE name = ? ORDER BY version DESC LIMIT 1",
             (name,),
+        ).fetchone()
+        return self._row_to_skill(row)
+
+    def get_version(self, name: str, version: int) -> Skill | None:
+        row = self._conn.execute(
+            "SELECT * FROM skills WHERE name = ? AND version = ? LIMIT 1",
+            (name, int(version)),
         ).fetchone()
         return self._row_to_skill(row)
 

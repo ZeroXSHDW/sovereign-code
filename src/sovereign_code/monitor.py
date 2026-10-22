@@ -555,7 +555,6 @@ def _service_lines(settings) -> list[ServiceLine]:
         ("LiteLLM gateway", port_of(settings.gateway_url or DEFAULT_GATEWAY, 4000), "aliases"),
         ("Tier gateway", port_of(settings.router_url or DEFAULT_ROUTER, 4010), "auto routing"),
         ("Anthropic bridge", 4001, "Claude"),
-        ("ChatGPT Local web", 4020, "manual only"),
     ]
     return [
         ServiceLine(name, port, port_open("127.0.0.1", port, timeout=0.15), note)
@@ -664,7 +663,6 @@ def demo_report() -> LiveReport:
         ServiceLine("LiteLLM gateway", 4000, True, "aliases"),
         ServiceLine("Tier gateway", 4010, True, "auto routing"),
         ServiceLine("Anthropic bridge", 4001, True, "Claude"),
-        ServiceLine("ChatGPT Local web", 4020, False, "manual only"),
     ]
     report.loaded = [("qwen3.5:4b", 2.8, 8192, "runner")]
     report.memory = Memory(24.0, 16.0, 67.0)

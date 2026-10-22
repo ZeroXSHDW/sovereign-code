@@ -51,7 +51,7 @@ def test_run_requires_a_prompt() -> None:
 
 
 def test_rm_rejects_invalid_tag() -> None:
-    assert _rm(Settings(), "bad tag!!") == 1
+    assert _rm("bad tag!!") == 1
 
 
 def test_model_info_rejects_invalid_tag() -> None:

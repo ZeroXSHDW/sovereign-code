@@ -12,6 +12,14 @@ Two layers:
 
 Both share the same key function so a hit in either layer returns identical
 output. Nothing here touches the network; it is pure local computation.
+
+Clocks
+------
+The memory layer is process-local, so it uses :func:`time.monotonic` — immune
+to wall-clock jumps. The disk layer is *persisted*, so it uses
+:func:`time.time`: a monotonic timestamp is uptime-relative and resets on
+reboot, which would make every row written before a restart look like it was
+created in the future and therefore never expire.
 """
 
 from __future__ import annotations
@@ -30,6 +38,19 @@ from .config import DATA_DIR
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
 TTL_DEFAULT = 3600.0  # one hour
+
+__all__ = [
+    "DEFAULT_DB",
+    "DISK",  # noqa: F822 - provided lazily by __getattr__ (PEP 562)
+    "MEMORY",
+    "TTL_DEFAULT",
+    "DiskCache",
+    "MemoryCache",
+    "cache_key_chat",
+    "cache_key_generate",
+    "cached_chat",
+    "store_chat",
+]
 
 
 def _request_key(
@@ -111,6 +132,9 @@ class DiskCache:
 
     One row per cached completion. WAL mode, NORMAL synchronous — safe for
     concurrent readers and a single writer (the tier gateway process).
+
+    Expiry is measured against the wall clock (:func:`time.time`) because the
+    timestamps outlive the process that wrote them.
     """
 
     _SCHEMA = (
@@ -166,7 +190,7 @@ class DiskCache:
             if row is None:
                 self.misses += 1
                 return None
-            if float(row["expires_at"]) < time.monotonic():
+            if float(row["expires_at"]) < time.time():
                 self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
                 self._conn.commit()
                 self.misses += 1
@@ -178,7 +202,8 @@ class DiskCache:
 
     def put(self, key: str, value: dict[str, Any], model: str = "", tier: str = "") -> None:
         with self._lock:
-            expires = time.monotonic() + self.ttl
+            now = time.time()
+            expires = now + self.ttl
             blob = json.dumps(value, default=str).encode()
             self._conn.execute(
                 """
@@ -192,7 +217,7 @@ class DiskCache:
                     tier = excluded.tier,
                     hit_count = 0
                 """,
-                (key, blob, expires, time.monotonic(), model, tier),
+                (key, blob, expires, now, model, tier),
             )
             self._conn.commit()
 
@@ -211,11 +236,20 @@ class DiskCache:
             }
 
     def clear(self, older_than: float | None = None) -> int:
+        """Delete every entry, or only the ones older than ``older_than`` seconds.
+
+        ``older_than`` is an *age*, so it is turned into an absolute deadline
+        against the wall clock before the comparison. Age is measured from
+        ``created_at``, which is independent of the entry's TTL: an entry is
+        "older than an hour" when it was written more than an hour ago, even
+        if its TTL has not run out yet.
+        """
         with self._lock:
             if older_than is None:
                 result = self._conn.execute("DELETE FROM cache")
             else:
-                result = self._conn.execute("DELETE FROM cache WHERE expires_at < ?", (older_than,))
+                deadline = time.time() - max(0.0, older_than)
+                result = self._conn.execute("DELETE FROM cache WHERE created_at < ?", (deadline,))
             self._conn.commit()
             self._conn.execute("VACUUM")
             self._conn.commit()
@@ -225,7 +259,27 @@ class DiskCache:
 # ------------------------------------------------------------------ defaults
 
 MEMORY = MemoryCache()
-DISK = DiskCache()
+
+# The disk cache is created on first use, not at import time. Importing this
+# module must not create directories or a database as a side effect: the tier
+# gateway, the MCP server and the test suite all import it, and the tests
+# assert that a clean checkout stays clean.
+_DISK: DiskCache | None = None
+
+
+def __getattr__(name: str) -> Any:
+    """Provide the lazily-created shared :class:`DiskCache` as ``DISK``."""
+    if name == "DISK":
+        global _DISK
+        if _DISK is None:
+            _DISK = DiskCache()
+        return _DISK
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def disk_cache() -> DiskCache:
+    """Return the shared disk cache, creating it on first use."""
+    return __getattr__("DISK")  # type: ignore[no-any-return]
 
 
 def cache_key_chat(
@@ -255,12 +309,14 @@ def cached_chat(
     """Return a cached completion, or run ``fetch()`` and store the result.
 
     ``fetch`` is a zero-argument callable that returns the completion dict.
-    Returns None on a miss *before* fetch runs — the caller decides whether to
-    populate. This separation keeps the tier gateway in control of streaming
-    vs non-streaming.
+    On a miss it runs exactly once and the result is written to both cache
+    layers, so the next identical request is served without touching a model.
+
+    A ``fetch`` that returns ``None`` is treated as a miss and is not stored —
+    an empty answer must not poison the cache.
     """
-    memory = memory or MEMORY
-    disk = disk or DISK
+    memory = memory if memory is not None else MEMORY
+    disk = disk if disk is not None else disk_cache()
     hit = memory.get(key)
     if hit is not None:
         return hit
@@ -268,7 +324,10 @@ def cached_chat(
     if hit is not None:
         memory.put(key, hit)
         return hit
-    return None
+    value = fetch()
+    if value is not None:
+        store_chat(key, value, memory=memory, disk=disk)
+    return value
 
 
 def store_chat(
@@ -280,7 +339,7 @@ def store_chat(
     disk: DiskCache | None = None,
 ) -> None:
     """Store a completed response in both cache layers."""
-    memory = memory or MEMORY
-    disk = disk or DISK
+    memory = memory if memory is not None else MEMORY
+    disk = disk if disk is not None else disk_cache()
     memory.put(key, value)
     disk.put(key, value, model=model, tier=tier)

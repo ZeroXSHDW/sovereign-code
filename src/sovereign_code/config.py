@@ -6,6 +6,7 @@ import os
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 APP_NAME = "sovereign-code"
 DEFAULT_OLLAMA = "127.0.0.1:11434"
@@ -13,6 +14,9 @@ DEFAULT_GATEWAY = "http://127.0.0.1:4000"
 # The latency-aware tier gateway in front of LiteLLM. Clients that ask for
 # "auto" hit this; explicit aliases still work through it too.
 DEFAULT_ROUTER = "http://127.0.0.1:4010"
+# The Anthropic Messages bridge that Claude Code talks to. It sits beside the
+# tier gateway and speaks the Anthropic protocol.
+DEFAULT_BRIDGE_PORT = 4001
 
 
 def _home() -> Path:
@@ -96,6 +100,16 @@ class Settings:
         if not host.startswith(("http://", "https://")):
             host = f"http://{host}"
         return host
+
+    @property
+    def bridge_url(self) -> str:
+        """The Anthropic bridge that Claude Code talks to.
+
+        The bridge always runs next to the tier gateway, so it inherits the
+        gateway's host and uses its own port.
+        """
+        host = urlsplit(self.router_url).hostname or "127.0.0.1"
+        return f"http://{host}:{DEFAULT_BRIDGE_PORT}"
 
     @property
     def config_path(self) -> Path:

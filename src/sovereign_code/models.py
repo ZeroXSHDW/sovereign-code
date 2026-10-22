@@ -353,6 +353,18 @@ CLOUD_PREFERENCE: tuple[str, ...] = (
 
 CLOUD_TAGS: tuple[str, ...] = tuple(tag for tag, spec in CATALOG.items() if spec.cloud)
 
+
+def is_cloud_tag(tag: str) -> bool:
+    """True for Ollama Cloud tags, including dated variants like `:1017-cloud`.
+
+    This lives here, next to the catalog, because both the cloud module and
+    the tier gateway have to agree on it. A gateway that only recognised
+    `:cloud` would route a dated cloud tag to Ollama, which serves it from
+    ollama.com, and quietly break the local-only guarantee.
+    """
+    name = tag.strip().lower()
+    return name.endswith(":cloud") or name.endswith("-cloud")
+
 # What the eight requested model names map to. Kept here (not only in the CLI)
 # so the mapping is testable and `sovereign cloud` can show exactly where each
 # familiar name goes. "DeepSeek V4 Flash" is the retired `deepseek-v4-flash`

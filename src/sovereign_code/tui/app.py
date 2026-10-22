@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import time
+from typing import ClassVar
 from pathlib import Path
 
 from rich.text import Text
@@ -75,7 +76,7 @@ class SovereignApp(App[None]):
     CSS_PATH = Path(__file__).with_name("app.tcss")
     TITLE = "Sovereign Code"
     SUB_TITLE = "local-first coding console"
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f2", "launch_code", "Qwen"),
         Binding("f3", "cycle_model", "Model"),
@@ -336,7 +337,7 @@ class SovereignApp(App[None]):
         if self.session is None:
             self.session = SessionWriter.create(selection.model.tag)
         self.session.append("user", text)
-        self.run_worker(self._stream_reply(selection, text), exclusive=True)
+        self.run_worker(self._stream_reply(selection), exclusive=True)
 
     async def _make_room(self, keep_tag: str) -> None:
         """Unload other resident models so the selected model can use a real context."""
@@ -353,8 +354,12 @@ class SovereignApp(App[None]):
         await self.add_message("system", f"Unloaded {', '.join(others)} to free memory.")
         await self.refresh_snapshot()
 
-    async def _stream_reply(self, selection, text: str) -> None:
-        assert self._assistant is not None
+    async def _stream_reply(self, selection) -> None:
+        # The user turn is already in self.history, so this only has to
+        # render the model's answer into the placeholder message.
+        assistant = self._assistant
+        if assistant is None:
+            return
         system = system_prompt(self.ai_task)
         context = self._project_memory()
         if context:
@@ -377,7 +382,7 @@ class SovereignApp(App[None]):
                     chunks.append(chunk.content)
                     now = time.monotonic()
                     if now - last_update > 0.06:
-                        await self._assistant.update("".join(chunks))
+                        await assistant.update("".join(chunks))
                         last_update = now
                 if chunk.done:
                     stats = (
@@ -387,12 +392,12 @@ class SovereignApp(App[None]):
             answer = "".join(chunks).strip()
             if not answer:
                 raise RuntimeError("the model returned no content")
-            await self._assistant.update(answer + stats)
+            await assistant.update(answer + stats)
             self.history.append({"role": "assistant", "content": answer})
             if self.session:
                 self.session.append("assistant", answer, model=selection.model.tag)
         except Exception as exc:
-            await self._assistant.update(f"**Local model error:** {exc}")
+            await assistant.update(f"**Local model error:** {exc}")
             if self.session:
                 self.session.append("error", str(exc))
         finally:

@@ -153,7 +153,7 @@ model_catalog_json = "__CATALOG__"
 
 [model_providers.sovereign-tier]
 name = "Sovereign tier gateway"
-base_url = "http://127.0.0.1:4010/v1"
+base_url = "__BASE_URL__"
 wire_api = "responses"
 supports_websockets = false
 
@@ -272,11 +272,14 @@ def write_codex_catalog() -> Path:
     return path
 
 
-def write_codex_profile() -> Path:
+def write_codex_profile(settings: Settings | None = None) -> Path:
     path = codex_profile_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     catalog = write_codex_catalog()
-    text = CODEX_PROFILE.replace("__CATALOG__", str(catalog))
+    # The gateway URL comes from the settings so a relocated gateway is
+    # followed instead of silently pointed at the default port.
+    base = (settings or Settings()).router_url.rstrip("/") + "/v1"
+    text = CODEX_PROFILE.replace("__CATALOG__", str(catalog)).replace("__BASE_URL__", base)
     path.write_text(text, encoding="utf-8")
     # `codex -C` (without --profile) loads this file from CODEX_HOME.
     home = codex_home_path() / "config.toml"
@@ -436,7 +439,7 @@ def plan_launch(
                 {
                     # The bridge streams text deltas and returns tool_use blocks
                     # as complete Anthropic content blocks.
-                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
+                    "ANTHROPIC_BASE_URL": settings.bridge_url,
                     "ANTHROPIC_AUTH_TOKEN": "local",
                     "ANTHROPIC_API_KEY": "local",
                     "ANTHROPIC_MODEL": "best",
@@ -471,7 +474,7 @@ def plan_launch(
             {
                 # The bridge streams text deltas and returns tool_use blocks as
                 # complete Anthropic content blocks.
-                "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001",
+                "ANTHROPIC_BASE_URL": settings.bridge_url,
                 "ANTHROPIC_AUTH_TOKEN": "local",
                 "ANTHROPIC_API_KEY": "local",
                 # Claude Code's own prompt is ~34k tokens, so a 32k coder is

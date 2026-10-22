@@ -17,6 +17,7 @@ import asyncio
 import subprocess
 import time
 from collections import deque
+from typing import ClassVar
 from pathlib import Path
 
 from rich.text import Text
@@ -60,7 +61,7 @@ run `sovereign code`.
 class MonitorHelp(ModalScreen[None]):
     """Keys and read-only guarantees, without taking space in the live view."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape,q,question_mark", "dismiss", "Close"),
         Binding("ctrl+q", "dismiss", "Close"),
     ]
@@ -74,7 +75,7 @@ class MonitorApp(App[None]):
     CSS_PATH = Path(__file__).with_name("app.tcss")
     TITLE = "Sovereign Code · live monitor"
     SUB_TITLE = "skill bank · prompt bank · live model use"
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f2", "launch_code", "Qwen"),
         Binding("f4", "launch_codex", "Codex"),

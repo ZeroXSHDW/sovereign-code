@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import LOCAL_AI_ROOT
-from .models import CATALOG, CLOUD_PREFERENCE, CLOUD_TAGS, REQUESTED_CLOUD_MODELS
+from .models import CATALOG, CLOUD_PREFERENCE, REQUESTED_CLOUD_MODELS
+from .models import is_cloud_tag as _is_cloud_tag
 
 # A cloud model's 1M-token window is real, but 128k is a sane ceiling for a
 # local coding client and keeps the gateway from forwarding absurd requests.
@@ -284,9 +285,12 @@ def _rewrite_shell_profile(path: Path, enabled: bool) -> bool:
 
 
 def is_cloud_tag(tag: str) -> bool:
-    """True for Ollama Cloud tags, including dated variants like `:1017-cloud`."""
-    name = tag.strip().lower()
-    return name.endswith(":cloud") or name.endswith("-cloud")
+    """True for Ollama Cloud tags, including dated variants like `:1017-cloud`.
+
+    Re-exported from :mod:`sovereign_code.models` so the catalog and the
+    gateway agree on exactly one definition.
+    """
+    return _is_cloud_tag(tag)
 
 
 def cloud_disabled_hint(message: str) -> str:
@@ -745,7 +749,7 @@ class CloudProbe:
     detail: str
 
 
-def _probe_provider(tag: str, route: tuple[str, str, str, str], timeout: float) -> CloudProbe:
+def _probe_provider(route: tuple[str, str, str, str], timeout: float) -> CloudProbe:
     import httpx
 
     provider_key_name, provider_model, base_url, env_var = route
@@ -788,7 +792,7 @@ def probe_cloud(settings: Any, tag: str = "kimi-k3:cloud", timeout: float = 12.0
     """
     route = route_for(tag)
     if route[0] != "ollama":
-        return _probe_provider(tag, route, timeout)
+        return _probe_provider(route, timeout)
     if not cloud_enabled():
         return CloudProbe(False, "Ollama Cloud is disabled (sovereign cloud --enable)")
     import asyncio
@@ -846,16 +850,6 @@ def requested_models() -> tuple[tuple[str, str, str], ...]:
     return REQUESTED_CLOUD_MODELS
 
 
-def status_lines(settings: Any) -> list[tuple[str, str]]:
-    """(label, value) rows for the CLI, with readiness for each requested tag."""
-    status = read_cloud_status()
-    rows = [("Ollama Cloud", status.detail)]
-    rows.append(("Cloud models", f"{len(CLOUD_TAGS)} tags · {len(ALIAS_TARGETS)} gateway aliases"))
-    for _key, name, state, detail in provider_status():
-        rows.append((name, f"{state} · {detail}"))
-    return rows
-
-
 __all__ = [
     "ALIAS_TARGETS",
     "CLOUD_PREFERENCE",
@@ -897,5 +891,4 @@ __all__ = [
     "set_provider_key",
     "set_server_cloud",
     "shell_profile_path",
-    "status_lines",
 ]

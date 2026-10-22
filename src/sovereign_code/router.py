@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from .models import CATALOG, ModelView, preferred_tags
 
 
-class Task(str, Enum):
+class Task(StrEnum):
+    """The kind of work a model is being picked for.
+
+    A ``StrEnum`` so a task can be compared with, and formatted as, its
+    plain name: ``str(Task.CODE)`` is ``"code"``, not ``"Task.CODE"``.
+    """
+
     CODE = "code"
     CHAT = "chat"
     REASON = "reason"

@@ -17,6 +17,7 @@ from .router import Selection, Task, choose
 from .system import (
     Memory,
     disk_free_gb,
+    exposed_ports,
     is_loopback,
     login_agent_installed,
     login_agent_loaded,
@@ -37,6 +38,9 @@ class Snapshot:
     ollama_port: bool = False
     gateway_port: bool = False
     loopback: bool = True
+    # Ports with a listener bound to a non-loopback address, as
+    # {port: [addresses]}. Empty means every listener found is local-only.
+    exposed_ports: dict[int, list[str]] = field(default_factory=dict)
     login_installed: bool = False
     login_loaded: bool = False
     # Ollama Cloud readiness is a machine setting, not a network probe; the
@@ -79,7 +83,7 @@ class Snapshot:
     @property
     def all_models(self) -> list[ModelView]:
         """Every known model (installed, loaded or missing), de-aliased."""
-        return sort_views(self._unique(lambda view: True))
+        return sort_views(self._unique(lambda _view: True))
 
     @property
     def potential_free_gb(self) -> float | None:
@@ -145,7 +149,17 @@ async def collect(settings: Settings) -> Snapshot:
     snapshot.ollama_port = port_open(*_host_port(settings.ollama_url, 11434))
     snapshot.gateway_port = port_open(*_host_port(settings.gateway_url, 4000))
     snapshot.router_up = port_open(*_host_port(settings.router_url, 4010))
-    snapshot.loopback = is_loopback(settings.ollama_url) and is_loopback(settings.gateway_url)
+    snapshot.loopback = is_loopback(settings.ollama_url) and is_loopback(
+        settings.gateway_url
+    ) and is_loopback(settings.router_url)
+    # The URLs only say where the clients dial. The sockets say what the
+    # servers actually bound, and a server on 0.0.0.0 is reachable from the
+    # network even when every config file points at loopback.
+    snapshot.exposed_ports = exposed_ports(
+        _host_port(settings.ollama_url, 11434)[1],
+        _host_port(settings.gateway_url, 4000)[1],
+        _host_port(settings.router_url, 4010)[1],
+    )
 
     version, tags, ps, gateway = await asyncio.gather(
         _safe(client.version()),

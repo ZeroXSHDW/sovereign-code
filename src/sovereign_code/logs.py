@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import LOCAL_AI_ROOT, PROJECT_ROOT
+from .config import LOCAL_AI_ROOT, LOG_DIR, PROJECT_ROOT
 
-WATCHDOG_LOG = Path("/tmp/sovereign-gateway-watchdog.log")
+# The watchdog used to be a launch agent that wrote into /tmp, which is
+# world-readable and cleared on reboot. It now lives in the stack's own log
+# directory; the old path is still read so an existing install keeps working.
+WATCHDOG_LOG = LOG_DIR / "watchdog.log"
+LEGACY_WATCHDOG_LOG = Path("/tmp/sovereign-gateway-watchdog.log")  # noqa: S108 - legacy read-only path
 TARGETS = ("gateway", "watchdog", "dashboard", "bridge", "tier")
 
 
@@ -22,6 +26,14 @@ def log_path(target: str) -> Path:
     if target == "tier":
         return LOCAL_AI_ROOT / "data" / "logs" / "tier-gateway.log"
     raise ValueError(f"unknown log target: {target}")
+
+
+def resolve_log_path(target: str) -> Path:
+    """The log that actually exists, falling back to the legacy location."""
+    path = log_path(target)
+    if target == "watchdog" and not path.exists() and LEGACY_WATCHDOG_LOG.exists():
+        return LEGACY_WATCHDOG_LOG
+    return path
 
 
 def tail_lines(path: Path, count: int = 40) -> list[str]:

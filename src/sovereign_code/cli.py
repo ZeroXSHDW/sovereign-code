@@ -82,7 +82,7 @@ from .gateway_config import (
     write as write_gateway_config,
 )
 from .harness import log_download
-from .logs import TARGETS, log_path, tail_lines
+from .logs import TARGETS, resolve_log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
 from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
 from .ollama import OllamaClient, OllamaError
@@ -110,6 +110,7 @@ from .status import Snapshot, collect
 from .summarize import SourceError, complete, read_text_source, summarize_text
 from .system import (
     command_exists,
+    listening_addresses,
     login_agent_installed,
     models_to_evict,
     ollama_runner_models,
@@ -117,6 +118,9 @@ from .system import (
     qwen_memory_path,
     swap_usage_gb,
     wired_limit_gb,
+)
+from .system import (
+    is_loopback_host as _is_loopback_host,
 )
 from .tune import DEFAULT_CONTEXT, desired_env, env_drift, read_context_length, write_context_length
 from .verify import (
@@ -417,7 +421,7 @@ def _run(
     return 0
 
 
-def _rm(settings: Settings, model: str) -> int:
+def _rm(model: str) -> int:
     model = CLOUD_TAG_ALIASES.get(model, model)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
@@ -501,7 +505,7 @@ def _parse_gateway_aliases(path: Path) -> list[tuple[str, str]]:
     return aliases
 
 
-def _gateway_aliases(settings: Settings, snap: Snapshot) -> int:
+def _gateway_aliases(snap: Snapshot) -> int:
     path = LOCAL_AI_ROOT / "gateway" / "config.yaml"
     aliases = _parse_gateway_aliases(path)
     if not aliases:
@@ -599,7 +603,7 @@ def _setup_stack(settings: Settings, name: str, yes: bool = False) -> int:
     if code != 0:
         return code
     snap = _snapshot(settings)
-    return _gateway_aliases(settings, snap)
+    return _gateway_aliases(snap)
 
 
 def _setup(
@@ -633,7 +637,7 @@ def _setup(
         console.print(f"{mark}  {step.name:<14} {step.detail}")
     if any((not step.ok) and (not step.skipped) for step in steps):
         return 1
-    for line in setup_mod.ready_summary(settings):
+    for line in setup_mod.ready_summary():
         console.print(line)
     if open_monitor:
         from .tui.monitor import MonitorApp
@@ -812,7 +816,7 @@ def _bench(
 
 
 def _logs(target: str, lines: int = 40, follow: bool = False) -> int:
-    path = log_path(target)
+    path = resolve_log_path(target)
     if not path.is_file():
         console.print(f"[yellow]No {target} log at[/] {path}")
         if target == "gateway":
@@ -889,7 +893,7 @@ def _config(settings: Settings, get_key: str | None, set_value: str | None) -> i
     return 0
 
 
-def _stats(settings: Settings) -> int:
+def _stats() -> int:
     stats = collect_stats()
     table = Table(title="Local AI stack · disk usage", header_style="bold #b794f4")
     table.add_column("Component", style="bold")
@@ -1215,7 +1219,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
     return _doctor(_snapshot(settings))
 
 
-def _backup(settings: Settings, keep: int | None = None) -> int:
+def _backup(keep: int | None = None) -> int:
     include = [LOCAL_AI_ROOT / "config" / "sovereign", LOCAL_AI_ROOT / "data"]
     exclude = {LOCAL_AI_ROOT / "data": ("browser", "index")}
     extra = {
@@ -1388,7 +1392,23 @@ def _doctor(snap: Snapshot) -> int:
         f"{snap.settings.ollama_url} · {snap.version}",
         "open Ollama.app",
     )
-    add(snap.loopback, "Loopback only", "Ollama and gateway are on 127.0.0.1", "never bind 0.0.0.0")
+    if snap.exposed_ports:
+        exposed = ", ".join(
+            f"{port} on {', '.join(addresses)}" for port, addresses in snap.exposed_ports.items()
+        )
+        add(
+            False,
+            "Loopback only",
+            f"exposed: {exposed}",
+            "bind the service to 127.0.0.1, never 0.0.0.0",
+        )
+    else:
+        add(
+            snap.loopback,
+            "Loopback only",
+            "Ollama and gateway are on 127.0.0.1",
+            "never bind 0.0.0.0",
+        )
     best = snap.recommended_coder
     add(
         bool(best and best.installed),
@@ -2062,7 +2082,7 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
     if prompt:
         context = project_context(target)
         args.extend(["-p", (context + "\n\n" + prompt) if context else prompt])
-    os.execvp(args[0], args)
+    os.execvp(args[0], args)  # noqa: S606 - exec replaces this process; no shell is involved
     return 0
 
 
@@ -2746,7 +2766,7 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
         opencode_detail = "unreadable opencode.json"
     add("OpenCode default", opencode_local, opencode_detail)
 
-    # Gateway must be live and serving local models.
+    # Gateway must be live, serving local models, and bound to loopback only.
     gateway_local = False
     gateway_detail = "not running"
     try:
@@ -2758,13 +2778,28 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
         gateway_local = (
             bool(tiers)
             and enforced
-            and all(not str(model).endswith(":cloud") for model in tiers.values())
+            and all(not is_cloud_tag(str(model)) for model in tiers.values())
         )
         gateway_detail = ("local-only · " if enforced else "cloud allowed · ") + ", ".join(
             f"{tier}={model}" for tier, model in tiers.items()
         )
     except (httpx.HTTPError, ValueError):
         pass
+
+    # The health flag says the gateway *intends* to be local. The socket says
+    # whether it actually is: a process bound to 0.0.0.0 is reachable from the
+    # network no matter what the URL says.
+    for port, label in ((4010, "Tier gateway"), (4001, "Anthropic bridge")):
+        try:
+            addresses = listening_addresses(port)
+        except (ImportError, OSError):
+            addresses = []
+        if not addresses:
+            continue
+        exposed = [address for address in addresses if not _is_loopback_host(address)]
+        if exposed:
+            gateway_local = False
+            gateway_detail += f" · {label} exposed on {', '.join(exposed)}"
     add("Tier gateway", gateway_local, gateway_detail)
 
     # Desktop app chat windows are closed cloud clients; report separately.
@@ -3406,7 +3441,7 @@ def _launch(
         return 0
     os.chdir(target)
     try:
-        os.execvpe(plan.argv[0], plan.argv, plan.env)
+        os.execvpe(plan.argv[0], plan.argv, plan.env)  # noqa: S606 - exec replaces this process
     except OSError as exc:
         console.print(f"[red]Could not launch {info.name}:[/] {exc}")
         return 1
@@ -3595,15 +3630,15 @@ def _hf_status(args, hub) -> int:
     cache_bytes = hub.directory_size(cache) if cache.is_dir() else 0
     download_bytes = hub.directory_size(downloads) if downloads.is_dir() else 0
     dataset_bytes = hub.directory_size(datasets) if datasets.is_dir() else 0
-    token_mode = ""
+    file_mode = ""
     if status.present:
         try:
-            token_mode = oct(status.path.stat().st_mode & 0o777)
+            file_mode = oct(status.path.stat().st_mode & 0o777)
         except OSError:
-            token_mode = ""
+            file_mode = ""
     payload = {
         "token": status.to_dict(),
-        "token_mode": token_mode,
+        "file_mode": file_mode,
         "cli": {"path": hub.hf_cli_path() or "", "version": hub.hf_cli_version()},
         "cache_dir": str(cache),
         "cache_bytes": cache_bytes,
@@ -3636,7 +3671,7 @@ def _hf_status(args, hub) -> int:
         table.add_row("Token", "[yellow]not logged in[/]")
     table.add_row(
         "Token file",
-        str(status.path) + (f" · mode {token_mode}" if token_mode else ""),
+        str(status.path) + (f" · mode {file_mode}" if file_mode else ""),
     )
     cli_version = hub.hf_cli_version()
     table.add_row(
@@ -3649,9 +3684,9 @@ def _hf_status(args, hub) -> int:
     table.add_row("Dataset downloads", f"{datasets} · {human_size(dataset_bytes)}")
     table.add_row("Disk free", f"{disk_free_gb():.1f} GB")
     console.print(table)
-    if token_mode and token_mode != "0o600":
+    if file_mode and file_mode != "0o600":
         console.print(
-            f"[yellow]Warning:[/] {status.path} is mode {token_mode}; run `chmod 600` on it."
+            f"[yellow]Warning:[/] {status.path} is mode {file_mode}; run `chmod 600` on it."
         )
     if not status.present:
         console.print(
@@ -4186,7 +4221,6 @@ def _hf_import(args, hub) -> int:
 
 
 def _skills(
-    settings: Settings,
     action: str = "list",
     target: str = "all",
     project: str | None = None,
@@ -4286,7 +4320,7 @@ def _skill(
     settings: Settings, name: str | None, prompt: str | None, model: str, tokens: int
 ) -> int:
     if not name:
-        return _skills(settings)
+        return _skills()
     template = read_skill(name)
     if template is None:
         console.print(f"[red]Unknown skill[/] {name}. Run: sovereign skills")
@@ -4310,7 +4344,7 @@ def _skill(
     return 0
 
 
-def _memory(settings: Settings, action: str, text: str | None, project: str | None) -> int:
+def _memory(action: str, text: str | None, project: str | None) -> int:
     cwd = Path(project).expanduser().resolve() if project else Path.cwd()
     if action == "add":
         if not text or not text.strip():
@@ -4328,7 +4362,7 @@ def _memory(settings: Settings, action: str, text: str | None, project: str | No
     return 0
 
 
-def _clone(settings: Settings, url: str, name: str | None) -> int:
+def _clone(url: str, name: str | None) -> int:
     if not url or not re.match(r"^(https?://|git@|ssh://)", url):
         console.print("[red]Give a git URL[/] (https:// or git@).")
         return 1
@@ -6399,7 +6433,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
     if command == "backup":
-        return _backup(settings, keep=args.keep)
+        return _backup(keep=args.keep)
     if command == "index":
         return _index(settings, args.path, args.model, args.limit)
     if command == "search":
@@ -6426,7 +6460,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "config":
         return _config(settings, get_key=args.get_key, set_value=args.set_value)
     if command == "stats":
-        return _stats(settings)
+        return _stats()
     if command == "pull":
         for tag in args.model:
             if _pull(settings, tag) != 0:
@@ -6453,9 +6487,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "orchestrate":
         return _orchestrate(settings, args)
     if command == "gateway-aliases":
-        return _gateway_aliases(settings, _snapshot(settings))
+        return _gateway_aliases(_snapshot(settings))
     if command == "rm":
-        return _rm(settings, args.model)
+        return _rm(args.model)
     if command == "run":
         return _run(
             settings,
@@ -6483,7 +6517,6 @@ def main(argv: list[str] | None = None) -> int:
         return _hf(args)
     if command == "skills":
         return _skills(
-            settings,
             action=args.action,
             target=args.target,
             project=args.project,
@@ -6496,9 +6529,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "skill":
         return _skill(settings, args.name, args.prompt, args.model, args.tokens)
     if command == "memory":
-        return _memory(settings, args.action, args.text, args.project)
+        return _memory(args.action, args.text, args.project)
     if command == "clone":
-        return _clone(settings, args.url, args.name)
+        return _clone(args.url, args.name)
     if command == "pipeline":
         return _pipeline(
             settings,

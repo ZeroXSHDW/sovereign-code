@@ -72,7 +72,7 @@ def test_ensure_gateway_dry_run_names_both_pieces(tmp_path, monkeypatch):
 
 def test_ready_summary_points_at_the_live_views(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOCAL_AI_ROOT", tmp_path / "runtime")
-    text = "\n".join(setup.ready_summary(object()))
+    text = "\n".join(setup.ready_summary())
     assert "sovereign harness" in text
     assert "sovereign orchestrate" in text
     assert "live monitor" in text

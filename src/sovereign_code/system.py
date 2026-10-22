@@ -165,6 +165,76 @@ def port_open(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
 
 
+def listening_addresses(port: int) -> list[str]:
+    """The bind addresses of every listener on ``port``.
+
+    A URL of ``http://127.0.0.1:4010`` only says what the client dials; it
+    says nothing about what the server bound. A process listening on
+    ``0.0.0.0`` is reachable from the network even when every config file
+    points at loopback, so "loopback only" has to be checked against the
+    socket, not the config.
+
+    Returns an empty list when nothing is listening or the probe fails.
+    """
+    if os.uname().sysname != "Darwin":
+        return []
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    addresses: list[str] = []
+    for line in result.stdout.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 9:
+            continue
+        # NAME is the "host:port" column; strip the port off the host.
+        name = fields[8]
+        if name.startswith("["):  # IPv6, e.g. [::1]:4010
+            host = name.rsplit("]:", 1)[0].lstrip("[")
+        else:
+            host = name.rsplit(":", 1)[0]
+        if host and host not in addresses:
+            addresses.append(host)
+    return addresses
+
+
+def bound_to_loopback(port: int) -> bool:
+    """True when every listener on ``port`` is bound to a loopback address.
+
+    Returns False when the port is closed, because "nothing is listening" is
+    not evidence that the service is loopback-only.
+    """
+    addresses = listening_addresses(port)
+    if not addresses:
+        return False
+    return all(is_loopback_host(address) for address in addresses)
+
+
+def exposed_ports(*ports: int) -> dict[int, list[str]]:
+    """The ports that have a listener bound to a non-loopback address.
+
+    An empty result means every listener found is loopback-only. Ports with
+    no listener at all are not reported: a closed port is not exposed.
+    """
+    exposed: dict[int, list[str]] = {}
+    for port in ports:
+        addresses = listening_addresses(port)
+        if not addresses:
+            continue
+        outside = [address for address in addresses if not is_loopback_host(address)]
+        if outside:
+            exposed[port] = outside
+    return exposed
+
+
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -198,6 +268,23 @@ def qwen_memory_path() -> Path:
 
 
 _LOOPBACK_HOSTS = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def is_loopback_host(host: str) -> bool:
+    """True for a bare host name that resolves to this machine.
+
+    The host-only counterpart of :func:`is_loopback`, used when the address
+    comes from a socket rather than from a URL.
+    """
+    name = host.strip().strip("[]").lower()
+    if not name:
+        return False
+    if name in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ip_address(name).is_loopback
+    except ValueError:
+        return False
 
 
 def is_loopback(url: str) -> bool:

@@ -610,7 +610,7 @@ class _Handler(BaseHTTPRequestHandler):
     gateway_url = DEFAULT_GATEWAY
     default_model = DEFAULT_ALIAS
 
-    def log_message(self, *args: Any) -> None:  # keep Claude's stderr clean
+    def log_message(self, *_args: Any) -> None:  # keep Claude's stderr clean
         return
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:

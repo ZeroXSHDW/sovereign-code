@@ -180,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "SovereignChat/1.0"
     router = DEFAULT_ROUTER
 
-    def log_message(self, *args: object) -> None:
+    def log_message(self, *_args: object) -> None:
         return
 
     def do_GET(self) -> None:

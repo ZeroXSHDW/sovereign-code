@@ -2,11 +2,24 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 *.egg-info/
 build/
 dist/
 logs/
 .DS_Store
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Generated SQLite indexes. These are rebuilt on demand by
+# `sovereign skill-db sync` and `sovereign index`; committing them only
+# bloats the repository and guarantees a stale copy in every clone.
+*.db
+*.db-wal
+*.db-shm
 
 # Self-contained runtime: config, data, gateway files and the model store live
 # here after migration. Never commit gigabytes of weights.

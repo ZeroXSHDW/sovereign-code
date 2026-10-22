@@ -726,6 +726,10 @@ def codex_probe_local(path: Path | None = None, timeout: float = 120.0) -> tuple
     base = str(provider.get("base_url") or data.get("openai_base_url") or "").rstrip("/")
     if not base:
         return False, "no provider base_url"
+    # Only HTTP(S) is a provider. `file:` would make urllib read a local file
+    # and hand it back as if it were a model response.
+    if not base.startswith(("http://", "https://")):
+        return False, f"provider base_url is not http(s): {base}"
     token = _provider_token(provider)
     if not token:
         return False, "provider has no usable token"
@@ -733,7 +737,7 @@ def codex_probe_local(path: Path | None = None, timeout: float = 120.0) -> tuple
     body = json.dumps(
         {"model": model, "input": "Reply with exactly: LOCAL", "stream": False}
     ).encode("utf-8")
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # noqa: S310 - the scheme is checked above
         f"{base}/responses",
         data=body,
         headers={
@@ -742,7 +746,7 @@ def codex_probe_local(path: Path | None = None, timeout: float = 120.0) -> tuple
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - http(s) only
             payload = json.loads(response.read().decode("utf-8", "replace"))
             tier = response.headers.get("x-sovereign-tier") or "?"
             return True, f"{model} → {tier} tier · {_response_text(payload)}"

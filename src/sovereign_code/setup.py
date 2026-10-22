@@ -376,7 +376,7 @@ def run_setup(
     return rows
 
 
-def ready_summary(settings) -> list[str]:
+def ready_summary() -> list[str]:
     """The commands to show once setup has finished."""
     return [
         "sovereign                   live monitor (models, downloads, runs)",

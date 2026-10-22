@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,38 +8,51 @@ version = "0.3.0"
 description = "Terminal-first, local-first AI coding console for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Sovereign Code" }]
 keywords = ["ai", "local", "ollama", "llm", "coding", "terminal", "textual", "offline", "privacy"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development",
     "Topic :: Terminals",
+    "Typing :: Typed",
 ]
 dependencies = [
-    "textual>=1.0,<9",
-    "httpx>=0.27,<1",
-    "rich>=13,<16",
+    # Floors match what CI verifies; the caps stop a major release from
+    # changing behaviour underneath the TUI.
+    "textual>=8.2,<9",
+    "httpx>=0.28,<1",
+    "rich>=14.2,<16",
 ]
 
 [project.urls]
 Homepage = "https://github.com/ZeroXSHDW/sovereign-code"
 Issues = "https://github.com/ZeroXSHDW/sovereign-code/issues"
 Source = "https://github.com/ZeroXSHDW/sovereign-code"
+Changelog = "https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ZeroXSHDW/sovereign-code/tree/main/docs"
 
 [project.optional-dependencies]
-browser = ["playwright>=1.50"]
+browser = ["playwright>=1.64,<2"]
 dev = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.6",
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-cov>=7",
+    "coverage>=7",
+    "ruff>=0.17,<0.18",
+    "mypy>=1.11",
 ]
 
 [project.scripts]
@@ -48,28 +61,74 @@ sovereign = "sovereign_code.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+sovereign_code = ["py.typed"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "integration: needs a live local service (Ollama, Chromium); deselected by default",
+]
+addopts = "-m 'not integration'"
+
+[tool.coverage.run]
+source = ["src/sovereign_code"]
+branch = true
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 60
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/sovereign_code"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+warn_return_any = false
+ignore_missing_imports = true
+exclude = ["^src/sovereign_code/tui/"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# The skills corpus is 22k markdown files with embedded Python snippets.
+# Ruff formats markdown code blocks by default since 0.16, which turned the
+# lint job red on a file tree that is data, not source.
+extend-exclude = ["skills", "build", "dist"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "RUF", "SIM"]
+select = ["E", "F", "W", "I", "UP", "B", "RUF", "SIM", "ARG", "S", "BLE"]
 ignore = [
     "BLE001",  # broad except is used deliberately to surface errors to the user
-    "S101",    # assert is expected in tests
     "S110",    # try/except pass is used in cleanup paths
-    "RUF012",  # typing-only defaults; no runtime mutation
+    "S112",    # try/except continue is used when scanning optional sources
+    "S603",    # subprocess calls use argv lists, never shell strings
+    "S607",    # system utilities (ps, vm_stat, sysctl) come from a fixed PATH
     "SIM102",  # collapsible-if kept for readability
     "SIM105",  # contextlib.suppress kept for readability
     "SIM117",  # nested with kept for readability
-    "UP042",   # str-Enum pattern is intentional and works across versions
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",   # assert is the point of a test
+    "S105",   # test fixtures use obvious fake secrets
+    "S106",   # test fixtures use obvious fake secrets
+    "S108",   # tests may use a fixed temp path
+]
 "src/sovereign_code/browser/executor.py" = ["E501"]  # embedded JS
 "src/sovereign_code/cli.py" = ["E501"]               # plist template lines
 "src/sovereign_code/webchat.py" = ["E501"]           # inline HTML/CSS/JS

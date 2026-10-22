@@ -41,7 +41,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .cache import DISK, MEMORY, cache_key_chat
+from .cache import MEMORY, cache_key_chat, disk_cache
+from .models import is_cloud_tag
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
@@ -108,6 +109,20 @@ def local_only() -> bool:
         "no",
         "off",
     }
+
+
+def cors_origins() -> tuple[str, ...]:
+    """Origins allowed to talk to the gateway from a browser.
+
+    Empty by default. The gateway serves native clients (Codex, Claude Code,
+    Qwen) which do not send an ``Origin`` header, and the bundled web chat
+    proxies through the server side, so nothing in the box needs cross-origin
+    access. A wildcard would let any page the user visits read the reply of a
+    request it made to the loopback gateway, so a browser client has to be
+    opted in explicitly with ``SOVEREIGN_CORS_ORIGINS``.
+    """
+    raw = os.environ.get("SOVEREIGN_CORS_ORIGINS", "")
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 def _event(name: str, data: dict[str, Any]) -> bytes:
@@ -502,7 +517,7 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
 
     # The models Ollama has installed, so a client can name one directly.
     for tag in sorted(installed):
-        if "embed" in tag.lower() or tag.endswith(":cloud"):
+        if "embed" in tag.lower() or is_cloud_tag(tag):
             # An embedding model cannot answer a chat turn, and a cloud model
             # is not a local one: the local-only gateway refuses it.
             continue
@@ -1218,7 +1233,7 @@ class _CombinedCache:
 
     def __init__(self) -> None:
         self.memory = MEMORY
-        self.disk = DISK
+        self.disk = disk_cache()
 
     def get(self, key: str) -> dict[str, Any] | None:
         hit = self.memory.get(key)
@@ -1660,7 +1675,7 @@ def resolve_route(
         if tier in (DEEP, ULTRA):
             reason = f"{reason}/{intent}"
         return Route("local", target, tier, context, think, reason)
-    if installed and not model.endswith(":cloud") and _model_available(model, installed):
+    if installed and not is_cloud_tag(model) and _model_available(model, installed):
         # A model name rather than a route: serve exactly that model, with the
         # context the catalog gives it. A client that names a model it can see
         # in the list must get that model.
@@ -1679,13 +1694,22 @@ class _Handler(BaseHTTPRequestHandler):
     ollama = DEFAULT_OLLAMA
     upstream = DEFAULT_UPSTREAM
 
-    def log_message(self, *args: Any) -> None:
+    def log_message(self, *_args: Any) -> None:
         return
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        """Echo an allow-listed origin, if the request came from one.
+
+        No wildcard: the gateway is unauthenticated, so a wildcard would let
+        any page the user visits read the model's reply.
+        """
+        origin = self.headers.get("Origin", "")
+        allowed = cors_origins()
+        if origin and (origin in allowed or "*" in allowed):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
     def _json(
         self,
@@ -1710,6 +1734,15 @@ class _Handler(BaseHTTPRequestHandler):
         return data if isinstance(data, dict) else {}
 
     def do_OPTIONS(self) -> None:
+        origin = self.headers.get("Origin", "")
+        allowed = cors_origins()
+        if not origin or not (origin in allowed or "*" in allowed):
+            # No configured browser clients: refuse the preflight outright
+            # rather than answering it without the CORS headers.
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.send_response(204)
         self._cors()
         self.end_headers()
@@ -1728,7 +1761,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "upstream": self.upstream,
                     "ollama": self.ollama,
                     "tiers": {tier: choose_model(tier, installed, "code")[0] for tier in TIERS},
-                    "local_only": True,
+                    # The real flag, not a literal: the audit in
+                    # `sovereign local --strict` reads this value, so it has
+                    # to reflect what the gateway is actually enforcing.
+                    "local_only": local_only(),
                     "installed": sorted(installed),
                     "warm": warm,
                     "metrics": metrics_summary(),

@@ -36,6 +36,7 @@ from .system import (
     swap_usage_gb,
     wired_limit_gb,
 )
+from .telemetry import CacheSnapshot, MetricsTail, cache_snapshot
 
 # Dashboard refresh is cheap; the expensive lookups are cached separately.
 BANK_CACHE_SECONDS = 30.0
@@ -46,6 +47,7 @@ _BANK_CACHE: dict[str, Any] = {}
 _BANK_CACHE_AT = 0.0
 _PROJECT_CACHE: list[LiveProject] = []
 _PROJECT_CACHE_AT = 0.0
+_METRICS_TAIL = MetricsTail()
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,7 @@ class LiveReport:
     cpu_count: int = 0
     gateway_requests: int = 0
     models_installed: int = 0
+    cache: CacheSnapshot = field(default_factory=CacheSnapshot)
     models_resident: int = 0
     resident_gb: float = 0.0
     potential_free_gb: float | None = None
@@ -652,30 +655,25 @@ def _tail_text(path: Path, max_bytes: int = 256 * 1024) -> list[str]:
         return []
 
 
+def _activity_from_record(record: dict[str, Any]) -> Activity:
+    return Activity(
+        at=float(record.get("ts") or 0.0),
+        tier=str(record.get("tier") or "?"),
+        model=str(record.get("model") or "?"),
+        ms=int(float(record.get("ms") or 0)),
+        tokens=int(record.get("tokens") or 0),
+        tools=bool(record.get("tools")),
+        reason=str(record.get("reason") or ""),
+        prompt_tokens=int(record.get("prompt_tokens") or 0),
+        completion_tokens=int(record.get("completion_tokens") or 0),
+        stream=bool(record.get("stream")),
+    )
+
+
 def recent_activity(limit: int = 8) -> list[Activity]:
     """The newest gateway requests, newest first."""
-    events: list[Activity] = []
-    for line in _tail_text(metrics_path()):
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        events.append(
-            Activity(
-                at=float(event.get("ts") or 0.0),
-                tier=str(event.get("tier") or "?"),
-                model=str(event.get("model") or "?"),
-                ms=int(float(event.get("ms") or 0)),
-                tokens=int(event.get("tokens") or 0),
-                tools=bool(event.get("tools")),
-                reason=str(event.get("reason") or ""),
-                prompt_tokens=int(event.get("prompt_tokens") or 0),
-                completion_tokens=int(event.get("completion_tokens") or 0),
-                stream=bool(event.get("stream")),
-            )
-        )
+    records, _total = _METRICS_TAIL.read(metrics_path(), max(0, limit))
+    events = [_activity_from_record(record) for record in records]
     events.sort(key=lambda item: item.at, reverse=True)
     return events[:limit]
 
@@ -839,14 +837,15 @@ def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
         report.resident_gb = round(sum(item[1] for item in report.loaded), 2)
         report.potential_free_gb = snapshot.potential_free_gb
         report.gateway_requests = metrics_count()
-        # A running agent often has no --model flag (the client reads its own
-        # config). With exactly one resident model, that model is the honest
-        # answer for "which model is this project using".
-        if len(report.loaded) == 1:
-            only = report.loaded[0][0]
-            report.projects = [
-                replace(project, model=project.model or only) for project in report.projects
-            ]
+    report.cache = cache_snapshot()
+    # A running agent often has no --model flag (the client reads its own
+    # config). With exactly one resident model, that model is the honest
+    # answer for "which model is this project using".
+    if len(report.loaded) == 1:
+        only = report.loaded[0][0]
+        report.projects = [
+            replace(project, model=project.model or only) for project in report.projects
+        ]
     report.health = assess(report)
     return report
 
@@ -856,8 +855,8 @@ def metrics_count(limit: int = 500) -> int:
     count = max(0, int(limit))
     if count == 0:
         return 0
-    lines = [line for line in _tail_text(metrics_path()) if line.strip()]
-    return len(lines[-count:])
+    _records, total = _METRICS_TAIL.read(metrics_path(), count)
+    return min(total, count)
 
 
 def format_age(timestamp: float) -> str:

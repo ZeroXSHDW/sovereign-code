@@ -3637,6 +3637,47 @@ def _domains(detect: str | None = None) -> int:
     return 0
 
 
+def _project(args) -> int:
+    from .packs import PACKS, get_pack
+    from .projectsetup import init_project, profile
+
+    root = Path(args.path).expanduser()
+    if not root.is_dir():
+        console.print(f"[red]Not a directory:[/] {root}")
+        return 1
+
+    chosen = None
+    if args.pack:
+        chosen = get_pack(args.pack)
+        if chosen is None:
+            console.print(f"[red]Unknown pack[/] {args.pack!r}. Known: {', '.join(sorted(PACKS))}")
+            return 1
+
+    found = profile(root)
+    table = Table(title=f"Project · {found.root}", header_style="bold #b794f4")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("Files", str(found.files))
+    table.add_row("Languages", ", ".join(f"{n} {c}" for n, c in found.languages) or "-")
+    table.add_row("Checks", "\n".join(found.checks) or "none detected")
+    console.print(table)
+
+    if args.action == "profile":
+        return 0
+
+    actions = init_project(root, pack=chosen, force=args.force, dry_run=args.dry_run)
+    for action, path in actions:
+        console.print(f"[green]{action}[/] {path}")
+    if args.dry_run:
+        console.print("[dim]Dry run: nothing was written.[/]")
+    elif not found.checks:
+        console.print(
+            "[yellow]No test command detected.[/] Add one to AGENTS.md so the agent can verify itself."
+        )
+    console.print("[dim]Open the folder in OpenCode or ChatGPT; AGENTS.md loads automatically.[/]")
+    return 0
+
+
 def _mlx_cmd(settings: Settings, args) -> int:
     """Manage the local mlx-lm server for Apple Silicon MLX models."""
     from .backends import _mlx_url, probe, resolve, wait_online
@@ -5781,6 +5822,8 @@ def build_parser() -> argparse.ArgumentParser:
     pack.add_argument("key", nargs="?", default=None, help="pack key (pentest, vulnerability, …)")
     pack.add_argument(
         "--path",
+        "--brief",
+        dest="path",
         default="AGENTS.md",
         metavar="FILE",
         help="brief: write the managed block into this project file (default: AGENTS.md)",
@@ -5902,6 +5945,16 @@ def build_parser() -> argparse.ArgumentParser:
     clone = sub.add_parser("clone", help="clone a GitHub repo into ~/Documents/projects")
     clone.add_argument("url")
     clone.add_argument("--name", default=None)
+
+    project = sub.add_parser(
+        "project",
+        help="make a folder agent-ready: detect checks, write AGENTS.md and opencode.json",
+    )
+    project.add_argument("action", nargs="?", default="profile", choices=("init", "profile"))
+    project.add_argument("path", nargs="?", default=".", help="project directory")
+    project.add_argument("--pack", default=None, help="also add a task pack (e.g. pentest)")
+    project.add_argument("--force", action="store_true", help="overwrite existing files")
+    project.add_argument("--dry-run", action="store_true", help="report without writing")
 
     launch = sub.add_parser("launch", help="launch a local coding client in a project")
     launch.add_argument("client", choices=("qwen", "codex", "claude", "opencode", "codium"))
@@ -6936,6 +6989,8 @@ def main(argv: list[str] | None = None) -> int:
         return _memory(args.action, args.text, args.project)
     if command == "clone":
         return _clone(args.url, args.name)
+    if command == "project":
+        return _project(args)
     if command == "pipeline":
         return _pipeline(
             settings,

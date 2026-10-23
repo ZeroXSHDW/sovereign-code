@@ -269,6 +269,33 @@ def install_project(
     return written
 
 
+# The short list an agent brief carries. The full curated set (45 skills) would
+# overwhelm a client's context, so the brief names only the ones every coding
+# task needs. `sovereign skills index` regenerates the managed block from here.
+BRIEF_SKILLS: tuple[str, ...] = (
+    "using-agent-skills",
+    "spec-driven-development",
+    "planning-and-task-breakdown",
+    "incremental-implementation",
+    "test-driven-development",
+    "debugging-and-error-recovery",
+    "code-review-and-quality",
+    "code-simplification",
+    "security-and-hardening",
+    "api-and-interface-design",
+    "performance-optimization",
+    "observability-and-instrumentation",
+    "documentation-and-adrs",
+    "git-workflow-and-versioning",
+)
+
+
+def brief_skills(source: Path | None = None) -> list[Skill]:
+    """The brief's skills, in ``BRIEF_SKILLS`` order, found in the library."""
+    pool = {skill.name: skill for skill in load_curated(source or (PROJECT_ROOT / SKILL_DIR))}
+    return [pool[name] for name in BRIEF_SKILLS if name in pool]
+
+
 def installed_counts() -> dict[str, int]:
     counts: dict[str, int] = {}
     for key, getter in TARGETS.items():

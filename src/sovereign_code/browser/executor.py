@@ -110,7 +110,7 @@ _OBSERVE_JS_TEMPLATE = """
   return {
     url: location.href,
     title: document.title,
-    text: bodyText.slice(0, 4000),
+    text: bodyText.slice(0, 6000),
     elements: elements
   };
 }

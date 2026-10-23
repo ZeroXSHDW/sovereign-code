@@ -6340,7 +6340,13 @@ def build_parser() -> argparse.ArgumentParser:
     gwcfg = sub.add_parser(
         "gateway-config", help="generate the LiteLLM model_list.yaml for all code agents"
     )
-    gwcfg.add_argument("--write", action="store_true", help="write model_list.yaml to disk")
+    gwcfg.add_argument(
+        "--write",
+        "--apply",
+        dest="write",
+        action="store_true",
+        help="write model_list.yaml to disk",
+    )
     gwcfg.add_argument(
         "--path",
         default=None,

@@ -83,7 +83,7 @@ def _completion_key(model: str, prompt: str, **options: Any) -> str:
 class MemoryCache:
     """Thread-safe in-memory LRU cache."""
 
-    def __init__(self, max_entries: int = 1024, ttl: float = TTL_DEFAULT) -> None:
+    def __init__(self, max_entries: int = 2048, ttl: float = TTL_DEFAULT) -> None:
         self.max_entries = max_entries
         self.ttl = ttl
         self._data: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()

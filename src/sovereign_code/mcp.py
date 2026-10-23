@@ -192,7 +192,7 @@ TOOLS: list[dict[str, Any]] = [
             "names": {"type": "array", "items": {"type": "string"}},
             "query": {"type": "string"},
             "limit": {"type": "integer", "default": 10},
-            "max_tokens": {"type": "integer", "default": 6000},
+            "max_tokens": {"type": "integer", "default": 8000},
         },
     ),
     _tool(
@@ -1133,7 +1133,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 names=names,
                 query=str(args.get("query") or ""),
                 limit=int(args.get("limit") or 10),
-                max_tokens=int(args.get("max_tokens") or 6000),
+                max_tokens=int(args.get("max_tokens") or 8000),
             )
         )
     if name == "list_packs":

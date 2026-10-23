@@ -1402,7 +1402,7 @@ def truncate_tool_outputs(
 
 def compact_messages(messages: list[dict[str, Any]], context: int) -> list[dict[str, Any]]:
     """Keep the task anchor and recent turns when a long session exceeds context."""
-    budget = max(1024, int(context * 0.72))
+    budget = max(1024, int(context * 0.80))
     if estimate_tokens(messages) <= budget:
         return messages
     system = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]

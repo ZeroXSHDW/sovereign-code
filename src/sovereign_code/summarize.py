@@ -11,7 +11,7 @@ from .browser.actions import BrowserPolicy, PolicyError, check_url
 from .errors import SourceError
 from .http import shared_client
 
-MAX_CHARS = 24000
+MAX_CHARS = 32000
 MAX_REDIRECTS = 5
 
 SYSTEM_PROMPT = (

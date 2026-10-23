@@ -540,6 +540,11 @@ class SovereignApp(App[None]):
                 await self._run_cli("summarize", arg)
         elif command == "/backup":
             await self._run_cli("backup")
+        elif command == "/hf":
+            if not arg:
+                await self.add_message("system", "Usage: `/hf search|info|download|import ...`")
+                return
+            await self._run_cli("hf", *arg.split())
         elif command == "/doctor":
             await self._run_cli("doctor")
         elif command == "/skills":

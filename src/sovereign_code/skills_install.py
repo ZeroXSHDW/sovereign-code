@@ -46,12 +46,53 @@ CURATED_PATTERNS = (
 )
 
 QUALITY_PATTERNS = (
-    "tdd-workflows--*.md",
-    "code-review-excellence--*.md",
-    "debugging-strategies--*.md",
+    "api-scaffolding--*.md",
+    "backend-development--*.md",
+    "cicd-automation--*.md",
+    "cloud-infrastructure--*.md",
+    "data-engineering--*.md",
+    "database-design--*.md",
+    "developer-essentials--*.md",
+    "framework-migration--*.md",
+    "frontend-mobile-development--*.md",
+    "incident-response--*.md",
+    "javascript-typescript--*.md",
+    "kubernetes-operations--*.md",
+    "llm-application-dev--*.md",
+    "observability-monitoring--*.md",
+    "python-development--*.md",
+    "security-scanning--*.md",
+    "shell-scripting--*.md",
+    "skill-forge-essentials--*.md",
+    "agent-teams--*.md",
+    "llm-finetuning--*.md",
+    "machine-learning-ops--*.md",
+    "systems-programming--*.md",
 )
 
-TOP_AGENT_PATTERNS = ("agent--*.md",)
+TOP_AGENT_PATTERNS = (
+    "agent--ai-engineer.md",
+    "agent--backend-architect.md",
+    "agent--database-architect.md",
+    "agent--database-optimizer.md",
+    "agent--deployment-engineer.md",
+    "agent--devops-troubleshooter.md",
+    "agent--error-detective.md",
+    "agent--fastapi-pro.md",
+    "agent--frontend-developer.md",
+    "agent--incident-responder.md",
+    "agent--legacy-modernizer.md",
+    "agent--llm-finetuning-architect.md",
+    "agent--llm-finetuning-eval-engineer.md",
+    "agent--llm-finetuning-training-engineer.md",
+    "agent--ml-engineer.md",
+    "agent--mlops-engineer.md",
+    "agent--observability-engineer.md",
+    "agent--performance-engineer.md",
+    "agent--prompt-engineer.md",
+    "agent--python-pro.md",
+    "agent--test-automator.md",
+)
 
 PROFILES: dict[str, tuple[str, ...]] = {
     "core": CURATED_PATTERNS,

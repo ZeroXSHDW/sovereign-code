@@ -557,6 +557,8 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/ping":
+            await self.handle_command("/run ping -c 1 127.0.0.1")
         elif command == "/motd":
             import random
 
@@ -566,7 +568,7 @@ class SovereignApp(App[None]):
                 "Try /calc for quick arithmetic without a model.",
                 "Use /history to review recent turns.",
             ]
-            await self.add_message("system", f"Tip: {random.choice(tips)}")
+            await self.add_message("system", f"Tip: {random.choice(tips)}")  # noqa: S311  # noqa: S311
         elif command == "/banner":
             banner = (
                 "```\n"

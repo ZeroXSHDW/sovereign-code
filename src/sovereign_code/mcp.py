@@ -919,7 +919,7 @@ def _browser_observation(observation: dict) -> dict:
         "url": observation.get("url"),
         "title": observation.get("title"),
         "captcha": observation.get("captcha"),
-        "text": str(observation.get("text") or "")[:4000],
+        "text": str(observation.get("text") or "")[:6000],
         "elements": observation.get("elements") or [],
     }
 

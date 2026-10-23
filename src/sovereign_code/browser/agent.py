@@ -114,7 +114,7 @@ class ModelPlanner:
         return {
             "url": observation.get("url"),
             "title": observation.get("title"),
-            "text": str(observation.get("text") or "")[:2500],
+            "text": str(observation.get("text") or "")[:4000],
             "elements": elements,
         }
 

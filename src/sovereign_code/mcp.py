@@ -290,7 +290,7 @@ TOOLS: list[dict[str, Any]] = [
         "adds private and gated results. Use hf_model_info before downloading.",
         {
             "query": {"type": "string"},
-            "limit": {"type": "integer", "default": 20},
+            "limit": {"type": "integer", "default": 30},
             "gguf_only": {"type": "boolean", "default": False},
             "author": {"type": "string"},
             "sort": {
@@ -317,7 +317,7 @@ TOOLS: list[dict[str, Any]] = [
         "formats, task, and size metadata. A token adds private and gated datasets.",
         {
             "query": {"type": "string"},
-            "limit": {"type": "integer", "default": 20},
+            "limit": {"type": "integer", "default": 30},
             "author": {"type": "string"},
             "sort": {
                 "type": "string",

@@ -1363,6 +1363,81 @@ def desktop_configs() -> dict[str, Path]:
     }
 
 
+def codium_command() -> str:
+    for name in ("codium", "codium-insiders"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return ""
+
+
+def codium_settings_path() -> Path:
+    """The user settings file of the installed VS Codium build."""
+    mac = Path.home() / "Library" / "Application Support" / "VSCodium" / "User" / "settings.json"
+    mac_insiders = (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "VSCodium - Insiders"
+        / "User"
+        / "settings.json"
+    )
+    linux = Path.home() / ".config" / "VSCodium" / "User" / "settings.json"
+    if mac_insiders.is_file() or (shutil.which("codium-insiders") and not shutil.which("codium")):
+        return mac_insiders
+    if mac.parent.is_dir() or not linux.parent.is_dir():
+        return mac
+    return linux
+
+
+def install_codium_continue(path: Path | None = None) -> str:
+    """Install Continue into VS Codium and point its user settings locally."""
+    command = codium_command()
+    if not command:
+        return "codium not installed"
+    extension = "Continue.continue"
+    installed = False
+    try:
+        listed = subprocess.run(
+            [command, "--list-extensions"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        installed = extension.lower() in (listed.stdout or "").lower()
+        if not installed:
+            result = subprocess.run(
+                [command, "--install-extension", extension, "--force"],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+            installed = result.returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"codium extension failed: {exc}"
+
+    target = path or codium_settings_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, UnicodeDecodeError, ValueError):
+        data = {}
+    data.update(
+        {
+            "continue.enableTabAutocomplete": True,
+            "continue.telemetryEnabled": False,
+            "telemetry.telemetryLevel": "off",
+        }
+    )
+    _write(target, json.dumps(data, indent=2) + "\n")
+    install_continue_config()
+    install_continue_rules()
+    return f"Continue {'ready' if installed else 'installed (reopen Codium)'} · {target}"
+
+
 MLX_BASE_URL = "http://127.0.0.1:8081/v1"
 
 MLX_MODELS: dict[str, tuple[str, int]] = {

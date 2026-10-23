@@ -216,7 +216,7 @@ TOOLS: list[dict[str, Any]] = [
             "query": {"type": "string"},
             "regex": {"type": "boolean", "default": False},
             "glob": {"type": "string"},
-            "limit": {"type": "integer", "default": 50},
+            "limit": {"type": "integer", "default": 100},
             "code_only": {"type": "boolean", "default": True},
         },
         ["query"],

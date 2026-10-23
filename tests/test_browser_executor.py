@@ -588,7 +588,11 @@ def test_one_time_code_is_not_handed_to_the_model(tmp_path: Path) -> None:
         try:
             session.goto(base + "secrets")
             observation = session.observe()
-            otp = next(item for item in observation["elements"] if item.get("name") == "otp_code")
+            otp = next(
+                item
+                for item in observation["elements"]
+                if item.get("sensitive") and "one-time code" in (item.get("name") or "").lower()
+            )
             assert otp["sensitive"] is True
             assert otp["value"] == ""
             assert "123456" not in str(observation)

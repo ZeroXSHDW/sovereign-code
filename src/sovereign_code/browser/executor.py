@@ -88,8 +88,8 @@ _OBSERVE_JS_TEMPLATE = """
     );
     const name = (
       label ||
-      (sensitive ? '' : String(el.value || '')) ||
       el.getAttribute('name') ||
+      (sensitive ? '' : String(el.value || '')) ||
       el.id ||
       ''
     ).replace(/\\s+/g, ' ').trim().slice(0, 120);

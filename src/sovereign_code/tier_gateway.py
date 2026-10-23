@@ -45,7 +45,7 @@ from .http import leased_client, shared_client
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
 from .scheduler import ModelScheduler
-from .serverguard import GuardedHandler, GuardedServer, content_length
+from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer, content_length
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
@@ -2166,6 +2166,11 @@ class _Handler(GuardedHandler):
             return
         try:
             request = self._read()
+        except BodyTooLarge:
+            self._json(
+                413, {"error": {"message": "request body too large", "type": "invalid_request"}}
+            )
+            return
         except (ValueError, UnicodeDecodeError):
             self._json(400, {"error": {"message": "invalid JSON", "type": "invalid_request"}})
             return

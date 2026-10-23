@@ -1155,7 +1155,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 str(args.get("query") or ""),
                 bool(args.get("regex", False)),
                 str(args.get("glob") or "") or None,
-                int(args.get("limit") or 50),
+                int(args.get("limit") or 100),
                 bool(args.get("code_only", True)),
             )
         )

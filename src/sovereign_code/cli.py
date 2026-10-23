@@ -4896,6 +4896,32 @@ def _skills(
         console.print("[dim]Run `sovereign skills manifest` to accept the current library.[/]")
         return 1
 
+    if action == "route":
+        from .skillrouter import route
+
+        task = (query or " ".join(names or [])).strip()
+        if not task:
+            console.print("[red]Usage:[/] sovereign skills route <task description>")
+            return 1
+        cards, note = route(task, limit=max(1, min(limit, 20)))
+        table = Table(title="Skills for this task", header_style="bold #b794f4")
+        table.add_column("Name", style="bold")
+        table.add_column("Category")
+        table.add_column("Tokens", justify="right")
+        table.add_column("Risk")
+        table.add_column("Why", overflow="fold")
+        for card in cards:
+            table.add_row(
+                card.name,
+                card.category,
+                str(card.tokens),
+                card.risk,
+                ", ".join(card.matched) or card.description[:80],
+            )
+        console.print(table)
+        console.print(f"[dim]{note}[/]")
+        return 0
+
     rows = list_skills()
     table = Table(title="Skills", header_style="bold #b794f4")
     table.add_column("Name", style="bold")
@@ -6194,7 +6220,7 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="list",
-        choices=("list", "install", "search", "lint", "manifest", "verify"),
+        choices=("list", "install", "search", "lint", "manifest", "verify", "route"),
         help="default: list",
     )
     skills.add_argument("--query", default=None, help="lint/verify: limit to matching skills")

@@ -45,6 +45,21 @@ CURATED_PATTERNS = (
     "agent--test-automator.md",
 )
 
+QUALITY_PATTERNS = (
+    "tdd-workflows--*.md",
+    "code-review-excellence--*.md",
+    "debugging-strategies--*.md",
+)
+
+TOP_AGENT_PATTERNS = ("agent--*.md",)
+
+PROFILES: dict[str, tuple[str, ...]] = {
+    "core": CURATED_PATTERNS,
+    "quality": CURATED_PATTERNS + QUALITY_PATTERNS + TOP_AGENT_PATTERNS,
+}
+
+DEFAULT_PROFILE = "core"
+
 TARGETS = {
     "claude": lambda: Path.home() / ".claude" / "skills",
     "codex": lambda: Path.home() / ".codex" / "skills",
@@ -95,22 +110,25 @@ def load_skill(path: Path) -> Skill:
     return Skill(name=name, description=description[:600], body=body.strip() + "\n", source=path)
 
 
-def curated_paths(source: Path | None = None) -> list[Path]:
+def curated_paths(source: Path | None = None, profile: str = DEFAULT_PROFILE) -> list[Path]:
+    patterns = PROFILES.get(profile)
+    if patterns is None:
+        raise ValueError(f"unknown profile: {profile}")
     root = source or PROJECT_ROOT / SKILL_DIR
     found: list[Path] = []
-    for pattern in CURATED_PATTERNS:
+    for pattern in patterns:
         found.extend(sorted(root.glob(pattern)))
-    # The eight local prompt templates are already curated and short.
+    # The local prompt templates are already curated and short.
     config = LOCAL_AI_ROOT / "config" / "skills"
     if config.is_dir():
         found.extend(sorted(config.glob("*.md")))
     return found
 
 
-def load_curated(source: Path | None = None) -> list[Skill]:
+def load_curated(source: Path | None = None, profile: str = DEFAULT_PROFILE) -> list[Skill]:
     skills: list[Skill] = []
     seen: set[str] = set()
-    for path in curated_paths(source):
+    for path in curated_paths(source, profile):
         skill = load_skill(path)
         name = skill.name
         suffix = 2
@@ -294,6 +312,19 @@ def brief_skills(source: Path | None = None) -> list[Skill]:
     """The brief's skills, in ``BRIEF_SKILLS`` order, found in the library."""
     pool = {skill.name: skill for skill in load_curated(source or (PROJECT_ROOT / SKILL_DIR))}
     return [pool[name] for name in BRIEF_SKILLS if name in pool]
+
+
+def profile_signature(profile: str = DEFAULT_PROFILE, source: Path | None = None) -> tuple:
+    """Identity of the profile files, for caches that embed their descriptions."""
+    paths = curated_paths(source, profile)
+    parts = []
+    for path in paths:
+        try:
+            stat = path.stat()
+            parts.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            parts.append((str(path), -1, -1))
+    return tuple(parts)
 
 
 def installed_counts() -> dict[str, int]:

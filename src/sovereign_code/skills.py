@@ -32,6 +32,15 @@ BODY_CHARS = 4000
 # keeps a very broad query from reading the body of every skill.
 MAX_EXTRA_NAMES = 1000
 
+# The FTS index already applies every term. Ranking the candidates in SQLite
+# and reading only the best ones keeps a broad query ("the") from pulling tens
+# of thousands of 4k-character bodies into Python just to return ten rows.
+SEARCH_CANDIDATE_FLOOR = 200
+SEARCH_CANDIDATE_PER_RESULT = 20
+SEARCH_CANDIDATE_CEILING = 5000
+NAME_MATCH_FLOOR = 50
+NAME_MATCH_PER_RESULT = 10
+
 # How much of the tree the index has to know before it may answer for it,
 # and how much bigger than the tree its own library may be. A few rows for
 # skills that are gone from disk must not switch the library back to reading
@@ -43,6 +52,72 @@ INDEX_SIZE_FACTOR = 1.1
 # synced from the per-user directory.
 SOURCE_USER = "user"
 SOURCE_REPO = "repo"
+
+# Query words that name a concept differently from most skill titles. Search
+# groups each original word with its alternatives (OR), then ANDs the groups.
+SYNONYMS: dict[str, tuple[str, ...]] = {
+    "a11y": ("accessibility",),
+    "auth": ("authentication", "authorization"),
+    "cd": ("deployment",),
+    "ci": ("cicd", "github", "actions"),
+    "click": ("cli",),
+    "bug": ("debug", "debugging"),
+    "bugs": ("debug", "debugging"),
+    "db": ("database",),
+    "deploy": ("deployment", "shipping"),
+    "doc": ("documentation",),
+    "docs": ("documentation",),
+    "iac": ("terraform", "infrastructure"),
+    "i18n": ("internationalization",),
+    "k8s": ("kubernetes",),
+    "llm": ("ai",),
+    "optimi": ("performance",),
+    "optimise": ("performance",),
+    "optimize": ("performance",),
+    "logging": ("observability",),
+    "monitoring": ("observability",),
+    "perf": ("performance",),
+    "plan": ("planning",),
+    "profile": ("performance", "profiling"),
+    "rag": ("retrieval",),
+    "refactor": ("simplification",),
+    "ship": ("release", "shipping"),
+    "slow": ("performance",),
+    "spec": ("specification",),
+    "speed": ("performance",),
+    "sql": ("database",),
+    "terminal": ("cli",),
+    "tested": ("test", "testing"),
+    "tests": ("test", "testing"),
+    "ui": ("frontend", "interface"),
+    "vuln": ("security", "vulnerability"),
+}
+
+# The listing, the index coverage check and the index snapshot are recomputed
+# by every skill command, and each one otherwise scans 20k+ directory entries
+# or rows. They are cached per directory/database signature; a change to the
+# tree or the index changes the signature. Small limits keep a long-lived MCP
+# process from accumulating entries for temporary directories.
+STEM_CACHE_LIMIT = 32
+NAMES_CACHE_LIMIT = 8
+SNAPSHOT_CACHE_LIMIT = 8
+USABLE_CACHE_LIMIT = 16
+RESULT_CACHE_LIMIT = 64
+FS_BODIES_CACHE_LIMIT = 4
+
+_STEM_CACHE: dict[str, tuple[tuple[int, int], frozenset[str]]] = {}
+_NAMES_CACHE: dict[tuple[str, int, int, int, int], frozenset[str]] = {}
+_SNAPSHOT_CACHE: dict[
+    tuple[str, int, int, int, int], tuple[dict[str, dict[str, str]], dict[str, str]]
+] = {}
+_USABLE_CACHE: dict[
+    tuple[tuple[str, int, int, int, int], tuple[tuple[str, int, int], ...]], bool
+] = {}
+_LIST_CACHE: dict[tuple[object, ...], tuple[tuple[str, str], ...]] = {}
+_SEARCH_CACHE: dict[tuple[object, ...], tuple[tuple[str, str], ...]] = {}
+_FS_BODIES_CACHE: dict[
+    str, tuple[tuple[tuple[str, int, int], ...], tuple[tuple[str, str, str], ...]]
+] = {}
 
 
 def _skill_dirs() -> list[Path]:
@@ -87,13 +162,98 @@ def _dir_source(directory: Path) -> str:
     return SOURCE_USER if directory == USER_SKILLS_DIR else SOURCE_REPO
 
 
-def _dir_stems(directory: Path) -> set[str]:
-    """The skill file stems of one directory (one listing, no file reads)."""
+def _dir_stems(directory: Path) -> frozenset[str]:
+    """The skill file stems of one directory (one listing, no file reads).
+
+    Directory metadata changes when a skill is added, removed or renamed, so
+    the listing is cached per directory signature. Editing a file's contents
+    does not change its stem, which is all this function reports.
+    """
+    key = str(directory)
+    try:
+        stat = directory.stat()
+    except OSError:
+        return frozenset()
+    signature = (stat.st_mtime_ns, stat.st_ino)
+    cached = _STEM_CACHE.get(key)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
     try:
         with os.scandir(directory) as entries:
-            return {entry.name[:-3] for entry in entries if entry.name.endswith(".md")}
+            stems = frozenset(entry.name[:-3] for entry in entries if entry.name.endswith(".md"))
     except OSError:
-        return set()
+        stems = frozenset()
+    if len(_STEM_CACHE) >= STEM_CACHE_LIMIT:
+        _STEM_CACHE.clear()
+    _STEM_CACHE[key] = (signature, stems)
+    return stems
+
+
+def _tree_signature() -> tuple[tuple[str, int, int], ...]:
+    """A cheap identity for the skill directories as they are on disk."""
+    parts: list[tuple[str, int, int]] = []
+    for directory in _skill_dirs():
+        try:
+            stat = directory.stat()
+        except OSError:
+            parts.append((str(directory), -1, -1))
+        else:
+            parts.append((str(directory), stat.st_mtime_ns, stat.st_ino))
+    return tuple(parts)
+
+
+def _user_files_signature() -> tuple[tuple[str, int, int], ...]:
+    """Names, mtimes and sizes of the small per-user skill directory."""
+    parts: list[tuple[str, int, int]] = []
+    try:
+        with os.scandir(USER_SKILLS_DIR) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".md"):
+                    continue
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                parts.append((entry.name, stat.st_mtime_ns, stat.st_size))
+    except OSError:
+        return ()
+    parts.sort()
+    return tuple(parts)
+
+
+def _result_key() -> tuple[object, ...]:
+    """Everything a cached listing or search depends on."""
+    from .skills_install import profile_signature
+
+    return (
+        _db_signature(),
+        _tree_signature(),
+        _user_files_signature(),
+        profile_signature("quality"),
+    )
+
+
+def _profile_descriptions() -> dict[str, str]:
+    """Rich frontmatter descriptions for the installed quality profile.
+
+    The SQLite index stores the first heading, which is fine for ranking but
+    too terse to show an agent choosing a skill. The curated profile is cached
+    and small, so overlay its descriptions on search and listing output.
+    """
+    from .skills_install import load_curated
+
+    known: dict[str, str] = {}
+    for skill in load_curated(profile="quality"):
+        known[skill.name] = skill.description
+        # Index rows are named after the file stem, which keeps the collection
+        # prefix ("addy--security-and-hardening").
+        known[skill.source.stem] = skill.description
+    return known
+
+
+def _prefer_profile(rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    known = _profile_descriptions()
+    return [(name, known.get(name, description)) for name, description in rows]
 
 
 def _chunks(items: list[str], size: int) -> list[list[str]]:
@@ -111,6 +271,40 @@ def _index_path() -> Path:
     except ImportError:  # pragma: no cover - skilldb ships with the package
         return DATA_DIR / "skills.db"
     return DEFAULT_DB
+
+
+def _db_signature() -> tuple[str, int, int, int, int] | None:
+    """Identity of the index file and its write-ahead log, for cache invalidation."""
+    path = _index_path()
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    try:
+        wal = path.with_name(path.name + "-wal").stat()
+    except OSError:
+        wal_mtime, wal_size = 0, 0
+    else:
+        wal_mtime, wal_size = wal.st_mtime_ns, wal.st_size
+    return (str(path), stat.st_mtime_ns, stat.st_size, wal_mtime, wal_size)
+
+
+def _index_names(conn: sqlite3.Connection) -> frozenset[str] | None:
+    """Every name the index knows, cached until the index file changes."""
+    signature = _db_signature()
+    if signature is not None:
+        cached = _NAMES_CACHE.get(signature)
+        if cached is not None:
+            return cached
+    try:
+        names = frozenset(str(row[0]) for row in conn.execute("SELECT name FROM skills"))
+    except sqlite3.Error:
+        return None
+    if signature is not None:
+        if len(_NAMES_CACHE) >= NAMES_CACHE_LIMIT:
+            _NAMES_CACHE.clear()
+        _NAMES_CACHE[signature] = names
+    return names
 
 
 def _connect_index() -> sqlite3.Connection | None:
@@ -155,32 +349,71 @@ def _index_usable(conn: sqlite3.Connection | None) -> bool:
     """
     if conn is None:
         return False
+    signature = _db_signature()
+    tree = _tree_signature()
+    if signature is not None:
+        cached = _USABLE_CACHE.get((signature, tree))
+        if cached is not None:
+            return cached
     stems: set[str] = set()
     for directory in _skill_dirs():
         stems |= _dir_stems(directory)
     if not stems:
         return False
-    try:
-        names = {str(row[0]) for row in conn.execute("SELECT name FROM skills").fetchall()}
-    except sqlite3.Error:
-        return False
+    names = _index_names(conn)
     if not names:
         return False
     known = len(stems & names)
-    return known >= len(stems) * INDEX_COVERAGE and len(names) <= len(stems) * INDEX_SIZE_FACTOR
+    usable = known >= len(stems) * INDEX_COVERAGE and len(names) <= len(stems) * INDEX_SIZE_FACTOR
+    if signature is not None:
+        if len(_USABLE_CACHE) >= USABLE_CACHE_LIMIT:
+            _USABLE_CACHE.clear()
+        _USABLE_CACHE[(signature, tree)] = usable
+    return usable
+
+
+def _term_groups(terms: list[str]) -> list[tuple[str, ...]]:
+    """Each query term plus its known alternatives, as one OR group."""
+    groups: list[tuple[str, ...]] = []
+    for term in terms:
+        alternatives = tuple(
+            dict.fromkeys(
+                token
+                for candidate in (term, *SYNONYMS.get(term, ()))
+                for token in re.findall(r"\w+", candidate)
+            )
+        )
+        if alternatives:
+            groups.append(alternatives)
+    return groups
+
+
+def _groups_match(text: str, terms: list[str], groups: list[tuple[str, ...]]) -> bool:
+    """Every term is present in ``text``; synonyms count for plain word terms.
+
+    A punctuated term such as "C++" keeps its exact substring check, because
+    FTS tokenises it to "c" and would otherwise match every C skill.
+    """
+    for term, group in zip(terms, groups, strict=True):
+        if not (term.isascii() and term.isalnum()):
+            if term not in text:
+                return False
+        elif not any(word in text for word in group):
+            return False
+    return True
 
 
 def _fts_query(terms: list[str]) -> str | None:
     """An FTS5 MATCH expression for the search terms, or None when unusable."""
-    parts: list[str] = []
-    for term in terms:
-        for token in re.findall(r"\w+", term):
-            # The prefix match keeps the query close to the substring search
-            # the filesystem walk did ("review" also finds "reviewing").
-            parts.append(f'"{token}"*')
-    if not parts:
+    groups = _term_groups(terms)
+    if not groups:
         return None
-    return " AND ".join(parts)
+    # One OR group per query term, ANDed together. The prefix match keeps the
+    # query close to the substring search the filesystem walk did ("review"
+    # also finds "reviewing").
+    return " AND ".join(
+        "(" + " OR ".join(f'"{token}"*' for token in group) + ")" for group in groups
+    )
 
 
 # ------------------------------------------------------------------ files
@@ -207,17 +440,42 @@ def _fs_entries(directory: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def _fs_bodies(directory: Path) -> list[tuple[str, str]]:
-    """(name, first screen of the body) pairs read from the filesystem."""
-    bodies: list[tuple[str, str]] = []
-    if not directory.is_dir():
-        return bodies
-    for path in sorted(directory.glob("*.md")):
+def _fs_bodies(directory: Path) -> list[tuple[str, str, str]]:
+    """(name, body, description) read from the filesystem.
+
+    Without a SQLite index every search has to read the corpus. The result is
+    cached with a per-file mtime/size signature, so the first search pays the
+    scan and later searches only stat the files. An edit changes the signature
+    and rebuilds the cache.
+    """
+    try:
+        with os.scandir(directory) as entries:
+            files = []
+            for entry in entries:
+                if not entry.name.endswith(".md") or not entry.is_file():
+                    continue
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                files.append((entry.name, stat.st_mtime_ns, stat.st_size))
+    except OSError:
+        return []
+    signature = tuple(sorted(files))
+    key = str(directory)
+    cached = _FS_BODIES_CACHE.get(key)
+    if cached is not None and cached[0] == signature:
+        return list(cached[1])
+    bodies: list[tuple[str, str, str]] = []
+    for name, _mtime, _size in signature:
         try:
-            text = path.read_text(encoding="utf-8", errors="ignore")[:BODY_CHARS]
+            text = (directory / name).read_text(encoding="utf-8", errors="ignore")[:BODY_CHARS]
         except OSError:
             continue
-        bodies.append((path.stem, text))
+        bodies.append((name[:-3], text, _search_description(text)))
+    if len(_FS_BODIES_CACHE) >= FS_BODIES_CACHE_LIMIT:
+        _FS_BODIES_CACHE.clear()
+    _FS_BODIES_CACHE[key] = (signature, tuple(bodies))
     return bodies
 
 
@@ -236,16 +494,27 @@ def _search_description(body: str) -> str:
 
 def list_skills() -> list[tuple[str, str]]:
     """Return (name, one-line description) pairs, alphabetical."""
+    key = _result_key()
+    cached = _LIST_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
     seen: dict[str, str] = {}
+    indexed = False
     with _index() as conn:
         snapshot = None
         if conn is not None and _index_usable(conn):
             snapshot = _index_snapshot(conn)
+            indexed = True
         for directory in _skill_dirs():
             for name, description in _dir_entries(directory, snapshot):
                 # User dir first, so a local edit wins over the shipped one.
                 seen.setdefault(name, description)
-    return sorted(seen.items())
+    rows = _prefer_profile(sorted(seen.items()))
+    if indexed:
+        if len(_LIST_CACHE) >= RESULT_CACHE_LIMIT:
+            _LIST_CACHE.clear()
+        _LIST_CACHE[key] = tuple(rows)
+    return rows
 
 
 def _index_snapshot(
@@ -256,8 +525,16 @@ def _index_snapshot(
     The second group holds the rows the index does not label with a known
     directory; they are still usable, the file check keeps them in place.
     """
+    signature = _db_signature()
+    if signature is not None:
+        cached = _SNAPSHOT_CACHE.get(signature)
+        if cached is not None:
+            return cached
     rows = conn.execute(
-        "SELECT name, description, source FROM skills WHERE installed = 1"
+        "SELECT s.name, s.description, s.source FROM skills s "
+        "WHERE s.installed = 1 AND s.version = ("
+        "  SELECT MAX(v.version) FROM skills v WHERE v.name = s.name AND v.installed = 1"
+        ")"
     ).fetchall()
     labelled: dict[str, dict[str, str]] = {}
     unlabelled: dict[str, str] = {}
@@ -269,7 +546,12 @@ def _index_snapshot(
             labelled.setdefault(source, {})[name] = description
         else:
             unlabelled[name] = description
-    return labelled, unlabelled
+    snapshot = (labelled, unlabelled)
+    if signature is not None:
+        if len(_SNAPSHOT_CACHE) >= SNAPSHOT_CACHE_LIMIT:
+            _SNAPSHOT_CACHE.clear()
+        _SNAPSHOT_CACHE[signature] = snapshot
+    return snapshot
 
 
 def _index_rows_for(
@@ -321,33 +603,68 @@ def render_skill(name: str, user_input: str) -> str:
 
 
 def search_skills(query: str, limit: int = 30) -> list[tuple[str, str]]:
-    """Search names and the first screen of every skill in both directories."""
+    """Search names, descriptions and the full body of every skill.
+
+    The SQLite index ranks candidates with bm25 and caps how many bodies are
+    read, so a common word does not pull the whole 22k corpus into Python.
+    """
     terms = [term.lower() for term in query.split() if term.strip()]
     if not terms:
         return []
+    key = (query, limit, *_result_key())
+    cached = _SEARCH_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+    # A plain ASCII word query is already an AND match in FTS, so the whole
+    # body does not have to travel from SQLite to Python just to be checked
+    # again. Punctuated or non-Latin queries keep the substring check.
+    groups = _term_groups(terms)
+    simple = all(term.isascii() and term.isalnum() for term in terms)
     matches: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
     with _index() as conn:
         usable = conn is not None and _index_usable(conn)
         for directory in _skill_dirs():
-            bodies = _index_bodies(conn, directory, terms) if usable else None
+            bodies = (
+                _index_bodies(conn, directory, terms, limit, include_body=not simple)
+                if usable
+                else None
+            )
+            indexed = bodies is not None
             if bodies is None:
                 bodies = _fs_bodies(directory)
-            for name, body in bodies:
-                description = _search_description(body)
-                haystack = f"{name}\n{description}\n{body}".lower()
-                if not all(term in haystack for term in terms):
-                    continue
+            for name, body, description in bodies:
+                if not indexed or not simple:
+                    haystack = f"{name}\n{description}\n{body}".lower()
+                    if not _groups_match(haystack, terms, groups):
+                        continue
+                lowered_name = name.lower()
+                lowered_description = description.lower()
                 score = 0
-                if all(term in name.lower() for term in terms):
+                if all(any(word in lowered_name for word in group) for group in groups):
                     score += 10
-                if all(term in description.lower() for term in terms):
+                if all(any(word in lowered_description for word in group) for group in groups):
                     score += 5
+                # The user directory is searched first and overrides the
+                # shipped file with the same name, exactly like list_skills.
+                if name in seen:
+                    continue
+                seen.add(name)
                 matches.append((-score, name, description))
     matches.sort()
-    return [(name, description) for _score, name, description in matches[: max(1, limit)]]
+    rows = _prefer_profile(
+        [(name, description) for _score, name, description in matches[: max(1, limit)]]
+    )
+    if usable:
+        if len(_SEARCH_CACHE) >= RESULT_CACHE_LIMIT:
+            _SEARCH_CACHE.clear()
+        _SEARCH_CACHE[key] = tuple(rows)
+    return rows
 
 
-def _name_matches(conn: sqlite3.Connection, terms: list[str], exclude: set[str]) -> list[str]:
+def _name_matches(
+    conn: sqlite3.Connection, terms: list[str], exclude: set[str], limit: int
+) -> list[str]:
     """Skill names that contain every term, even when the text index misses them.
 
     The full-text index knows whole words, so "cybersecurity" holds no
@@ -355,27 +672,39 @@ def _name_matches(conn: sqlite3.Connection, terms: list[str], exclude: set[str])
     a name that contains the terms is a match the filesystem walk would have
     found.
     """
-    try:
-        names = conn.execute("SELECT name FROM skills").fetchall()
-    except sqlite3.Error:
+    names = _index_names(conn)
+    if names is None:
         return []
+    groups = _term_groups(terms)
     found: list[str] = []
-    for row in names:
-        name = str(row[0])
+    for name in names:
         if name in exclude:
             continue
         lowered = name.lower()
-        if all(term in lowered for term in terms):
+        if _groups_match(lowered, terms, groups):
             found.append(name)
             if len(found) >= MAX_EXTRA_NAMES:
                 break
-    return found
+    # A short name that contains the terms is a more precise match than a long
+    # path-like one ("security" beats "legal--information-security-policy").
+    found.sort(key=lambda name: (len(name), name))
+    return found[: max(1, limit)]
 
 
 def _index_bodies(
-    conn: sqlite3.Connection | None, directory: Path, terms: list[str]
-) -> list[tuple[str, str]] | None:
-    """(name, body) candidates for one directory, or None when the index cannot serve it."""
+    conn: sqlite3.Connection | None,
+    directory: Path,
+    terms: list[str],
+    limit: int,
+    *,
+    include_body: bool = True,
+) -> list[tuple[str, str, str]] | None:
+    """(name, body, description) candidates for one directory, or None if unserved.
+
+    ``include_body=False`` skips reading the markdown columns; the FTS match
+    already proved every term is present, so only the ranked name and
+    description are needed.
+    """
     if conn is None:
         return None
     if directory != REPO_SKILLS_DIR:
@@ -388,25 +717,64 @@ def _index_bodies(
     stems = _dir_stems(directory)
     if not stems:
         return []
-    try:
-        rows = list(
-            conn.execute(
-                "SELECT name, substr(content, 1, ?) FROM skills "
-                "WHERE installed = 1 "
-                "AND name IN (SELECT name FROM skills_fts WHERE skills_fts MATCH ?)",
-                (BODY_CHARS, match),
-            ).fetchall()
+    candidate_cap = max(
+        SEARCH_CANDIDATE_FLOOR,
+        min(limit * SEARCH_CANDIDATE_PER_RESULT, SEARCH_CANDIDATE_CEILING),
+    )
+    name_cap = max(NAME_MATCH_FLOOR, min(limit * NAME_MATCH_PER_RESULT, MAX_EXTRA_NAMES))
+    if include_body:
+        fts_sql = (
+            "SELECT s.name, substr(s.content, 1, ?), s.description "
+            "FROM skills s JOIN skills_fts ON skills_fts.rowid = s.rowid "
+            "WHERE skills_fts MATCH ? AND s.installed = 1 "
+            "AND s.version = ("
+            "  SELECT MAX(v.version) FROM skills v "
+            "  WHERE v.name = s.name AND v.installed = 1"
+            ") "
+            "ORDER BY bm25(skills_fts), s.name LIMIT ?"
         )
-        extra = _name_matches(conn, terms, {str(row[0]) for row in rows})
+        name_sql = (
+            "SELECT s.name, substr(s.content, 1, ?), s.description "
+            "FROM skills s "
+            "WHERE s.installed = 1 "
+            "AND s.version = ("
+            "  SELECT MAX(v.version) FROM skills v "
+            "  WHERE v.name = s.name AND v.installed = 1"
+            ") "
+            "AND s.name IN (SELECT value FROM json_each(?))"
+        )
+        fts_params: tuple[object, ...] = (BODY_CHARS, match, candidate_cap)
+        body_param: tuple[object, ...] = (BODY_CHARS,)
+    else:
+        fts_sql = (
+            "SELECT s.name, '', s.description "
+            "FROM skills s JOIN skills_fts ON skills_fts.rowid = s.rowid "
+            "WHERE skills_fts MATCH ? AND s.installed = 1 "
+            "AND s.version = ("
+            "  SELECT MAX(v.version) FROM skills v "
+            "  WHERE v.name = s.name AND v.installed = 1"
+            ") "
+            "ORDER BY bm25(skills_fts), s.name LIMIT ?"
+        )
+        name_sql = (
+            "SELECT s.name, '', s.description "
+            "FROM skills s "
+            "WHERE s.installed = 1 "
+            "AND s.version = ("
+            "  SELECT MAX(v.version) FROM skills v "
+            "  WHERE v.name = s.name AND v.installed = 1"
+            ") "
+            "AND s.name IN (SELECT value FROM json_each(?))"
+        )
+        fts_params = (match, candidate_cap)
+        body_param = ()
+    try:
+        rows = list(conn.execute(fts_sql, fts_params).fetchall())
+        extra = _name_matches(conn, terms, {str(row[0]) for row in rows}, name_cap)
         for chunk in _chunks(extra, 500):
-            rows.extend(
-                conn.execute(
-                    "SELECT name, substr(content, 1, ?) FROM skills "
-                    "WHERE installed = 1 "
-                    "AND name IN (SELECT value FROM json_each(?))",
-                    (BODY_CHARS, json.dumps(chunk)),
-                ).fetchall()
-            )
+            rows.extend(conn.execute(name_sql, (*body_param, json.dumps(chunk))).fetchall())
     except sqlite3.Error:
         return None
-    return [(str(row[0]), str(row[1] or "")) for row in rows if str(row[0]) in stems]
+    return [
+        (str(row[0]), str(row[1] or ""), str(row[2] or "")) for row in rows if str(row[0]) in stems
+    ]

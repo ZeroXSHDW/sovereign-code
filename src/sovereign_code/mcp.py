@@ -169,6 +169,17 @@ TOOLS: list[dict[str, Any]] = [
         {"query": {"type": "string"}},
     ),
     _tool(
+        "skills_for_task",
+        "Rank skills for a task and return compact cards (name, category, tokens, "
+        "risk) plus a suggested playbook. Does not load skill bodies.",
+        {
+            "task": {"type": "string"},
+            "limit": {"type": "integer", "default": 8},
+            "max_tokens": {"type": "integer", "default": 2000},
+        },
+        ["task"],
+    ),
+    _tool(
         "get_skill",
         "Return one skill's full Markdown body.",
         {"name": {"type": "string"}},
@@ -1113,6 +1124,21 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(_best_model(str(args.get("task") or "code")))
     if name == "list_skills":
         return _text(list_skills_payload(str(args.get("query") or "")))
+    if name == "skills_for_task":
+        from .skillrouter import playbook, route
+
+        cards, note = route(
+            str(args.get("task") or ""),
+            limit=max(1, min(20, int(args.get("limit") or 8))),
+            max_tokens=max(200, min(8000, int(args.get("max_tokens") or 2000))),
+        )
+        return _text(
+            {
+                "skills": [card.as_dict() for card in cards],
+                "playbook": playbook(str(args.get("task") or "")),
+                "note": note,
+            }
+        )
     if name == "get_skill":
         from .skills_install import get_skill
 

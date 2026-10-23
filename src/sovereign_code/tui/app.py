@@ -556,6 +556,40 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/calc":
+            if not arg:
+                await self.add_message("system", "Usage: `/calc <expression>`")
+                return
+            try:
+                import ast as _ast
+                import operator as _op
+
+                _OPS = {
+                    _ast.Add: _op.add,
+                    _ast.Sub: _op.sub,
+                    _ast.Mult: _op.mul,
+                    _ast.Div: _op.truediv,
+                    _ast.Pow: _op.pow,
+                    _ast.Mod: _op.mod,
+                }
+
+                def _eval(node):
+                    if isinstance(node, _ast.Expression):
+                        return _eval(node.body)
+                    if isinstance(node, _ast.Constant) and isinstance(node.value, (int, float)):
+                        return node.value
+                    if isinstance(node, _ast.BinOp) and type(node.op) in _OPS:
+                        return _OPS[type(node.op)](_eval(node.left), _eval(node.right))
+                    if isinstance(node, _ast.UnaryOp) and isinstance(node.op, _ast.USub):
+                        return -_eval(node.operand)
+                    raise ValueError("unsupported expression")
+
+                value = _eval(_ast.parse(arg, mode="eval"))
+                await self.add_message("system", f"`{arg}` = **{value}**")
+            except Exception as exc:
+                await self.add_message("system", f"Calc error: {exc}")
+        elif command == "/echo":
+            await self.add_message("system", arg or "")
         elif command == "/time":
             import datetime as _dt
 

@@ -971,7 +971,7 @@ def _browser_screenshot() -> list[dict[str, Any]]:
         content: list[dict[str, Any]] = [{"type": "text", "text": str(shot)}]
         try:
             data = shot.read_bytes()
-            if len(data) <= 2_000_000:
+            if len(data) <= 5_000_000:
                 content.append(
                     {
                         "type": "image",

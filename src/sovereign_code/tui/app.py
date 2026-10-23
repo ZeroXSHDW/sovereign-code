@@ -469,19 +469,24 @@ class SovereignApp(App[None]):
             if not workspace.is_dir():
                 workspace = Path.cwd()
             await self.add_message("system", f"Running `{arg}`…")
+            started = time.monotonic()
             try:
                 result = await asyncio.to_thread(run_shell, arg, cwd=workspace, timeout=120)
             except Exception as exc:
                 await self.add_message("system", f"Run failed: {exc}")
                 return
+            elapsed = time.monotonic() - started
             output = result.get("stdout", "")
             if result.get("stderr"):
                 output += ("\n" if output else "") + result["stderr"]
+            if len(output) > 4000:
+                output = output[:2000] + "\n…[truncated]…\n" + output[-2000:]
             if not output:
                 output = "(no output)"
             mark = "OK" if result.get("ok") else "FAIL"
             await self.add_message(
-                "system", f"**{mark}** (exit {result.get('returncode')})\n```\n{output}\n```"
+                "system",
+                f"**{mark}** (exit {result.get('returncode')}, {elapsed:.1f}s)\n```\n{output}\n```",
             )
         elif command == "/codex":
             await self.action_launch_codex(arg or None)

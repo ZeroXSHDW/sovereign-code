@@ -94,7 +94,7 @@ def opencode_models(text: str) -> list[str]:
         return []
     found: list[str] = []
     providers = data.get("provider") or {}
-    for key in ("local", "ollama"):
+    for key in ("local", "ollama", "sovereign"):
         provider = providers.get(key)
         if not isinstance(provider, dict):
             continue

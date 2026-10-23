@@ -477,7 +477,7 @@ def list_skills_payload(query: str = "") -> list[dict[str, str]]:
     if needle:
         return [
             {"name": name, "description": description}
-            for name, description in search_skills(needle, limit=50)
+            for name, description in search_skills(needle, limit=80)
         ]
     rows = []
     for skill in load_curated():

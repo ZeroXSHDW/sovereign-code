@@ -93,7 +93,7 @@ class WarmPool:
                     "prompt": "Hello.",
                     "stream": False,
                     "options": {"num_predict": 8, "temperature": 0, "num_ctx": 4096},
-                    "keep_alive": "15m",
+                    "keep_alive": "1h",
                 },
                 timeout=httpx.Timeout(timeout, connect=5.0),
             )
@@ -140,7 +140,7 @@ class WarmPool:
                         "prompt": "",
                         "stream": False,
                         "options": {"num_predict": 0},
-                        "keep_alive": "15m",
+                        "keep_alive": "1h",
                     },
                     timeout=httpx.Timeout(10.0, connect=3.0),
                 )

@@ -438,6 +438,21 @@ class SovereignApp(App[None]):
             )
         elif command in {"/open", "/qwen"}:
             await self.action_launch_code(arg or None)
+        elif command == "/terminal":
+            from ..terminal import spawn_terminal
+
+            target = arg or self.settings.workspace
+            try:
+                result = await asyncio.to_thread(
+                    spawn_terminal, cwd=target, command="", dry_run=False
+                )
+            except Exception as exc:
+                await self.add_message("system", f"Could not open a terminal: {exc}")
+                return
+            await self.add_message(
+                "system",
+                f"Opened a Terminal in `{result['cwd']}` ({result.get('method', '?')}).",
+            )
         elif command == "/codex":
             await self.action_launch_codex(arg or None)
         elif command == "/claude":

@@ -5801,6 +5801,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("install-clients", help="write the local Codex profile and client wrappers")
     sub.add_parser("free", help="unload all resident models")
     sub.add_parser("best", help="show the strongest model each connected tool uses")
+    terminal_parser = sub.add_parser(
+        "terminal", help="open a real Terminal window (or run a command)"
+    )
+    terminal_parser.add_argument("--sudo", action="store_true", help="open a root shell")
+    terminal_parser.add_argument("--cwd", default=None, help="working directory")
+    terminal_parser.add_argument(
+        "--run", default="", help="command to run before returning to a shell"
+    )
+    terminal_parser.add_argument(
+        "--dry-run", action="store_true", help="print the shell line without opening"
+    )
     dog = sub.add_parser("watchdog", help="recover a wedged Ollama without killing a busy one")
     dog.add_argument("--no-restart", action="store_true", help="report only")
     dog.add_argument("--interval", type=float, default=8.0, help="seconds between samples")
@@ -7076,6 +7087,22 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "model", None):
             settings.default_model = args.model
         SovereignApp(settings=settings, mode="chat").run()
+        return 0
+    if command == "terminal":
+        from . import terminal as terminal_mod
+
+        result = terminal_mod.spawn_terminal(
+            sudo=args.sudo,
+            cwd=args.cwd,
+            command=args.run,
+            dry_run=args.dry_run,
+        )
+        console.print(f"[green]Terminal[/] {result.get('method', '?')} · {result['cwd']}")
+        if args.dry_run:
+            console.print(result["command"])
+        if not result.get("ok", True):
+            console.print(f"[red]{result.get('error', 'failed')}[/]")
+            return 1
         return 0
     if command == "status":
         snapshot = _snapshot(settings)

@@ -54,8 +54,8 @@ DEFAULT_UPSTREAM = "http://127.0.0.1:4000"
 
 # A wedged model used to hold the single-resident lock for ten minutes. These
 # bounds turn "looks hung" into either a fallback model or an explicit error.
-DEFAULT_REQUEST_TIMEOUT = 300.0
-DEFAULT_STREAM_IDLE_TIMEOUT = 180.0
+DEFAULT_REQUEST_TIMEOUT = 3600.0
+DEFAULT_STREAM_IDLE_TIMEOUT = 300.0
 
 
 # Shared HTTP client with keep-alive and a bounded connection pool. Reusing
@@ -1478,7 +1478,7 @@ def _ollama_payload(
         "messages": messages,
         "stream": bool(stream),
         "options": options,
-        "keep_alive": request.get("keep_alive") or "15m",
+        "keep_alive": request.get("keep_alive") or "1h",
     }
     if request.get("tools") and not loop:
         payload["tools"] = request["tools"]

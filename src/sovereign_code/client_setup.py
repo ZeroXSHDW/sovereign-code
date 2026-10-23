@@ -180,7 +180,7 @@ OPENCODE_MODELS = {
 }
 
 
-def opencode_config(include_cloud: bool = False) -> dict:
+def opencode_config(include_cloud: bool = False, max_context: int | None = None) -> dict:
     """The OpenCode configuration this project writes.
 
     The cloud provider block is only included when ``include_cloud`` is set.
@@ -190,6 +190,14 @@ def opencode_config(include_cloud: bool = False) -> dict:
     opt-in, the way the README describes it.
     """
     command = sovereign_argv()
+    if max_context is None:
+        try:
+            from .config import Settings
+
+            max_context = Settings.load().max_context
+        except Exception:
+            max_context = 32768
+    max_context = max(2048, int(max_context))
     config = {
         "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/best",
@@ -206,7 +214,10 @@ def opencode_config(include_cloud: bool = False) -> dict:
                     name: {
                         "name": title,
                         "tool_call": True,
-                        "limit": {"context": context, "output": 8192},
+                        "limit": {
+                            "context": advertised_context(name, context, max_context),
+                            "output": 8192,
+                        },
                     }
                     for name, (title, context) in OPENCODE_MODELS.items()
                 },
@@ -222,32 +233,32 @@ def opencode_config(include_cloud: bool = False) -> dict:
                     "best": {
                         "name": "Best — 30B code / GLM reasoning",
                         "tool_call": True,
-                        "limit": {"context": 32768, "output": 8192},
+                        "limit": {"context": advertised_context("best", 32768, max_context), "output": 8192},
                     },
                     "auto": {
                         "name": "Auto — fast for simple, deep for hard",
                         "tool_call": True,
-                        "limit": {"context": 32768, "output": 8192},
+                        "limit": {"context": advertised_context("auto", 32768, max_context), "output": 8192},
                     },
                     "fast": {
                         "name": "Fast — small model, short tasks",
                         "tool_call": True,
-                        "limit": {"context": 8192, "output": 4096},
+                        "limit": {"context": advertised_context("fast", 8192, max_context), "output": 4096},
                     },
                     "balanced": {
                         "name": "Balanced — 9B, tools and multi-turn",
                         "tool_call": True,
-                        "limit": {"context": 16384, "output": 8192},
+                        "limit": {"context": advertised_context("balanced", 16384, max_context), "output": 8192},
                     },
                     "deep": {
                         "name": "Deep — 30B code / GLM reasoning",
                         "tool_call": True,
-                        "limit": {"context": 32768, "output": 8192},
+                        "limit": {"context": advertised_context("deep", 32768, max_context), "output": 8192},
                     },
                     "ultra": {
                         "name": "Ultra — 27B for the hardest reasoning",
                         "tool_call": True,
-                        "limit": {"context": 16384, "output": 8192},
+                        "limit": {"context": advertised_context("ultra", 16384, max_context), "output": 8192},
                     },
                 },
             },
@@ -593,7 +604,7 @@ def install_qwen_router(path: Path | None = None) -> Path:
 
 def _mcp_entry() -> dict:
     command, *args = sovereign_argv()
-    return {"command": command, "args": args}
+    return {"command": command, "args": args, "env": {"SOVEREIGN_MCP_COMPUTER": "1"}}
 
 
 def install_mcp_manifest(path: Path) -> Path:

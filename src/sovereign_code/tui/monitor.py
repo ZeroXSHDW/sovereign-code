@@ -36,6 +36,14 @@ from ..status import Snapshot, collect
 
 REFRESH_SECONDS = 5.0
 
+
+def _refresh_seconds() -> float:
+    try:
+        return max(1.0, min(60.0, Settings.load().monitor_refresh_seconds))
+    except Exception:
+        return REFRESH_SECONDS
+
+
 HINT_TEXT = "F5 refresh · p pause · y copy · F9 free RAM · F2/F4/F6 clients · ? help"
 
 HELP_TEXT = """\
@@ -139,10 +147,10 @@ class MonitorApp(App[None]):
             self._seed_demo_history()
             self._render_report()
             self._render_status()
-            self.set_interval(REFRESH_SECONDS, self.tick)
+            self.set_interval(_refresh_seconds(), self.tick)
             return
         await self.refresh_all()
-        self.set_interval(REFRESH_SECONDS, self.tick)
+        self.set_interval(_refresh_seconds(), self.tick)
 
     def _seed_demo_history(self) -> None:
         now = time.time()

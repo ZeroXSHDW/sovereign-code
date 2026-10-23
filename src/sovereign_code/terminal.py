@@ -204,7 +204,7 @@ def run_shell(
     if not text:
         raise ValueError("command is empty")
     workdir = _workdir(cwd)
-    budget = max(1, min(600, int(timeout or 120)))
+    budget = max(1, min(3600, int(timeout or 120)))
     privileged = bool(_SUDO.match(text))
     if privileged and sys.platform == "darwin":
         body = _SUDO.match(text)

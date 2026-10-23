@@ -115,7 +115,7 @@ class OllamaClient:
         self,
         model: str,
         context: int = 16384,
-        keep_alive: str = "15m",
+        keep_alive: str = "1h",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> dict[str, Any]:
         """Load a model into memory without asking it to do anything.
@@ -158,7 +158,7 @@ class OllamaClient:
         context: int = 16384,
         temperature: float = 0.25,
         think: bool | None = None,
-        keep_alive: str = "15m",
+        keep_alive: str = "1h",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> AsyncIterator[ChatChunk]:
         payload: dict[str, Any] = {

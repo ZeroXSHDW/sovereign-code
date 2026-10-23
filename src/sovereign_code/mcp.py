@@ -16,7 +16,6 @@ import base64
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -47,7 +46,6 @@ _MAX_OUTPUT = 100_000
 # Commands that can destroy the machine or lock the user out. The MCP server is
 # deliberately powerful, so the few irreversible operations are fenced off.
 _DENY_COMMAND = re.compile(
-    r"(^|\s)(sudo|doas)\s|"
     r"rm\s+(-[a-z]*[rf][a-z]*\s+)+(/|/\*|~|\$HOME)(\s|$)|"
     r"mkfs(\.|\s)|"
     r"diskutil\s+(erase|partition|reformat)|"
@@ -703,38 +701,16 @@ def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, A
         raise ValueError(f"not a directory: {workdir}")
     budget = max(1, min(3600, int(timeout or 120)))
     _audit("run_command", command=text, cwd=str(workdir), timeout=budget)
-    try:
-        result = subprocess.run(  # noqa: S602
-            text,
-            shell=True,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=budget,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "ok": False,
-            "returncode": None,
-            "stdout": _truncate(str(exc.stdout or "")),
-            "stderr": f"timed out after {budget}s",
-            "cwd": str(workdir),
-        }
-    except OSError as exc:
-        return {
-            "ok": False,
-            "returncode": None,
-            "stdout": "",
-            "stderr": str(exc),
-            "cwd": str(workdir),
-        }
+    from .terminal import run_shell
+
+    result = run_shell(text, cwd=workdir, timeout=budget)
     return {
-        "ok": result.returncode == 0,
-        "returncode": result.returncode,
-        "stdout": _truncate(result.stdout or ""),
-        "stderr": _truncate(result.stderr or ""),
-        "cwd": str(workdir),
+        "ok": result["ok"],
+        "returncode": result["returncode"],
+        "stdout": _truncate(result["stdout"]),
+        "stderr": _truncate(result["stderr"]),
+        "cwd": result["cwd"],
+        "privileged": result.get("privileged", False),
     }
 
 

@@ -81,7 +81,7 @@ class ModelPlanner:
         self,
         gateway_url: str,
         model: str = "local-agent",
-        timeout: float = 120.0,
+        timeout: float = 300.0,
     ) -> None:
         self.base = gateway_url.rstrip("/")
         self.model = model

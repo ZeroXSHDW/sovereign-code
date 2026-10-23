@@ -30,8 +30,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .diagnostics import note
 from .http import client_for, shared_client
-from .serverguard import GuardedHandler, GuardedServer, content_length
+from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer, content_length
 from .tier_gateway import CLAUDE_MODEL_ROUTES
 
 DEFAULT_PORT = 4001
@@ -640,6 +641,9 @@ class _Handler(GuardedHandler):
         path = urlsplit(self.path).path
         try:
             payload = self._read()
+        except BodyTooLarge:
+            self._json(413, {"type": "error", "error": {"type": "invalid_request_error"}})
+            return
         except (ValueError, UnicodeDecodeError):
             self._json(400, {"type": "error", "error": {"type": "invalid_request_error"}})
             return
@@ -773,8 +777,8 @@ def ensure_running(
             from .tier_gateway import ensure_running as ensure_tier
 
             ensure_tier()
-        except Exception:
-            pass
+        except Exception as exc:
+            note("bridge", exc)
     log = log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

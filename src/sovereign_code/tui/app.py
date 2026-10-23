@@ -116,6 +116,7 @@ class SovereignApp(App[None]):
         self.last_verify: list[AliasResult] = []
         self._model_signature: tuple = ()
         self.ollama = OllamaClient(self.settings.ollama_url)
+        self._started_at = time.monotonic()
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -415,7 +416,7 @@ class SovereignApp(App[None]):
         parts = value.split(maxsplit=1)
         command = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
-        if command == "/help":
+        if command in {"/help", "/commands", "/?"}:
             await self.add_message("system", HELP_TEXT)
         elif command == "/models":
             if not self.snapshot:
@@ -605,6 +606,11 @@ class SovereignApp(App[None]):
             import datetime as _dt
 
             await self.add_message("system", _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        elif command == "/uptime":
+            elapsed = time.monotonic() - self._started_at
+            mins, secs = divmod(int(elapsed), 60)
+            hrs, mins = divmod(mins, 60)
+            await self.add_message("system", f"Uptime: {hrs}h {mins}m {secs}s")
         elif command == "/version":
             from .. import __version__
 

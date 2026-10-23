@@ -1317,9 +1317,10 @@ def unknown_client_models() -> list[str]:
     A client that asks for a name the gateway cannot route gets an error
     instead of an answer, so the drift is worth reporting.
     """
-    from .tier_gateway import catalog_ids, installed_models
+    from .mlx import MLX_ALIASES
+    from .tier_gateway import CLAUDE_MODEL_ROUTES, catalog_ids, installed_models
 
-    known = catalog_ids(installed_models())
+    known = catalog_ids(installed_models()) | set(CLAUDE_MODEL_ROUTES) | set(MLX_ALIASES)
     names = [codex_configured_model()]
     names.extend(claude_slot_routes().values())
     return sorted({name for name in names if name and name not in known})

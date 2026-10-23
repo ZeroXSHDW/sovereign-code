@@ -1562,7 +1562,7 @@ def _doctor(snap: Snapshot) -> int:
     referenced = {
         name for name in referenced if not name.startswith("cloud-") and not name.endswith(":cloud")
     }
-    from .tier_gateway import MODEL_CONTEXT, catalog_ids
+    from .tier_gateway import CLAUDE_MODEL_ROUTES, MODEL_CONTEXT, catalog_ids
 
     referenced.update(MODEL_CONTEXT)
     # The models ChatGPT and Claude are configured to use are references too:
@@ -1575,12 +1575,33 @@ def _doctor(snap: Snapshot) -> int:
     # The Claude slots hold a Claude model id; the local route behind it is
     # what has to exist.
     referenced.update(claude_slot_routes().values())
+    # Claude Code's own model ids are not Ollama tags, but the bridge maps
+    # them onto local routes, so they are legitimate references.
+    referenced.update(CLAUDE_MODEL_ROUTES)
     installed_names: set[str] = set()
     for view in snap.installed:
         installed_names.update({view.tag, view.tag.removesuffix(":latest")})
     # A name the catalog knows is a route; a name Ollama knows is a model.
-    # Either one can be asked for, so only the rest is dangling.
-    known = catalog_ids(set(installed_names)) | installed_names
+    # Either one can be asked for, so only the rest is dangling. Gateway
+    # aliases and MLX routes are also legitimate even when their backend is
+    # offline, so they are treated as known.
+    from .gateway import alias_names as _gateway_alias_names
+    from .mlx import MLX_ALIASES
+
+    try:
+        from .client_setup import MLX_MODELS, MLX_ROUTES
+
+        mlx_names = set(MLX_MODELS) | set(MLX_ROUTES)
+    except Exception:
+        mlx_names = set()
+    known = (
+        catalog_ids(set(installed_names))
+        | installed_names
+        | set(_gateway_alias_names(_read_text(LOCAL_AI_ROOT / "gateway" / "config.yaml")))
+        | set(MLX_ALIASES)
+        | set(CLAUDE_MODEL_ROUTES)
+        | mlx_names
+    )
     dangling = sorted(
         name
         for name in referenced

@@ -4,7 +4,7 @@ UV ?= uv
 SOVEREIGN := $(VENV)/bin/sovereign
 PY := $(VENV)/bin/python
 
-.PHONY: help install sync test test-all coverage lint format typecheck check \
+.PHONY: help install sync test test-all coverage lint format typecheck check quality bench \
         run status models doctor clients install-clients code login \
         uninstall-login build clean
 
@@ -50,6 +50,12 @@ typecheck:
 
 check: lint typecheck test
 	$(VENV)/bin/ruff format --check .
+
+quality: check
+	$(VENV)/bin/pip-audit --strict || $(VENV)/bin/pip-audit
+
+bench:
+	$(SOVEREIGN) bench
 
 run:
 	$(SOVEREIGN)

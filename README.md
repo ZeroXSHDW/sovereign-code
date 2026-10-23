@@ -74,8 +74,8 @@ verified models: check the licence, then `sovereign hf import <repo>` and
 `sovereign verify`. Pentest work stops unless `SCOPE.md` lists the targets.
 
 Run the checks the agent should pass before it reports done: `make check`.
-`CONSTRAINTS.md` records the exact bar; `make quality` adds the dependency
-audit, and `make bench` checks the skill-loading performance budgets.
+`make quality` adds the dependency audit (pip-audit), and `make bench` runs
+the model benchmark. `CONSTRAINTS.md` records the exact bar.
 
 ### Make any folder agent-ready
 
@@ -276,7 +276,7 @@ sovereign monitor --demo            # deterministic UI for screenshots/tests
 | Pinned to a Swift 6.3 / macOS 26.5 SDK | Plain Python 3.11+; no app build step |
 | Menu-bar window, mouse-first | Live terminal dashboard, keyboard-first |
 | Hard-coded model/client paths in Swift | One TOML + env config; model catalog in Python |
-| No automated tests in the repo | 26 unit/headless-TUI tests, `pytest` |
+| No automated tests in the repo | 580+ tests, `pytest` |
 | Single model pinned at build time | Curated remote catalog with ~35 downloadable tags, model-info, and offline stacks |
 | Context fitting spread across UI code | `router.py` estimates KV + weights against free RAM |
 | Client setup mutates many apps | Detects clients, writes only its own profile and `*-local` wrappers |
@@ -788,19 +788,27 @@ windows remain cloud clients.
 - `list_models` — installed local/cloud models and the gateway route.
 - `best_model(task)` — the router's pick and context window.
 - `list_skills(query)` / `get_skill(name)` — the curated skill library.
+- `load_skills(names, query)` — load several skill bodies with a token budget.
+- `skills_for_task(task)` — rank skills for a task (compact cards).
 - `project_context(path)` — project memory and file index.
 - `ask(prompt, model)` — a completion through the loopback gateway (`best` by default).
 - `run_checks(path)` — detect and run the project's own tests.
-- `local_status()` — whether this machine is running the local stack only: the
-  tier gateway, the Anthropic bridge, Ollama Cloud, and whether the ChatGPT and
-  Claude desktop apps are on the local path without a sign-in. The desktop apps
-  can check the claim about themselves over their own MCP connection.
+- `local_status()` — whether this machine is running the local stack only.
 - `delegate(prompt, path, write=false)` — run a real local Codex/Claude agent on a
   project; read-only unless `write=true`, bounded by a timeout.
+- `repo_map(path)` / `repo_search(path, query)` / `repo_read(path, start, end)` —
+  navigate a codebase without flooding context.
+- `repo_write(path, content)` / `repo_edit(path, old, new)` / `repo_patch(path, patch)` —
+  atomic, fenced file edits (work with `SOVEREIGN_MCP_COMPUTER=0`).
+- `run_command(command, cwd, timeout)` — run a shell command (requires
+  `SOVEREIGN_MCP_COMPUTER=1`).
+- `list_packs()` / `pack_profile(key)` — task packs (pentest, legal, forensics, …).
 - `browser_open(url)` / `browser_observe()` / `browser_act(...)` /
   `browser_screenshot()` / `browser_close()` — drive the visible local Chromium
   browser: navigate, click, fill, select, press, scroll, extract, and screenshot.
   Destructive actions require `confirm=true`; secrets are refused.
+- `hf_status` / `search_hf_models` / `hf_model_info` / `search_hf_datasets` /
+  `hf_dataset_info` / `list_hf_local` — Hugging Face Hub discovery.
 
 Skills are also exposed as MCP resources and prompts. `sovereign install-clients`
 writes the server into Codex (`~/.codex/config.toml`, shared by the ChatGPT

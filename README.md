@@ -45,6 +45,103 @@ sovereign                       # open the dashboard now
 The first run uses `~/Documents/local-ai/config/sovereign/config.toml` and
 `~/Documents/local-ai/data/` (sessions and logs).
 
+### Let a coding agent build the project
+
+The repo carries its own agent brief. Open the folder in OpenCode or ChatGPT
+(Codex) and the agent loads, without extra steps:
+
+- `AGENTS.md`: setup, checks, layout, conventions, and the curated skill index.
+- `opencode.json`: the `sovereign` MCP server (`list_skills`, `get_skill`,
+  `best_model`, `run_checks`, …), the instructions file, and edit/bash permission.
+- `docs/ROADMAP.md`: prioritised work. Ask the agent "what next" to start there.
+
+### Task packs: pentest, vulnerability, risk, vendor, legal, compliance, forensics, finance
+
+A pack is everything an agent needs to work a whole project in one category:
+skills to load, Hugging Face search queries, guardrails, steps, and deliverables.
+
+```sh
+sovereign pack list
+sovereign pack show pentest                     # guardrails, steps, matching skills
+sovereign pack models forensics                 # installed model + Hugging Face GGUF hits
+sovereign pack brief pentest --brief ~/src/app/AGENTS.md   # writes the brief and SCOPE.md
+```
+
+`pack brief` writes a managed block into the project's `AGENTS.md`; OpenCode and
+ChatGPT read it when the folder opens. The sovereign MCP server also exposes
+`list_packs` and `pack_profile`. Hugging Face hits are search results, not
+verified models: check the licence, then `sovereign hf import <repo>` and
+`sovereign verify`. Pentest work stops unless `SCOPE.md` lists the targets.
+
+Run the checks the agent should pass before it reports done: `make check`.
+`CONSTRAINTS.md` records the exact bar; `make quality` adds the dependency
+audit, and `make bench` checks the skill-loading performance budgets.
+
+### Make any folder agent-ready
+
+```sh
+sovereign project init ~/src/app                  # detect stack and checks, write AGENTS.md + opencode.json
+sovereign project init ~/src/app --pack pentest   # also adds the pack's guardrails and SCOPE.md
+```
+
+`project init` never overwrites an existing brief or config without `--force`,
+and `--dry-run` prints what it would write. The generated `AGENTS.md` names the
+project's own test command, so the agent can verify itself.
+
+Inside that folder the agent gets three navigation tools over MCP:
+
+| Tool | What it answers |
+| --- | --- |
+| `repo_map` | languages, files, and every class/function with line numbers |
+| `repo_search` | `path:line` matches for a term or regex, code files first |
+| `repo_read` | numbered lines around a hit, without the rest of the file |
+| `repo_write` | create or replace one file, atomically, with an optional sha256 guard |
+| `repo_edit` | replace one exact string; refuses an ambiguous match; `dry_run` shows the diff |
+| `repo_patch` | apply a unified diff to one file; every hunk must match or nothing is written |
+
+The 22k-file skill library is Markdown, so it is ranked after code: without
+that rule a search on this repo never reached `src/`.
+
+Writes are fenced like reads: inside the workspace, credential files refused,
+2 MB per write, atomic replacement, and an existing file is not overwritten
+unless the caller passes `overwrite` or the `expected_sha256` it read. They work
+with `SOVEREIGN_MCP_COMPUTER=0`, so editing does not require full computer
+control.
+
+### Skills: find, check, install
+
+```sh
+sovereign skills route "harden a kubernetes cluster"   # cards: name, category, tokens, risk
+sovereign skills lint                                  # scan curated skills for risky instructions
+sovereign skills lint --query terraform --limit 20     # scan library matches
+sovereign pack install forensics --target opencode      # install a pack's skills as SKILL.md
+```
+
+`route` ranks by content terms, weighting rare words over generic ones, and keeps
+the task's category coherent (a forensics task does not return image-generation
+skills). Cards are cheap: the agent loads a body only after a card looks right.
+
+`lint` reports pipe-to-shell, root deletes, disk writes, prompt injection, `sudo`,
+credential paths and hidden characters, with line numbers. It never edits a
+skill: security skills legitimately quote attacks, so the warning tells the
+agent to treat the commands as untrusted text.
+
+`get_skill` and `load_skills` carry the same warning, and `load_skills` enforces
+a token budget (default 6000) so several large skills cannot swallow a 16k
+window. A 192 KB skill costs about 48k tokens; the median is 5.4 KB.
+
+### Unrestricted models
+
+The defaults keep prompts on the Mac. To lift the limits deliberately:
+
+```sh
+sovereign pull <any-ollama-tag>             # any library tag, or
+sovereign hf import <owner/repo>            # any Hugging Face GGUF
+# config.toml: max_context = 131072         # larger windows when memory allows
+SOVEREIGN_LOCAL_ONLY=0 sovereign router --restart   # allow provider routes via the gateway
+sovereign cloud --set-key openrouter        # prompts leave the Mac on provider routes
+```
+
 Everything the system owns lives in `~/Documents/local-ai`:
 
 ```text
@@ -57,6 +154,89 @@ Everything the system owns lives in `~/Documents/local-ai`:
 ├── qwen/        Qwen Code state (~/.qwen symlinks here)
 └── legacy/      archived pre-migration ai-stack
 ```
+
+### Apple Silicon MLX models
+
+Ollama is not the only local engine. Apple's `mlx-lm` server runs quantized
+models natively on Metal and speaks the same OpenAI API, so every client can
+use it through the same aliases:
+
+```sh
+python3.13 -m venv ~/Documents/local-ai/mlx-venv
+~/Documents/local-ai/mlx-venv/bin/python -m pip install mlx mlx-lm
+sovereign mlx models                # catalog, downloaded state, HF repository
+sovereign mlx pull --model mlx-qwen3-14b-4bit   # weights + 0.6B draft
+sovereign mlx start --model mlx-qwen3-4b-4bit
+sovereign mlx status                # online, supervised PID, draft, downloaded tags
+sovereign mlx stop
+```
+
+`sovereign mlx start` uses `~/Documents/local-ai/mlx-venv` automatically
+(or `SOVEREIGN_MLX_PYTHON`), records the model/port/PID in
+`data/mlx-server.json`, and the guardian restarts that exact model if it
+crashes. Starting with no `--model` picks the strongest downloaded model.
+Qwen3 models automatically use **speculative decoding** with the 0.6B draft
+model when it is downloaded, plus an 8-bit KV cache. Measured on the 4B model:
+**69 tok/s without a draft, about 125 tok/s with one** (about 1.8x). Disable it
+with `--draft off` or force it with `--draft mlx-community/Qwen3-0.6B-4bit`.
+Four draft tokens per step beat both two (110-123 tok/s) and eight (~90 tok/s).
+`sovereign mlx start --kv-bits 0` trades the quantized cache for mlx-lm's
+batched decode: four simultaneous short completions finish in 0.95 s instead of
+1.26 s. The memory-saving quantized cache stays the default. Weights downloaded by `mlx-lm` into the standard Hugging Face hub
+cache are detected as well as the visible `models/huggingface` folder. Qwen3
+models start with thinking disabled so coding clients receive answer content
+and tool calls instead of a hidden reasoning pass.
+
+The tier gateway exposes `mlx`, `mlx-code`, `mlx-balanced`, `mlx-fast`, and
+`mlx-chat`, plus every downloaded MLX tag in `/v1/models`. A warm 4B MLX
+model also serves the `fast` tier automatically, so autocomplete does not pay
+for a cold Ollama load. Run
+`sovereign gateway-config --apply` after upgrading to merge the MLX aliases
+into the live hand-curated LiteLLM `config.yaml` (with a timestamped backup)
+without disturbing existing aliases or fallbacks. If the MLX server is
+down the gateway returns an explicit `mlx_offline` error with the start command
+instead of falling back silently. `sovereign install-clients` adds:
+- an **MLX provider** (`http://127.0.0.1:8081/v1`) to OpenCode,
+- Continue chat/edit/apply models and a 4B autocomplete model,
+- `local-mlx-*` aliases to the LiteLLM model list,
+- MLX routes to the Codex/ChatGPT model catalog,
+- a **Sovereign Claude** Continue entry that points at the local Anthropic
+  bridge (`http://127.0.0.1:4001`), so Continue's Claude chat/edit/apply path
+  runs on the local model picker.
+
+### Local embeddings and codebase indexing
+
+`/v1/embeddings` is served by the tier gateway and answered by
+`nomic-embed-text` on this Mac, so Continue's `@codebase` index and any
+OpenAI-compatible RAG tool stay fully local:
+
+```sh
+ollama pull nomic-embed-text
+curl -s http://127.0.0.1:4010/v1/embeddings \
+  -d '{"model":"local-embed","input":["def add(a,b): return a+b"]}'
+```
+
+`local-embed` is the stable alias (768-dim vectors). A request's whole list is
+embedded in one Ollama call (64 new chunks took 0.28 s instead of 21.7 s
+one-by-one), and identical strings are memoized in-process, so re-indexing
+unchanged files costs microseconds instead of a transformer pass.
+`sovereign index` also reuses stored vectors by text fingerprint: a rebuild of
+an unchanged tree makes no model calls at all. `sovereign install-clients` adds the embed model to
+Continue and to the LiteLLM model list; `sovereign doctor` reports it.
+
+### Speed notes
+
+- **MLX prefix reuse is real and measured.** With a stable system prompt, a
+  second turn prefills 849 cached tokens and finishes in 0.16 s where the cold
+  turn took 1.61 s (about 10x). The gateway records `cached_tokens` per request
+  and `/health` reports `prefix_cache_tokens`.
+- **Identical prompts are generated once.** Concurrent duplicate non-stream
+  requests share one generation through a per-key lock, and the response cache
+  answers later repeats in about 1 ms. Streamed answers are cached too and
+  replayed as SSE, so a repeat costs milliseconds instead of a generation
+  (measured: 0.82 s → 0.00 s on MLX, 3.23 s → 0.01 s on Ollama).
+- `sovereign bench` includes `mlx-fast` and `mlx-code` automatically whenever
+  the MLX server is running.
 
 ### Monitor keys
 
@@ -699,12 +879,64 @@ require accepting their licence on the model page. MCP exposes discovery only:
 `hf_status`, `search_hf_models`, `hf_model_info`, `search_hf_datasets`,
 `hf_dataset_info`, and `list_hf_local`; downloads remain an explicit CLI action.
 
+### Trust and safety gates
+
+- **Skill integrity.** `sovereign skills verify` hashes the library against
+  `skills/MANIFEST.sha256` and reports changed, missing, and added files; it
+  never edits a skill. `sovereign skills lint` flags pipe-to-shell, root
+  deletes, credential paths, prompt injection, and hidden characters.
+- **HF trust gate.** Imports require a permissive licence and real usage;
+  `--allow-unvetted` is the explicit override.
+- **Loopback request guards.** Both HTTP servers reject non-loopback `Host`
+  headers and oversize bodies, so a browser on another origin cannot use them
+  as a proxy.
+- **Scoped edits.** MCP `repo_write`, `repo_edit`, and `repo_patch` only touch
+  the workspace, cap writes at 2 MB, use atomic replacement, and refuse
+  credential files.
+- **Deliberate failures are recorded, not hidden.** Survived exceptions are
+  appended to `data/logs/swallowed.log` by `diagnostics.note()` instead of
+  being silently discarded.
+
+The token is never written to `config.toml` or printed. `HF_TOKEN` takes
+precedence over the saved file when it is exported. Gated repositories still
+require accepting their licence on the model page. MCP exposes discovery only:
+`hf_status`, `search_hf_models`, `hf_model_info`, `search_hf_datasets`,
+`hf_dataset_info`, and `list_hf_local`; downloads remain an explicit CLI action.
+
 ### Model selection
 
 `sovereign clients` prints the auto-resolved pick per client.
 `eval "$(sovereign env)"` exports the loopback OpenAI and Anthropic environment
 for any other tool. Codex uses its own Ollama path; Claude Code uses the bridge;
 OpenCode and Continue use Ollama directly.
+
+### Chat composer
+
+`sovereign chat` has a multi-line composer: `Enter` sends, `Shift+Enter` adds a
+line, `Tab` completes slash commands and installed model tags, and `↑`/`↓`
+recall submitted lines. `Esc` stops a streaming reply. `/copy` copies the last
+answer, `/export [path]` saves the conversation as Markdown, `/sessions` lists
+saved chats, `/sessions <n>` resumes one, `/attach <path>` adds read-only file
+context, `/attachments` lists what is attached, and `/context` shows the budget
+and what will be trimmed. `/pull <tag>` downloads any Ollama model with live
+progress; `/undo [list]` restores the files saved before the last applied
+patch. `/compact [keep]` summarizes older turns (instead of silently dropping
+them) so long chats keep their gist; `/messages` numbers the transcript,
+`/find <text>` searches it, and `/copy <n>` copies a turn. `/retry`
+asks the last question again; `/edit` puts it back in the composer. `/tests`
+detects and runs the workspace checks, `/fix` runs them and asks the model for
+a repair patch (applying it re-runs the checks), `/run <command>` runs one
+allow-listed test/lint command, `/diff` attaches the working-tree diff, and
+`/git` shows the branch, changed files, and recent commits — their output joins
+the next prompt's context. Type `@path` in a message to attach that workspace
+file; `Tab` completes paths. Replies containing `<<<FILE: path>>>` blocks are
+staged, not written: `/apply` opens a per-file diff and applies only on `a`,
+backing up existing files first (`/undo` restores them); `/reject` discards
+them. `Ctrl+P` opens the
+command palette, which fuzzy-searches installed models, saved chats (including
+transcript content), and the 22k-skill bank. Long conversations are trimmed to
+the selected model's window automatically, so a chat cannot silently overrun
+its context.
 
 ## Commands
 
@@ -771,6 +1003,8 @@ sovereign install-clients  # wrappers + client configs + MCP + skills
 sovereign chat --model qwen3.5:4b
 sovereign env              # exports for OpenAI-compatible local clients
 sovereign pull-recommended # qwen2.5-coder:14b
+sovereign undo --path ~/src/app   # restore files changed by the last pipeline/code pass
+sovereign warm-pool status        # warm model pool: status/load/touch/start/stop
 sovereign browse URL --task "…" # local model drives a visible Chromium
 sovereign install-login --start-now
 sovereign uninstall-login

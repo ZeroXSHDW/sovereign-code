@@ -3637,6 +3637,102 @@ def _domains(detect: str | None = None) -> int:
     return 0
 
 
+def _pack(args) -> int:
+    from . import packs
+
+    action = args.action or "list"
+    if action == "list":
+        table = Table(title="Task packs", header_style="bold #b794f4")
+        table.add_column("Key", style="bold")
+        table.add_column("Pack")
+        table.add_column("Domain")
+        table.add_column("Task")
+        table.add_column("Summary", overflow="fold")
+        for key in sorted(packs.PACKS):
+            pack = packs.PACKS[key]
+            table.add_row(key, pack.label, pack.domain, str(pack.task), pack.summary)
+        console.print(table)
+        console.print(
+            f"[dim]{len(packs.PACKS)} pack(s). `sovereign pack show KEY` · "
+            f"`sovereign pack brief KEY --path AGENTS.md`[/]"
+        )
+        return 0
+
+    p = packs.get_pack(args.key)
+    if p is None:
+        console.print(f"[red]No such pack:[/] {args.key}")
+        console.print(f"[dim]Packs: {', '.join(sorted(packs.PACKS))}[/]")
+        return 1
+
+    if action == "show":
+        console.print(f"[bold]{p.label}[/]  ({p.key})")
+        console.print(f"domain: {p.domain} · task: {p.task.value}")
+        console.print(p.summary)
+        console.print()
+        console.print("[bold]Guardrails[/]")
+        for rule in p.guardrails:
+            console.print(f"- {rule}")
+        console.print()
+        console.print("[bold]Steps[/]")
+        for index, step in enumerate(p.steps, start=1):
+            console.print(f"{index}. {step}")
+        console.print()
+        console.print("[bold]Deliverables[/]")
+        for name in p.deliverables:
+            console.print(f"- {name}")
+        console.print()
+        console.print("[bold]Model candidates[/]")
+        for q in p.model_queries:
+            console.print(f"- {q}")
+        console.print()
+        console.print("[bold]Suggested skills[/]")
+        for name, desc in packs.pack_skills(p, limit=6):
+            console.print(f"- **{name}** — {packs._first(desc)}")
+        console.print()
+        console.print("[dim]sovereign pack brief KEY --path AGENTS.md[/]")
+        return 0
+
+    if action == "models":
+        from .hf import HFError
+
+        try:
+            found = packs.hf_candidates(p, limit=args.limit)
+        except HFError as exc:
+            console.print(f"[red]Hugging Face:[/] {exc}")
+            return 1
+        for query, hits in found.items():
+            console.print(f"[bold]{query}[/]")
+            for h in hits:
+                if "error" in h:
+                    console.print(f"  [red]{h['error']}[/]")
+                else:
+                    console.print(
+                        f"  {h['id']}  downloads={h['downloads']} "
+                        f"license={h['license']} gated={h['gated']}"
+                    )
+        console.print(
+            "[dim]Candidates only — verify with `sovereign model-info` / `sovereign verify`.[/]"
+        )
+        return 0
+
+    if action == "brief":
+        path = Path(args.path)
+        skills = packs.pack_skills(p, limit=12)
+        packs.write_brief(path, p, skills)
+        console.print(f"[green]Wrote[/] {path}  (block: sovereign-pack:{p.key})")
+        if p.key == "pentest":
+            scope = packs.scope_file(path.parent)
+            if scope is not None:
+                console.print(f"[green]Wrote[/] {scope}  (pentest scope template)")
+            else:
+                console.print(f"[dim]{path.parent / 'SCOPE.md'} already exists[/]")
+        console.print("[dim]Re-run to refresh the block; markers prevent duplicates.[/]")
+        return 0
+
+    console.print(f"[red]Unknown pack action:[/] {action}")
+    return 1
+
+
 def _hf(args) -> int:
     from . import hf as hub
 
@@ -5459,6 +5555,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="show which domain a prompt would be routed to",
     )
 
+    pack = sub.add_parser("pack", help="task packs: skills, guardrails, model sources, playbook")
+    pack.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=("list", "show", "models", "brief"),
+        help="default: list",
+    )
+    pack.add_argument("key", nargs="?", default=None, help="pack key (pentest, vulnerability, …)")
+    pack.add_argument(
+        "--path",
+        default="AGENTS.md",
+        metavar="FILE",
+        help="brief: write the managed block into this project file (default: AGENTS.md)",
+    )
+    pack.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="models: HF candidate hits per query (max 20)",
+    )
+
     hf = sub.add_parser("hf", help="Hugging Face Hub: login, search, inspect, download, import")
     hf.add_argument(
         "action",
@@ -6575,6 +6693,8 @@ def main(argv: list[str] | None = None) -> int:
         return _consult(settings, args.prompt, models, args.tokens, args.domain)
     if command == "domains":
         return _domains(args.detect)
+    if command == "pack":
+        return _pack(args)
     if command == "hf":
         return _hf(args)
     if command == "skills":

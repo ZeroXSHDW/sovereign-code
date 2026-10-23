@@ -624,7 +624,7 @@ def _repo_search(
         query,
         regex=regex,
         glob=glob,
-        limit=max(1, min(200, limit)),
+        limit=max(1, min(300, limit)),
         code_only=code_only,
     )
     return [hit.as_line() for hit in hits] or ["no matches"]

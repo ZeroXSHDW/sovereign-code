@@ -203,7 +203,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "path": {"type": "string", "default": "."},
             "max_files": {"type": "integer", "default": 600},
-            "max_tokens": {"type": "integer", "default": 1800},
+            "max_tokens": {"type": "integer", "default": 2400},
         },
     ),
     _tool(
@@ -1145,7 +1145,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             _repo_map(
                 str(args.get("path") or "."),
                 int(args.get("max_files") or 600),
-                int(args.get("max_tokens") or 1800),
+                int(args.get("max_tokens") or 2400),
             )
         )
     if name == "repo_search":

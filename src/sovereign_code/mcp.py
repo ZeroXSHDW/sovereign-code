@@ -173,7 +173,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "task": {"type": "string"},
             "limit": {"type": "integer", "default": 8},
-            "max_tokens": {"type": "integer", "default": 2000},
+            "max_tokens": {"type": "integer", "default": 3000},
         },
         ["task"],
     ),
@@ -1107,7 +1107,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         cards, note = route(
             str(args.get("task") or ""),
             limit=max(1, min(20, int(args.get("limit") or 8))),
-            max_tokens=max(200, min(8000, int(args.get("max_tokens") or 2000))),
+            max_tokens=max(200, min(8000, int(args.get("max_tokens") or 3000))),
         )
         return _text(
             {

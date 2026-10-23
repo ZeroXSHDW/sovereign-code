@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import hashlib
 
-from sovereign_code import diagnostics, repoedit, repomap, skillmanifest, skills_safety, vetting
+from sovereign_code import (
+    diagnostics,
+    mlx,
+    repoedit,
+    repomap,
+    skillmanifest,
+    skills_safety,
+    vetting,
+)
 from sovereign_code.projectsetup import profile
 
 
@@ -113,3 +121,23 @@ def test_projectsetup_profile(tmp_path) -> None:
     prof = profile(tmp_path)
     assert prof.files >= 1
     assert any("Python" in lang for lang, _ in prof.languages)
+
+
+def test_mlx_pure_functions() -> None:
+    assert mlx.mlx_url().startswith("http://")
+    assert isinstance(mlx.mlx_port(), int)
+    assert isinstance(mlx.disabled(), bool)
+    tags = mlx.catalog_tags()
+    assert isinstance(tags, tuple)
+    assert len(tags) > 0
+    assert "mlx-qwen3-4b-4bit" in tags
+    assert mlx.REPO_IDS.get("mlx-qwen3-4b-4bit")
+    assert mlx.context_for("mlx-qwen3-4b-4bit") == 32768
+    assert mlx.fast_loaded_tag() == "" or isinstance(mlx.fast_loaded_tag(), str)
+    assert isinstance(mlx.available_tags(), tuple)
+    assert mlx.state_path().name == "mlx-server.json"
+    assert mlx.log_path().name == "mlx-server.log"
+    assert mlx.read_state() == {} or isinstance(mlx.read_state(), dict)
+    assert mlx.reset_probe() is None
+    assert mlx.online() is False or isinstance(mlx.online(), bool)
+    assert mlx.served_models() == () or isinstance(mlx.served_models(), tuple)

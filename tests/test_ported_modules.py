@@ -9,11 +9,13 @@ from sovereign_code import (
     mlx,
     repoedit,
     repomap,
+    scheduler,
     skillmanifest,
     skills_safety,
     vetting,
 )
 from sovereign_code.projectsetup import profile
+from sovereign_code.tui import jump, patch
 
 
 def test_vetting_assess_permissive() -> None:
@@ -121,6 +123,50 @@ def test_projectsetup_profile(tmp_path) -> None:
     prof = profile(tmp_path)
     assert prof.files >= 1
     assert any("Python" in lang for lang, _ in prof.languages)
+
+
+def test_scheduler_basic() -> None:
+    s = scheduler.ModelScheduler()
+    assert s.stats().active is None
+    assert s.stats().inflight == 0
+    s.enter("model-a")
+    assert s.stats().active == "model-a"
+    assert s.stats().inflight == 1
+    s.exit("model-a")
+    assert s.stats().active is None
+    assert s.stats().inflight == 0
+
+
+def test_scheduler_concurrent_same_model() -> None:
+    s = scheduler.ModelScheduler()
+    s.enter("model-a")
+    s.enter("model-a")
+    assert s.stats().inflight == 2
+    s.exit("model-a")
+    s.exit("model-a")
+    assert s.stats().inflight == 0
+
+
+def test_scheduler_exclusive() -> None:
+    s = scheduler.ModelScheduler()
+    s.enter_exclusive()
+    assert s.stats().active is None
+    s.exit_exclusive()
+    assert s.stats().active is None
+
+
+def test_terminal_module_imports() -> None:
+    from sovereign_code import terminal
+
+    assert terminal is not None
+
+
+def test_jump_module_imports() -> None:
+    assert jump is not None
+
+
+def test_patch_module_imports() -> None:
+    assert patch is not None
 
 
 def test_mlx_pure_functions() -> None:

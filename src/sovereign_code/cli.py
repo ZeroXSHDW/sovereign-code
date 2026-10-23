@@ -3637,7 +3637,145 @@ def _domains(detect: str | None = None) -> int:
     return 0
 
 
-def _pack(args) -> int:
+def _mlx_cmd(settings: Settings, args) -> int:
+    """Manage the local mlx-lm server for Apple Silicon MLX models."""
+    from .backends import _mlx_url, probe, resolve, wait_online
+
+    backend = resolve(settings, "mlx")
+    if backend is None:
+        console.print("[red]MLX backend is not configured.[/]")
+        return 1
+    url = _mlx_url()
+    port = args.port
+
+    if args.action == "status":
+        status = probe(backend)
+        table = Table(title="MLX server", header_style="bold #b794f4")
+        table.add_column("Item", style="bold")
+        table.add_column("Value")
+        table.add_row("URL", url)
+        table.add_row("Status", "[green]online[/]" if status.online else "[dim]offline[/]")
+        table.add_row("Models", ", ".join(status.models) if status.models else "-")
+        from . import mlx
+
+        supervised = mlx.read_state()
+        if supervised:
+            table.add_row(
+                "Supervised",
+                f"{supervised.get('model')} · pid {supervised.get('pid')}",
+            )
+            if supervised.get("draft"):
+                table.add_row("Draft model", str(supervised.get("draft")))
+            if supervised.get("kv_bits"):
+                table.add_row("KV cache", f"{supervised.get('kv_bits')}-bit quantized")
+            else:
+                table.add_row(
+                    "Parallel decode",
+                    f"{supervised.get('decode_concurrency', 4)} concurrent requests",
+                )
+        downloaded = mlx.installed_tags()
+        table.add_row(
+            "Downloaded",
+            ", ".join(downloaded) if downloaded else "[dim]none (sovereign mlx models)[/]",
+        )
+        console.print(table)
+        if not status.online:
+            console.print("[dim]Start it with: sovereign mlx start[/]")
+        return 0
+
+    if args.action == "models":
+        from . import mlx
+
+        downloaded_tags = set(mlx.installed_tags())
+        served = set(mlx.served_models(refresh=True))
+        table = Table(title="MLX model catalog", header_style="bold #b794f4")
+        table.add_column("Tag", style="bold")
+        table.add_column("Role")
+        table.add_column("Context", justify="right")
+        table.add_column("State")
+        table.add_column("Hugging Face repository")
+        for tag in mlx.catalog_tags():
+            spec = CATALOG.get(tag)
+            role = spec.role if spec else ""
+            context = spec.max_context if spec else 0
+            state = "served" if any(mlx.tag_for_served(name) == tag for name in served) else ""
+            if not state and tag in downloaded_tags:
+                state = "downloaded"
+            if not state:
+                state = "download on start"
+            table.add_row(tag, role, str(context), state, mlx.REPO_IDS.get(tag, ""))
+        console.print(table)
+        console.print(
+            "[dim]Start one with: sovereign mlx start --model <tag>. "
+            "MLX weights are fetched by mlx-lm on first use.[/]"
+        )
+        return 0
+
+    if args.action == "pull":
+        from . import mlx
+
+        model = args.model or mlx.preferred_start_model()
+        ok, detail = mlx.download_model(
+            model, with_draft=(args.draft or "auto").lower() not in {"off", "0", "none"}
+        )
+        if ok:
+            console.print(f"[green]{detail}[/]")
+        else:
+            console.print(f"[red]{detail}[/]")
+        return 0 if ok else 1
+
+    if args.action == "start":
+        from . import mlx
+
+        if probe(backend, timeout=0.5).online:
+            console.print(f"[green]MLX server already online[/] · {url}")
+            console.print("[dim]Stop it first to load a different model: sovereign mlx stop[/]")
+            return 0
+        model = args.model or mlx.preferred_start_model()
+        started, detail = mlx.start_server(
+            model,
+            port,
+            args.max_tokens,
+            draft=args.draft,
+            kv_bits=args.kv_bits,
+            draft_tokens=args.draft_tokens,
+            decode_concurrency=args.decode_concurrency,
+        )
+        if not started:
+            console.print(f"[red]MLX did not start:[/] {detail}")
+            console.print(
+                f"[dim]Python: {mlx.python_executable()} · "
+                f"install with: {mlx.python_executable()} -m pip install mlx mlx-lm[/]"
+            )
+            return 1
+        console.print(f"[dim]{detail}[/]")
+        console.print(f"[dim]Log: {mlx.log_path()}[/]")
+        status = wait_online(backend)
+        if status.online:
+            if mlx.warm(model, timeout=120, wait=90):
+                console.print("[dim]Model warmed for the first prompt.[/]")
+            console.print(f"[green]MLX server online[/] · {len(status.models)} model(s)")
+            console.print("[dim]Run: sovereign run <model> 'prompt'[/]")
+        else:
+            console.print("[yellow]MLX server still starting; check again shortly.[/]")
+            console.print(f"[dim]Log: {mlx.log_path()}[/]")
+            console.print("[dim]sovereign mlx status[/]")
+        return 0
+
+    if args.action == "stop":
+        from . import mlx
+
+        if mlx.stop_server(port):
+            console.print("[green]Stopped[/] MLX server")
+        else:
+            console.print("[dim]MLX server is not running.[/]")
+        return 0
+
+    console.print(f"[red]Unknown mlx action:[/] {args.action}")
+    return 1
+
+
+def _pack(args, settings: Settings) -> int:
     from . import packs
 
     action = args.action or "list"
@@ -3693,6 +3831,13 @@ def _pack(args) -> int:
         return 0
 
     if action == "models":
+        snap = _snapshot(settings)
+        installed = packs.installed_for(p, snap.views, snap.memory.free_gb)
+        if installed:
+            console.print(f"[bold]Installed model for {p.key}:[/] {installed}")
+        else:
+            console.print(f"[dim]No installed model matches the {p.key} pack.[/]")
+        console.print()
         from .hf import HFError
 
         try:
@@ -3727,6 +3872,34 @@ def _pack(args) -> int:
             else:
                 console.print(f"[dim]{path.parent / 'SCOPE.md'} already exists[/]")
         console.print("[dim]Re-run to refresh the block; markers prevent duplicates.[/]")
+        return 0
+
+    if action == "install":
+        from . import skills_install
+
+        skills = packs.pack_skills(p, limit=12)
+        skill_names = [name for name, _ in skills]
+        if not skill_names:
+            console.print(f"[yellow]No matching skills for {p.key}.[/]")
+            return 0
+        target = args.target
+        try:
+            result = skills_install.install(
+                targets=target,
+                names=skill_names,
+                dry_run=False,
+            )
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]Install failed:[/] {exc}")
+            return 1
+        total = sum(len(paths) for paths in result.values())
+        console.print(
+            f"[green]Installed[/] {len(skill_names)} skill(s) for pack {p.key} "
+            f"to {len(result)} target(s) ({total} file(s))"
+        )
+        for key, paths in result.items():
+            console.print(f"  {key}: {len(paths)} skill(s)")
+        console.print("[dim]Run `sovereign skills install --target all` for the curated set.[/]")
         return 0
 
     console.print(f"[red]Unknown pack action:[/] {action}")
@@ -5311,6 +5484,48 @@ def build_parser() -> argparse.ArgumentParser:
     warm.add_argument("--model", default=None, help="tag to warm (default: best for --task)")
     warm.add_argument("--task", default="code", choices=("code", "chat", "agent"))
 
+    mlx = sub.add_parser("mlx", help="run MLX models (Apple Silicon) through a local mlx-lm server")
+    mlx.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("start", "stop", "status", "models", "pull"),
+        help="start, stop, show, list, or download MLX models",
+    )
+    mlx.add_argument(
+        "--model", default=None, help="MLX model to load on start (e.g. mlx-qwen3-4b-4bit)"
+    )
+    mlx.add_argument("--port", type=int, default=8081, help="server port (default 8081)")
+    mlx.add_argument(
+        "--max-tokens", type=int, default=4096, help="context/max tokens for the server"
+    )
+    mlx.add_argument(
+        "--draft",
+        nargs="?",
+        const="auto",
+        default=None,
+        help="speculative draft model: auto (default), a repo id, or off",
+    )
+    mlx.add_argument(
+        "--kv-bits",
+        type=int,
+        default=8,
+        choices=(0, 4, 8),
+        help="KV cache bits (4/8 to save memory, 0 to enable parallel decode)",
+    )
+    mlx.add_argument(
+        "--decode-concurrency",
+        type=int,
+        default=4,
+        help="parallel decodes when --kv-bits 0 (default 4)",
+    )
+    mlx.add_argument(
+        "--draft-tokens", type=int, default=4, help="tokens proposed per draft step (default 4)"
+    )
+    mlx.add_argument(
+        "--yes", action="store_true", help="skip confirmation prompt when installing mlx-lm"
+    )
+
     browse = sub.add_parser("browse", help="drive a visible browser with the local model")
     browse.add_argument("url", nargs="?", default=None, help="starting URL")
     browse.add_argument("--task", default=None, help="what to do on the page")
@@ -5560,7 +5775,7 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="list",
-        choices=("list", "show", "models", "brief"),
+        choices=("list", "show", "models", "brief", "install"),
         help="default: list",
     )
     pack.add_argument("key", nargs="?", default=None, help="pack key (pentest, vulnerability, …)")
@@ -5569,6 +5784,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="AGENTS.md",
         metavar="FILE",
         help="brief: write the managed block into this project file (default: AGENTS.md)",
+    )
+    pack.add_argument(
+        "--target",
+        default="all",
+        help="install: all, or claude,codex,qwen,opencode,continue (default: all)",
     )
     pack.add_argument(
         "--limit",
@@ -6599,6 +6819,8 @@ def main(argv: list[str] | None = None) -> int:
         return _prune(_snapshot(settings), apply=args.apply)
     if command == "warm":
         return _warm_model(settings, args.model, args.task)
+    if command == "mlx":
+        return _mlx_cmd(settings, args)
     if command == "free":
         return _free(settings)
     if command == "logs":
@@ -6694,7 +6916,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "domains":
         return _domains(args.detect)
     if command == "pack":
-        return _pack(args)
+        return _pack(args, settings)
     if command == "hf":
         return _hf(args)
     if command == "skills":

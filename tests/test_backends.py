@@ -11,7 +11,7 @@ from sovereign_code.config import Settings
 def test_known_backends_lists_all() -> None:
     backends = known_backends(Settings())
     keys = [b.key for b in backends]
-    assert keys == ["gateway", "ollama", "jan", "lmstudio", "llamacpp"]
+    assert keys == ["gateway", "ollama", "jan", "lmstudio", "llamacpp", "mlx"]
 
 
 def test_known_backends_strips_trailing_slash() -> None:

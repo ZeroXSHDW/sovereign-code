@@ -76,6 +76,19 @@ TOOLS: list[dict[str, Any]] = [
         ["name"],
     ),
     _tool(
+        "list_packs",
+        "List task packs (pentest, vulnerability, risk, vendor, legal, compliance, "
+        "forensics, finance) with their key, label, domain and summary.",
+        {},
+    ),
+    _tool(
+        "pack_profile",
+        "Return one task pack's full profile: guardrails, steps, deliverables, "
+        "model queries, and suggested skills.",
+        {"key": {"type": "string"}},
+        ["key"],
+    ),
+    _tool(
         "hf_status",
         "Report whether Hugging Face is authenticated (never the token), where the "
         "token, Hub cache, and downloads live, and whether the hf CLI is installed.",
@@ -266,6 +279,44 @@ def list_skills_payload(query: str = "") -> list[dict[str, str]]:
     for skill in load_curated():
         rows.append({"name": skill.name, "description": skill.description})
     return rows
+
+
+def _list_packs_payload() -> list[dict[str, str]]:
+    from . import packs
+
+    return [
+        {
+            "key": key,
+            "label": pack.label,
+            "domain": pack.domain,
+            "task": str(pack.task),
+            "summary": pack.summary,
+        }
+        for key, pack in sorted(packs.PACKS.items())
+    ]
+
+
+def _pack_profile_payload(key: str) -> dict[str, Any]:
+    from . import packs
+
+    pack = packs.get_pack(key)
+    if pack is None:
+        raise ValueError(f"unknown pack: {key}")
+    skills = packs.pack_skills(pack, limit=6)
+    return {
+        "key": pack.key,
+        "label": pack.label,
+        "domain": pack.domain,
+        "task": str(pack.task),
+        "summary": pack.summary,
+        "guardrails": list(pack.guardrails),
+        "steps": list(pack.steps),
+        "deliverables": list(pack.deliverables),
+        "model_queries": list(pack.model_queries),
+        "suggested_skills": [
+            {"name": name, "description": packs._first(desc)} for name, desc in skills
+        ],
+    }
 
 
 def _hf_status_payload() -> dict[str, Any]:
@@ -662,6 +713,10 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         if skill is None:
             raise ValueError(f"unknown skill: {wanted}")
         return skill.body
+    if name == "list_packs":
+        return _text(_list_packs_payload())
+    if name == "pack_profile":
+        return _text(_pack_profile_payload(str(args.get("key") or "")))
     if name == "hf_status":
         return _text(_hf_status_payload())
     if name == "search_hf_models":

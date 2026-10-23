@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from pathlib import Path
+from typing import Any
 
 CODING = "code"
 CHAT = "chat"
@@ -45,7 +47,62 @@ CATALOG: dict[str, ModelSpec] = {
         strengths=("agent", "code", "tools", "reason"),
         summary="GLM-4 9B: fast agentic tool use, multilingual coding & reasoning.",
     ),
-    # --- Frontier models served by Ollama Cloud -------------------------------
+    # --- Apple Silicon MLX models ----------------------------------------------
+    # Quantized models for `mlx-lm`, Apple's framework for running LLMs on
+    # Apple Silicon. They are served by a local `mlx-lm` server (an
+    # OpenAI-compatible API on loopback) and never leave the Mac. Sizes are the
+    # GGUF/MLX weight size; the router picks them from free unified memory just
+    # like any other local model. Start the server with `sovereign mlx start`.
+    "mlx-qwen3-4b-4bit": ModelSpec(
+        tag="mlx-qwen3-4b-4bit",
+        role=CODING,
+        params_b=4.0,
+        size_gb=2.5,
+        max_context=32768,
+        strengths=("code", "chat", "fast"),
+        summary="Qwen3 4B 4-bit via MLX: tiny, fast coding/chat model for Apple Silicon.",
+        recommended=False,
+    ),
+    "mlx-qwen3-8b-4bit": ModelSpec(
+        tag="mlx-qwen3-8b-4bit",
+        role=CODING,
+        params_b=8.0,
+        size_gb=5.0,
+        max_context=32768,
+        strengths=("code", "chat", "agent"),
+        summary="Qwen3 8B 4-bit via MLX: capable general coding model.",
+        recommended=False,
+    ),
+    "mlx-qwen3-14b-4bit": ModelSpec(
+        tag="mlx-qwen3-14b-4bit",
+        role=CODING,
+        params_b=14.0,
+        size_gb=8.5,
+        max_context=32768,
+        strengths=("code", "reason", "agent"),
+        summary="Qwen3 14B 4-bit via MLX: strong coding and reasoning.",
+        recommended=False,
+    ),
+    "mlx-qwen2.5-coder-7b-4bit": ModelSpec(
+        tag="mlx-qwen2.5-coder-7b-4bit",
+        role=CODING,
+        params_b=7.0,
+        size_gb=4.5,
+        max_context=32768,
+        strengths=("code", "agent", "tools"),
+        summary="Qwen2.5-Coder 7B 4-bit via MLX: small, fast coding specialist.",
+        recommended=False,
+    ),
+    "mlx-llama-3.1-8b-instruct-4bit": ModelSpec(
+        tag="mlx-llama-3.1-8b-instruct-4bit",
+        role=CHAT,
+        params_b=8.0,
+        size_gb=5.0,
+        max_context=131072,
+        strengths=("chat", "general", "fast"),
+        summary="Llama-3.1 8B Instruct 4-bit via MLX: general chat model.",
+        recommended=False,
+    ),
     # Verified on ollama.com/library (2026-10-21). Ollama Cloud is opt-in: the
     # server must run without OLLAMA_NO_CLOUD and the account must be signed in
     # (`ollama signin`). These entries carry no local size because nothing is
@@ -353,6 +410,127 @@ CLOUD_PREFERENCE: tuple[str, ...] = (
 
 CLOUD_TAGS: tuple[str, ...] = tuple(tag for tag, spec in CATALOG.items() if spec.cloud)
 
+# MLX models run on a separate local server (not Ollama), so they are discovered
+# through the MLX backend rather than /api/tags. This is the order in which the
+# router should offer them for each task when the MLX server is online.
+MLX_PREFERENCE: dict[str, tuple[str, ...]] = {
+    CODING: (
+        "mlx-qwen3-14b-4bit",
+        "mlx-qwen3-8b-4bit",
+        "mlx-qwen2.5-coder-7b-4bit",
+        "mlx-qwen3-4b-4bit",
+    ),
+    CHAT: (
+        "mlx-llama-3.1-8b-instruct-4bit",
+        "mlx-qwen3-8b-4bit",
+        "mlx-qwen3-4b-4bit",
+    ),
+    REASON: (
+        "mlx-qwen3-14b-4bit",
+        "mlx-qwen3-8b-4bit",
+    ),
+    AGENT: (
+        "mlx-qwen3-14b-4bit",
+        "mlx-qwen2.5-coder-7b-4bit",
+        "mlx-qwen3-8b-4bit",
+    ),
+    FAST: (
+        "mlx-qwen3-4b-4bit",
+        "mlx-qwen2.5-coder-7b-4bit",
+    ),
+    GENERAL: (
+        "mlx-llama-3.1-8b-instruct-4bit",
+        "mlx-qwen3-8b-4bit",
+        "mlx-qwen3-4b-4bit",
+    ),
+}
+
+
+def mlx_preferred_tags(task: str) -> tuple[str, ...]:
+    """MLX tags to offer for a task, strongest first."""
+    return MLX_PREFERENCE.get(task, MLX_PREFERENCE[GENERAL])
+
+
+# MLX catalog tag -> normalized model identifier used to match a downloaded
+# repository directory to a catalog entry (the dir names come from HF, e.g.
+# "mlx-community--Qwen3-4B-4bit").
+_MLX_TAG_MODEL: dict[str, str] = {
+    "mlx-qwen3-4b-4bit": "qwen34b",
+    "mlx-qwen3-8b-4bit": "qwen38b",
+    "mlx-qwen3-14b-4bit": "qwen314b",
+    "mlx-qwen2.5-coder-7b-4bit": "qwen25coder7b",
+    "mlx-llama-3.1-8b-instruct-4bit": "llama318binstruct",
+}
+
+_MLX_WEIGHT_PATTERNS = ("*.gguf", "*.mlx", "*.npz", "*.safetensors", "*.bin")
+
+
+def _mlx_dir_name(name: str) -> str:
+    name = name.lower().replace("--", "/")
+    if "/" in name:
+        name = name.split("/", 1)[1]
+    return re.sub(r"[^a-z0-9]", "", name)
+
+
+def _directory_has_weights(directory: Path) -> bool:
+    return any(
+        child.is_file() for pattern in _MLX_WEIGHT_PATTERNS for child in directory.glob(pattern)
+    )
+
+
+def mlx_installed_tags(download_root: Path | None = None) -> list[str]:
+    """MLX catalog tags that have weight files downloaded locally.
+
+    Weights can live in the visible ``models/huggingface`` folder or in the
+    standard Hugging Face hub cache (where ``mlx_lm`` downloads by default).
+    Both layouts are scanned; the hub cache keeps each repo under
+    ``models--org--name/snapshots/<revision>/``.
+    """
+    if download_root is None:
+        # Imported lazily to avoid a module-import cycle (hf imports config,
+        # not models, but keep the direction one way regardless).
+        from .hf import DOWNLOAD_ROOT, hub_cache_dir
+
+        roots = [DOWNLOAD_ROOT, hub_cache_dir()]
+    else:
+        roots = [download_root]
+    found: list[str] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name.startswith("models--"):
+                snapshots = child / "snapshots"
+                candidates = (
+                    [item for item in sorted(snapshots.iterdir()) if item.is_dir()]
+                    if snapshots.is_dir()
+                    else []
+                )
+            else:
+                candidates = [child]
+            if not any(_directory_has_weights(item) for item in candidates):
+                continue
+            norm = _mlx_dir_name(child.name)
+            for tag, ident in _MLX_TAG_MODEL.items():
+                if tag not in found and ident in norm:
+                    found.append(tag)
+    return found
+
+
+def mlx_views(download_root: Path | None = None) -> dict[str, ModelView]:
+    """ModelViews for MLX models that have weight files on disk.
+
+    Treated as installed so the router and dashboard can select them even
+    though they are served by the MLX server rather than Ollama.
+    """
+    views: dict[str, ModelView] = {}
+    for tag in mlx_installed_tags(download_root):
+        spec = CATALOG[tag]
+        views[tag] = ModelView(spec=spec, installed=True, size_gb=spec.size_gb)
+    return views
+
 
 def is_cloud_tag(tag: str) -> bool:
     """True for Ollama Cloud tags, including dated variants like `:1017-cloud`.
@@ -456,13 +634,39 @@ def parse_params_b(value: Any) -> float | None:
     return None
 
 
-def _dynamic_spec(tag: str, size_gb: float, params: float | None, family: str) -> ModelSpec:
+# Used only when the server does not report the model's window. The old fixed
+# 8192 capped every model outside the catalog, including each Hugging Face import.
+UNKNOWN_CONTEXT = 8192
+
+
+def capabilities_from_show(payload: dict[str, Any] | None) -> tuple[str, ...]:
+    """Capabilities such as "tools" and "vision" that Ollama reports for a model."""
+    values = (payload or {}).get("capabilities") or ()
+    return tuple(str(item) for item in values if isinstance(item, str))
+
+
+def context_from_show(payload: dict[str, Any] | None) -> int | None:
+    """The native context window from an Ollama `/api/show` payload, if reported."""
+    info = (payload or {}).get("model_info") or {}
+    for key, value in info.items():
+        if key.endswith(".context_length") and isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def _dynamic_spec(
+    tag: str,
+    size_gb: float,
+    params: float | None,
+    family: str,
+    context: int | None = None,
+) -> ModelSpec:
     return ModelSpec(
         tag=tag,
         role=GENERAL,
         params_b=params or 0.0,
         size_gb=size_gb,
-        max_context=8192,
+        max_context=context or UNKNOWN_CONTEXT,
         strengths=(family.lower(),) if family else (),
         summary=f"Installed model ({family or 'unknown family'}).",
     )
@@ -472,6 +676,8 @@ def build_views(
     tags_payload: dict[str, Any] | None,
     ps_payload: dict[str, Any] | None,
     include_missing: bool = True,
+    contexts: dict[str, int] | None = None,
+    capabilities: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, ModelView]:
     """Merge /api/tags and /api/ps into a stable, display-ready mapping."""
     views: dict[str, ModelView] = {}
@@ -485,13 +691,19 @@ def build_views(
         spec = (
             CATALOG.get(tag)
             or CATALOG.get(tag.removesuffix(":latest"))
-            or _dynamic_spec(tag, size_gb, params, details.get("family", ""))
+            or _dynamic_spec(
+                tag,
+                size_gb,
+                params,
+                details.get("family", ""),
+                (contexts or {}).get(tag),
+            )
         )
         view = ModelView(
             spec=spec,
             installed=True,
             size_gb=size_gb or spec.size_gb,
-            capabilities=tuple(item.get("capabilities") or ()),
+            capabilities=tuple(item.get("capabilities") or ()) or (capabilities or {}).get(tag, ()),
         )
         views[tag] = view
         if tag.endswith(":latest"):
@@ -504,16 +716,16 @@ def build_views(
         if not tag:
             continue
         existing = views.get(tag)
-        view = cast(Any, existing)
-        if view is None:
+        if existing is None:
             spec = (
                 CATALOG.get(tag)
                 or CATALOG.get(tag.removesuffix(":latest"))
                 or _dynamic_spec(tag, parse_size_gb(item.get("size")), None, "")
             )
-            new_view = ModelView(spec=spec, installed=True, size_gb=parse_size_gb(item.get("size")))
-            views[tag] = new_view
-            view = new_view
+            view = ModelView(spec=spec, installed=True, size_gb=parse_size_gb(item.get("size")))
+            views[tag] = view
+        else:
+            view = existing
         view.loaded = True
         view.context = item.get("context_length")
         view.vram_gb = parse_size_gb(item.get("size_vram")) or None

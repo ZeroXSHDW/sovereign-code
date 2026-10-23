@@ -82,9 +82,23 @@ def complete(
 ) -> str:
     base = base_url.rstrip("/")
     try:
-        with httpx.Client(
-            timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
-        ) as client:
+        if transport is not None:
+            with httpx.Client(
+                timeout=httpx.Timeout(timeout, connect=3.0), transport=transport
+            ) as client:
+                response = client.post(
+                    f"{base}/v1/chat/completions",
+                    headers={"Authorization": "Bearer local"},
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "stream": False,
+                    },
+                )
+        else:
+            client = shared_client(timeout=timeout, connect=3.0)
             response = client.post(
                 f"{base}/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},

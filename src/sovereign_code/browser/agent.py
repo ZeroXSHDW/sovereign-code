@@ -15,6 +15,7 @@ import httpx
 
 from ..config import DATA_DIR
 from ..errors import PlannerError
+from ..http import shared_client
 from .actions import Action, ActionError, BrowserPolicy, PolicyError, parse_action
 from .executor import SENSITIVE, BrowserError, BrowserSession, SensitiveFieldError
 
@@ -142,19 +143,18 @@ class ModelPlanner:
             "stream": False,
         }
         try:
-            response = httpx.post(
+            client = shared_client(timeout=self.timeout, connect=5.0)
+            response = client.post(
                 f"{self.base}/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},
                 json=payload,
-                timeout=self.timeout,
             )
             if response.status_code == 400:
                 payload.pop("response_format", None)
-                response = httpx.post(
+                response = client.post(
                     f"{self.base}/v1/chat/completions",
                     headers={"Authorization": "Bearer local"},
                     json=payload,
-                    timeout=self.timeout,
                 )
         except httpx.HTTPError as exc:
             raise PlannerError(f"gateway unreachable: {exc.__class__.__name__}") from exc

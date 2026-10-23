@@ -444,7 +444,7 @@ class SovereignApp(App[None]):
             )
         elif command in {"/open", "/qwen"}:
             await self.action_launch_code(arg or None)
-        elif command == "/terminal":
+        elif command in {"/terminal", "/term"}:
             from ..terminal import spawn_terminal
 
             target = arg or self.settings.workspace
@@ -459,7 +459,7 @@ class SovereignApp(App[None]):
                 "system",
                 f"Opened a Terminal in `{result['cwd']}` ({result.get('method', '?')}).",
             )
-        elif command == "/run":
+        elif command in {"/run", "/shell", "/exec"}:
             if not arg:
                 await self.add_message("system", "Usage: `/run <command>`")
                 return
@@ -508,7 +508,7 @@ class SovereignApp(App[None]):
                 for item in local_clients(resolved)
             )
             await self.add_message("system", rows)
-        elif command == "/status":
+        elif command in {"/status", "/reload"}:
             await self.refresh_snapshot()
             self._render_status()
             self._render_system()
@@ -538,6 +538,8 @@ class SovereignApp(App[None]):
                 await self._run_cli("summarize", arg)
         elif command == "/backup":
             await self._run_cli("backup")
+        elif command == "/doctor":
+            await self._run_cli("doctor")
         elif command == "/skills":
             await self._run_cli("skills")
         elif command == "/skill":
@@ -553,6 +555,20 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/version":
+            from .. import __version__
+
+            await self.add_message("system", f"Sovereign Code v{__version__}")
+        elif command == "/history":
+            if not self.history:
+                await self.add_message("system", "_No conversation history yet._")
+                return
+            lines = []
+            for item in self.history[-10:]:
+                role = item.get("role", "?")
+                content = " ".join(item.get("content", "").split())[:80]
+                lines.append(f"- **{role}**: {content}")
+            await self.add_message("system", "\n".join(lines))
         elif command == "/clear":
             await self.clear_chat()
         elif command == "/quit":

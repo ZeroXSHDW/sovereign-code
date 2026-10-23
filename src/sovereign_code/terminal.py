@@ -198,6 +198,7 @@ def run_shell(
     *,
     cwd: str | Path | None = None,
     timeout: int = 120,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run any shell command, using the macOS auth dialog for a leading sudo."""
     text = command.strip()
@@ -211,6 +212,11 @@ def run_shell(
         if body is not None:
             return _run_privileged(body.group(2), workdir, budget)
     try:
+        import os as _os
+
+        merged_env = _os.environ.copy()
+        if env:
+            merged_env.update(env)
         completed = subprocess.run(  # noqa: S602 - unrestricted shell access is the point
             text,
             shell=True,
@@ -219,6 +225,7 @@ def run_shell(
             text=True,
             timeout=budget,
             check=False,
+            env=merged_env,
         )
     except subprocess.TimeoutExpired:
         return {

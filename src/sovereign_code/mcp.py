@@ -1009,7 +1009,7 @@ def _delegate(
         raise ValueError(f"not a directory: {target}")
     if client not in {"codex", "claude"}:
         raise ValueError("delegate supports codex or claude")
-    seconds = max(30, min(int(timeout or 240), 3600))
+    seconds = max(30, min(int(timeout or 240), 7200))
     plan = build_headless(
         client,
         "local",

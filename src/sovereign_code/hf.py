@@ -30,6 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import LOCAL_AI_ROOT
+from .errors import HFError
 from .stats import human_size
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
@@ -44,10 +45,6 @@ QUANT_RE = re.compile(
     re.IGNORECASE,
 )
 OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$")
-
-
-class HFError(RuntimeError):
-    """A Hugging Face operation failed in a way the CLI can explain."""
 
 
 def _tag_values(tags: tuple[str, ...], prefix: str) -> tuple[str, ...]:

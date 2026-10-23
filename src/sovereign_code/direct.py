@@ -77,20 +77,118 @@ def resolve_target(root: Path, relative: str) -> Path | None:
     return resolved
 
 
+UNDO_FILE = ".sovereign-undo.json"
+
+
 def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[str]]:
-    """Write the files. Returns (written, rejected)."""
+    """Write the files. Returns (written, rejected).
+
+    The write is *transactional*: every file is staged first, and only when
+    all of them are valid does anything touch the working tree. The previous
+    contents of every overwritten file (and the list of files that were
+    created) are recorded in ``.sovereign-undo.json`` so a single
+    :func:`undo_writes` can put the project back the way it was.
+    """
     root = root.resolve()
     written: list[str] = []
     rejected: list[str] = []
+
+    # Validate and stage every write before touching the working tree.
+    staged: list[tuple[Path, str]] = []
     for item in writes:
         target = resolve_target(root, item.path)
         if target is None or len(item.content.encode("utf-8", "ignore")) > MAX_FILE_BYTES:
             rejected.append(item.path)
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(item.content, encoding="utf-8")
-        written.append(str(target.relative_to(root)))
+        staged.append((target, item.content))
+
+    # Record the previous state so the whole batch can be undone.
+    backups: dict[str, str | None] = {}
+    for target, _content in staged:
+        rel = str(target.relative_to(root))
+        if target.is_file():
+            try:
+                backups[rel] = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                backups[rel] = None
+        else:
+            backups[rel] = None
+
+    # Write everything. If one write fails, restore the ones already written.
+    newly_written: list[str] = []
+    try:
+        for target, content in staged:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            newly_written.append(str(target.relative_to(root)))
+    except OSError:
+        # Best-effort rollback of the files already written.
+        for rel in newly_written:
+            target = root / rel
+            previous = backups.get(rel)
+            try:
+                if previous is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(previous, encoding="utf-8")
+            except OSError:
+                pass
+        raise
+
+    # Persist the journal for a later `undo_writes`.
+    import json
+
+    journal = {
+        "written": newly_written,
+        "backups": backups,
+    }
+    journal_path = root / UNDO_FILE
+    try:
+        journal_path.write_text(json.dumps(journal, ensure_ascii=False), encoding="utf-8")
+        from .safefile import harden
+
+        harden(journal_path)
+    except OSError:
+        pass
+
+    written.extend(newly_written)
     return written, rejected
+
+
+def undo_writes(root: Path) -> list[str]:
+    """Restore the working tree to the state before the last ``apply_writes``.
+
+    Returns the list of paths that were restored. An empty result means there
+    was nothing to undo.
+    """
+    import json
+
+    root = root.resolve()
+    journal_path = root / UNDO_FILE
+    if not journal_path.is_file():
+        return []
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    backups = journal.get("backups") or {}
+    restored: list[str] = []
+    for rel, previous in backups.items():
+        target = root / rel
+        try:
+            if previous is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(previous, encoding="utf-8")
+            restored.append(rel)
+        except OSError:
+            continue
+    try:
+        journal_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return restored
 
 
 def relevant_files(root: Path, prompt: str, limit_bytes: int = 30_000) -> dict[str, str]:

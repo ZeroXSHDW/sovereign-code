@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import LOCAL_AI_ROOT
+from .errors import ProviderError
 from .http import shared_client
 from .models import CATALOG, CLOUD_PREFERENCE, REQUESTED_CLOUD_MODELS
 from .models import is_cloud_tag as _is_cloud_tag
@@ -690,10 +691,6 @@ def install_gateway_aliases(
         path.write_text(updated, encoding="utf-8")
         written.append(path)
     return written
-
-
-class ProviderError(RuntimeError):
-    """A provider route could not answer (bad key, credits, model, network)."""
 
 
 def provider_chat(

@@ -72,7 +72,7 @@ from .config import (
     launch_agent_path,
     write_default_config,
 )
-from .direct import apply_writes, build_messages, parse_blocks, relevant_files
+from .direct import apply_writes, build_messages, parse_blocks, relevant_files, undo_writes
 from .gateway_config import (
     default_path as gateway_config_path,
 )
@@ -1241,6 +1241,16 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
     console.print(table)
     console.print("[dim]Re-running doctor…[/]")
     return _doctor(_snapshot(settings))
+
+
+def _undo(path: str | None = None) -> int:
+    target = Path(path).expanduser().resolve() if path else Path.cwd()
+    restored = undo_writes(target)
+    if not restored:
+        console.print("[dim]Nothing to undo: no recorded change.[/]")
+        return 0
+    console.print(f"[green]Restored {len(restored)} file(s):[/] " + ", ".join(restored))
+    return 0
 
 
 def _backup(keep: int | None = None) -> int:
@@ -3325,7 +3335,7 @@ def _prune(snap: Snapshot, apply: bool = False) -> int:
     return 0 if len(removed) == len(candidates) else 1
 
 
-def _warm(settings: Settings, model: str | None, task: str) -> int:
+def _warm_model(settings: Settings, model: str | None, task: str) -> int:
     """Load the chosen model now so the first prompt is not a cold start."""
     snap = _snapshot(settings)
     if not snap.ollama_up:
@@ -5262,6 +5272,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--export", default=None, metavar="PATH", help="export all sessions to JSONL"
     )
 
+    undo = sub.add_parser("undo", help="restore the files changed by the last pipeline/code pass")
+    undo.add_argument(
+        "--path", default=None, help="project root (default: current directory)"
+    )
+
     pipeline = sub.add_parser("pipeline", help="plan -> implement -> review across models")
     pipeline.add_argument("prompt")
     pipeline.add_argument("--dir", default=".")
@@ -5685,12 +5700,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--older-than", type=float, default=None, help="clear entries older than seconds"
     )
 
-    # --- warm -------------------------------------------------------------
-    warm = sub.add_parser("warm", help="model warm pool: status, load, touch, start, stop")
-    warm.add_argument(
+    # --- warm pool --------------------------------------------------------
+    warm_pool = sub.add_parser(
+        "warm-pool", help="model warm pool: status, load, touch, start, stop"
+    )
+    warm_pool.add_argument(
         "action", nargs="?", default="status", choices=("status", "load", "touch", "start", "stop")
     )
-    warm.add_argument("model", nargs="?", default=None, help="model tag to load/touch")
+    warm_pool.add_argument("model", nargs="?", default=None, help="model tag to load/touch")
 
     # --- knowledge --------------------------------------------------------
     knowledge = sub.add_parser("knowledge", help=".md knowledge base: index, search, roots")
@@ -6163,7 +6180,7 @@ def _cache(args) -> int:
 # --------------------------------------------------------------------- warm
 
 
-def _warm(args) -> int:
+def _warm_pool(args) -> int:
     from .warm import pool as warm_pool
 
     p = warm_pool()
@@ -6461,7 +6478,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "prune":
         return _prune(_snapshot(settings), apply=args.apply)
     if command == "warm":
-        return _warm(settings, args.model, args.task)
+        return _warm_model(settings, args.model, args.task)
     if command == "free":
         return _free(settings)
     if command == "logs":
@@ -6477,6 +6494,8 @@ def main(argv: list[str] | None = None) -> int:
         return _bench(settings, models, args.tokens, args.prompt or DEFAULT_PROMPT)
     if command == "backup":
         return _backup(keep=args.keep)
+    if command == "undo":
+        return _undo(path=args.path)
     if command == "index":
         return _index(settings, args.path, args.model, args.limit)
     if command == "search":
@@ -6617,8 +6636,8 @@ def main(argv: list[str] | None = None) -> int:
         return _connect(args.script)
     if command == "cache":
         return _cache(args)
-    if command == "warm":
-        return _warm(args)
+    if command == "warm-pool":
+        return _warm_pool(args)
     if command == "knowledge":
         return _knowledge(args)
     parser.print_help()

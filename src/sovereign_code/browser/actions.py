@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
+from ..errors import ActionError, PolicyError
+
 ALLOWED_KEYS = {
     "Enter",
     "Tab",
@@ -66,14 +68,6 @@ PRIVATE_HOSTS = {
     "0.0.0.0",  # noqa: S104 - listed so it is treated as a private address
     "::1",
 }
-
-
-class ActionError(ValueError):
-    """The model produced an action that is not valid JSON or not supported."""
-
-
-class PolicyError(ValueError):
-    """The action would leave the allowed browsing policy."""
 
 
 @dataclass(frozen=True)

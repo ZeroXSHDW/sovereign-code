@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ..config import DATA_DIR
+from ..errors import PlannerError
 from .actions import Action, ActionError, BrowserPolicy, PolicyError, parse_action
 from .executor import SENSITIVE, BrowserError, BrowserSession, SensitiveFieldError
 
@@ -52,10 +53,6 @@ Rules:
 Example: PAGE.text contains "Example Domain" and the task asks for the heading.
 Reply: {"action":"done","summary":"The heading is Example Domain."}
 """
-
-
-class PlannerError(RuntimeError):
-    """The local model could not produce a usable plan."""
 
 
 def _is_secret_element(element: dict) -> bool:

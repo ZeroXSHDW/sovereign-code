@@ -9,12 +9,8 @@ from typing import Any
 
 import httpx
 
+from .errors import OllamaError
 from .http import async_client
-
-
-class OllamaError(RuntimeError):
-    pass
-
 
 PRELOAD_TIMEOUT = 900.0
 """Budget for a cold model load, in seconds."""

@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .browser.actions import BrowserPolicy, PolicyError, check_url
+from .errors import SourceError
 from .http import shared_client
 
 MAX_CHARS = 24000
@@ -17,10 +18,6 @@ SYSTEM_PROMPT = (
     "Summarize the following content concisely but completely, preserving the key "
     "facts, names, and any instructions. Use plain paragraphs or a short bullet list."
 )
-
-
-class SourceError(ValueError):
-    """The file or URL could not be read."""
 
 
 def _fetch(url: str, timeout: float) -> httpx.Response:

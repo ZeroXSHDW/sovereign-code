@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ..errors import BrowserError, SensitiveFieldError
 from .actions import (
     SUBMIT_KEYS,
     Action,
@@ -194,14 +195,6 @@ def chromium_path() -> Path | None:
         return candidate if candidate.exists() else None
     except Exception:
         return None
-
-
-class BrowserError(RuntimeError):
-    """The page could not be observed or the action could not be executed."""
-
-
-class SensitiveFieldError(BrowserError):
-    """Refuse to type secrets into password, OTP, or payment fields."""
 
 
 def detect_captcha(observation: dict) -> bool:

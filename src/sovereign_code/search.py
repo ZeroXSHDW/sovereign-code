@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from .config import DATA_DIR
+from .errors import EmbedError
 from .http import shared_client
 
 DEFAULT_EMBED = "nomic-embed-text"
@@ -71,10 +72,6 @@ IGNORED_EXT = {
     ".min.js",
     ".min.css",
 }
-
-
-class EmbedError(RuntimeError):
-    """The embedding endpoint failed."""
 
 
 @dataclass(frozen=True)

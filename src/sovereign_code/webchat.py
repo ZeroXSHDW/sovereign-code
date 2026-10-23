@@ -329,7 +329,7 @@ class Handler(GuardedHandler):
                 profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
                 policy=policy,
                 headless=False,
-                timeout_ms=15000,
+                timeout_ms=60000,
             )
             session.start(url)
             planner = ModelPlanner(self.router, model="balanced")
@@ -337,7 +337,7 @@ class Handler(GuardedHandler):
                 session,
                 planner,
                 policy,
-                max_steps=max(1, min(int(payload.get("max_steps") or 10), 20)),
+                max_steps=max(1, min(int(payload.get("max_steps") or 10), 50)),
                 headless=False,
                 confirm=lambda _message: False,
                 audit=AuditLog(),

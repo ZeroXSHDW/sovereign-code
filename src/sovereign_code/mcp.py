@@ -15,6 +15,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +36,39 @@ def _text(value: Any) -> str:
 
 
 _COMPUTER_LOCK = threading.Lock()
+
+_MAX_OUTPUT = 100_000
+
+# Commands that can destroy the machine or lock the user out. The MCP server is
+# deliberately powerful, so the few irreversible operations are fenced off.
+_DENY_COMMAND = re.compile(
+    r"(^|\s)(sudo|doas)\s|"
+    r"rm\s+(-[a-z]*[rf][a-z]*\s+)+(/|/\*|~|\$HOME)(\s|$)|"
+    r"mkfs(\.|\s)|"
+    r"diskutil\s+(erase|partition|reformat)|"
+    r"(shutdown|reboot|halt)\s|"
+    r"dd\s+.*of=/dev/|"
+    r":\(\)\s*\{|"
+    r">\s*/dev/(disk|sd|nvme)",
+    re.IGNORECASE,
+)
+
+
+def _computer_enabled() -> bool:
+    value = os.environ.get("SOVEREIGN_MCP_COMPUTER", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _ensure_computer() -> None:
+    if not _computer_enabled():
+        raise ValueError("computer control is disabled; set SOVEREIGN_MCP_COMPUTER=1 to enable it")
+
+
+def _truncate(text: str, limit: int = _MAX_OUTPUT) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... (truncated, {len(text) - limit} more bytes)"
+
 
 _SENSITIVE_NAMES = frozenset(
     {"cloud.env", "auth.json", ".env", ".netrc", ".npmrc", ".pypirc", "credentials"}
@@ -391,6 +426,20 @@ TOOLS: list[dict[str, Any]] = [
         {},
     ),
     _tool("browser_close", "Close the local browser session.", {}),
+    _tool(
+        "run_command",
+        "Run a shell command on this Mac and return its output. This is full local "
+        "computer control: use it for builds, tests, git, package managers, ssh, "
+        "adb and any CLI. A leading sudo uses the macOS authorization dialog. "
+        "Destructive commands are refused unless SOVEREIGN_MCP_UNRESTRICTED=1. "
+        "Output is truncated.",
+        {
+            "command": {"type": "string"},
+            "cwd": {"type": "string", "description": "Working directory; defaults to $HOME"},
+            "timeout": {"type": "integer", "default": 120},
+        },
+        ["command"],
+    ),
 ]
 
 
@@ -540,6 +589,53 @@ def _repo_read(path: str, start: int, end: int) -> dict[str, Any]:
 
     target = _workspace_path(path)
     return read_slice(target, start=start, end=end)
+
+
+def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, Any]:
+    _ensure_computer()
+    text = command.strip()
+    if not text:
+        raise ValueError("command is empty")
+    if _DENY_COMMAND.search(text):
+        raise ValueError("refused: this command could destroy the machine or its data")
+    workdir = Path(cwd).expanduser() if cwd else Path.home()
+    if not workdir.is_dir():
+        raise ValueError(f"not a directory: {workdir}")
+    budget = max(1, min(600, int(timeout or 120)))
+    _audit("run_command", command=text, cwd=str(workdir), timeout=budget)
+    try:
+        result = subprocess.run(  # noqa: S602
+            text,
+            shell=True,
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=budget,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": _truncate(str(exc.stdout or "")),
+            "stderr": f"timed out after {budget}s",
+            "cwd": str(workdir),
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+            "cwd": str(workdir),
+        }
+    return {
+        "ok": result.returncode == 0,
+        "returncode": result.returncode,
+        "stdout": _truncate(result.stdout or ""),
+        "stderr": _truncate(result.stderr or ""),
+        "cwd": str(workdir),
+    }
 
 
 def _hf_status_payload() -> dict[str, Any]:
@@ -991,6 +1087,14 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             _repo_patch(
                 str(args.get("path") or "."),
                 str(args.get("patch") or ""),
+            )
+        )
+    if name == "run_command":
+        return _text(
+            _run_command(
+                str(args.get("command") or ""),
+                str(args.get("cwd") or ""),
+                int(args.get("timeout") or 120),
             )
         )
     if name == "hf_status":

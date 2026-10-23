@@ -43,6 +43,7 @@ HELP_TEXT = """\
 - `/index [path]` — embed a directory for search
 - `/summarize <file|url>` — local-model summary
 - `/backup` — archive configs and chat data
+- `/hf ...` — search/download/import Hugging Face models
 - `/run <command>` — run a shell command locally and show output
 - `/terminal [path]` — open a real Terminal window
 - `/skills`, `/skill <name>` — saved prompt templates

@@ -211,9 +211,11 @@ class PromptDB:
                 source=source,
                 engine=engine,
             )
-        return self._row_to_prompt(
-            self._conn.execute("SELECT * FROM prompts WHERE id = ?", (pid,)).fetchone()
-        )
+        row = self._conn.execute("SELECT * FROM prompts WHERE id = ?", (pid,)).fetchone()
+        prompt = self._row_to_prompt(row)
+        if prompt is None:
+            raise KeyError(f"prompt {pid!r} not found")
+        return prompt
 
     def replace(
         self,
@@ -264,9 +266,11 @@ class PromptDB:
         category_value = row["category"] if category is None else category
         self._fts_write(name, tags_csv, category_value, content)
         self._conn.commit()
-        return self._row_to_prompt(
-            self._conn.execute("SELECT * FROM prompts WHERE id = ?", (pid,)).fetchone()
-        )
+        row = self._conn.execute("SELECT * FROM prompts WHERE id = ?", (pid,)).fetchone()
+        prompt = self._row_to_prompt(row)
+        if prompt is None:
+            raise KeyError(f"prompt {pid!r} not found")
+        return prompt
 
     def _fts_write(self, name: str, tags: str, category: str, content: str) -> None:
         self._conn.execute(
@@ -313,7 +317,7 @@ class PromptDB:
         ).fetchone()
         return self._row_to_prompt(row)
 
-    def list(
+    def list_all(
         self,
         *,
         category: str | None = None,

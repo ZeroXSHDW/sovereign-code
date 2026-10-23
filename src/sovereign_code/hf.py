@@ -545,7 +545,8 @@ def _updated(item: dict[str, Any]) -> str:
 
 
 def _description(item: dict[str, Any]) -> str:
-    card = item.get("cardData") if isinstance(item.get("cardData"), dict) else {}
+    card_data = item.get("cardData")
+    card: dict[str, Any] = card_data if isinstance(card_data, dict) else {}
     raw = item.get("description") or card.get("description") or ""
     return " ".join(str(raw).split())
 
@@ -566,7 +567,8 @@ def _model_from_api(item: dict[str, Any], repo_type: str = "model") -> HFModel:
 
 
 def _file_from_api(item: dict[str, Any]) -> HFFile:
-    lfs = item.get("lfs") if isinstance(item.get("lfs"), dict) else {}
+    lfs_raw = item.get("lfs")
+    lfs: dict[str, Any] = lfs_raw if isinstance(lfs_raw, dict) else {}
     size = item.get("size") or lfs.get("size") or 0
     try:
         parsed = int(size)
@@ -659,7 +661,8 @@ def info_model(
     files = tuple(
         _file_from_api(item) for item in (data.get("siblings") or ()) if isinstance(item, dict)
     )
-    gguf = data.get("gguf") if isinstance(data.get("gguf"), dict) else {}
+    gguf_raw = data.get("gguf")
+    gguf: dict[str, Any] = gguf_raw if isinstance(gguf_raw, dict) else {}
     try:
         used_storage = int(data.get("usedStorage") or 0)
     except (TypeError, ValueError):

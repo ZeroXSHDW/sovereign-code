@@ -41,7 +41,7 @@ class OllamaClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
-    def _client(self, transport: httpx.AsyncTransport | None = None) -> httpx.AsyncClient:
+    def _client(self, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
         """The pooled client for this Ollama host.
 
         One client per host per event loop, so the dashboard's two-and-a-half
@@ -60,7 +60,7 @@ class OllamaClient:
         path: str,
         payload: dict | None = None,
         timeout: float | None = None,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> dict:
         """Send one request and return the decoded body.
 
@@ -116,7 +116,7 @@ class OllamaClient:
         model: str,
         context: int = 16384,
         keep_alive: str = "15m",
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> dict[str, Any]:
         """Load a model into memory without asking it to do anything.
 
@@ -159,7 +159,7 @@ class OllamaClient:
         temperature: float = 0.25,
         think: bool | None = None,
         keep_alive: str = "15m",
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> AsyncIterator[ChatChunk]:
         payload: dict[str, Any] = {
             "model": model,
@@ -228,7 +228,7 @@ class OllamaClient:
         return str(payload.get("model") or "")
 
     async def pull(
-        self, model: str, transport: httpx.BaseTransport | None = None
+        self, model: str, transport: httpx.AsyncBaseTransport | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a model download.
 

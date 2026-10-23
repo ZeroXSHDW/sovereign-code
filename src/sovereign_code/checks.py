@@ -137,6 +137,12 @@ def command_allowed(command: str) -> bool:
     except ValueError:
         return False
     program = Path(argv[0]).name
+    # Normalise versioned interpreters (python3.11, python3.15, ...) so a venv
+    # whose binary carries a version suffix still matches the allow-list.
+    if program.startswith("python3.") and program[8:].isdigit():
+        program = "python3"
+    elif program.startswith("python") and program[6:].isdigit():
+        program = "python"
     denied = DENIED_FLAGS.get(program, frozenset())
     if any(flag in denied for flag in argv[1:]):
         return False

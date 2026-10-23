@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from .cloud import cloud_enabled
@@ -163,7 +163,7 @@ async def collect(settings: Settings) -> Snapshot:
     # These probes read memory and disk through subprocesses and open
     # sockets. They run off the event loop so a chat turn is never waiting
     # behind a `sysctl`.
-    memory, disk, installed, loaded, cloud, ports, exposed = await asyncio.gather(
+    gathered = await asyncio.gather(
         asyncio.to_thread(read_memory),
         asyncio.to_thread(disk_free_gb),
         asyncio.to_thread(login_agent_installed),
@@ -172,6 +172,13 @@ async def collect(settings: Settings) -> Snapshot:
         asyncio.to_thread(_port_flags, settings),
         asyncio.to_thread(_exposed_ports, settings),
     )
+    memory = cast(Memory, gathered[0])
+    disk = cast(float, gathered[1])
+    installed = cast(bool, gathered[2])
+    loaded = cast(bool, gathered[3])
+    cloud = cast(bool, gathered[4])
+    ports = cast(tuple[bool, bool, bool], gathered[5])
+    exposed = cast(dict[int, list[str]], gathered[6])
     snapshot.memory = memory
     snapshot.disk_free_gb = disk
     snapshot.login_installed = installed

@@ -387,9 +387,12 @@ class SkillDB:
                 version=version + 1,
                 installed=installed,
             )
-        return self._row_to_skill(
+        skill = self._row_to_skill(
             self._conn.execute("SELECT * FROM skills WHERE id = ?", (pid,)).fetchone()
         )
+        if skill is None:
+            raise RuntimeError(f"skill {name} was not found after insert")
+        return skill
 
     def _fts_write(
         self,
@@ -495,9 +498,12 @@ class SkillDB:
                 desc,
                 content,
             )
-        return self._row_to_skill(
+        skill = self._row_to_skill(
             self._conn.execute("SELECT * FROM skills WHERE id = ?", (pid,)).fetchone()
         )
+        if skill is None:
+            raise RuntimeError(f"skill {name} was not found after replace")
+        return skill
 
     # ---------------------------------------------------------------- read
 
@@ -515,7 +521,7 @@ class SkillDB:
         ).fetchone()
         return self._row_to_skill(row)
 
-    def list(
+    def list_all(
         self,
         *,
         category: str | None = None,

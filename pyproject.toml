@@ -52,6 +52,7 @@ dev = [
     "coverage>=7",
     "ruff>=0.17,<0.18",
     "mypy>=1.11",
+    "pip-audit>=2.7",
 ]
 
 [project.scripts]
@@ -80,7 +81,7 @@ omit = ["*/__main__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 60
+fail_under = 64
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

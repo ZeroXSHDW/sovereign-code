@@ -141,7 +141,7 @@ def async_client(
     key: str,
     timeout: float = 30.0,
     connect: float = 3.0,
-    transport: httpx.AsyncTransport | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.AsyncClient:
     """A pooled async client, reused for the lifetime of the current loop.
 

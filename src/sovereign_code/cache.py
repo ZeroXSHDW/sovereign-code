@@ -113,13 +113,13 @@ class MemoryCache:
             while len(self._data) > self.max_entries:
                 self._data.popitem(last=False)
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, float]:
         with self._lock:
             total = self.hits + self.misses
             return {
-                "entries": len(self._data),
-                "hits": self.hits,
-                "misses": self.misses,
+                "entries": float(len(self._data)),
+                "hits": float(self.hits),
+                "misses": float(self.misses),
                 "hit_rate": round(100.0 * self.hits / total, 1) if total else 0.0,
             }
 
@@ -283,7 +283,7 @@ def __getattr__(name: str) -> Any:
 
 def disk_cache() -> DiskCache:
     """Return the shared disk cache, creating it on first use."""
-    return __getattr__("DISK")  # type: ignore[no-any-return]
+    return __getattr__("DISK")
 
 
 def cache_key_chat(

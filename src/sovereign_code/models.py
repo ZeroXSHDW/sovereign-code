@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 CODING = "code"
 CHAT = "chat"
@@ -503,15 +503,17 @@ def build_views(
         tag = item.get("name") or item.get("model")
         if not tag:
             continue
-        view = views.get(tag)
+        existing = views.get(tag)
+        view = cast(Any, existing)
         if view is None:
             spec = (
                 CATALOG.get(tag)
                 or CATALOG.get(tag.removesuffix(":latest"))
                 or _dynamic_spec(tag, parse_size_gb(item.get("size")), None, "")
             )
-            view = ModelView(spec=spec, installed=True, size_gb=parse_size_gb(item.get("size")))
-            views[tag] = view
+            new_view = ModelView(spec=spec, installed=True, size_gb=parse_size_gb(item.get("size")))
+            views[tag] = new_view
+            view = new_view
         view.loaded = True
         view.context = item.get("context_length")
         view.vram_gb = parse_size_gb(item.get("size_vram")) or None

@@ -131,12 +131,12 @@ def test_rating_and_touch(db):
 def test_list_and_search(db):
     db.add("code-review", "Review code", category="code", tags="coding")
     db.add("chat-help", "Help chat", category="chat", tags="chat")
-    rows = db.list()
+    rows = db.list_all()
     assert len(rows) == 2
-    rows = db.list(category="code")
+    rows = db.list_all(category="code")
     assert len(rows) == 1
     assert rows[0].name == "code-review"
-    found = db.list(search="Review")
+    found = db.list_all(search="Review")
     assert len(found) == 1
     assert found[0].name == "code-review"
 
@@ -212,7 +212,7 @@ def test_migration_rebuilds_an_old_style_fts(tmp_path):
     db = SkillDB(path)
     try:
         assert db._fts_is_external()
-        assert [s.name for s in db.list(search="testing")] == ["alpha"]
+        assert [s.name for s in db.list_all(search="testing")] == ["alpha"]
         tables = {
             row[0]
             for row in db._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -290,14 +290,14 @@ def test_sync_reindexes_changed_skills(db, tree):
     """The full-text index has to follow the content it indexes."""
     _write(tree, "alpha", "# Alpha\n\nthe body talks about kangaroos\n")
     db.sync_repo()
-    assert [s.name for s in db.list(search="kangaroos")] == ["alpha"]
+    assert [s.name for s in db.list_all(search="kangaroos")] == ["alpha"]
 
     _write(tree, "alpha", "# Alpha\n\nthe body talks about badgers now\n")
     stats = db.sync_repo()
 
     assert stats["updated"] == 1
-    assert db.list(search="kangaroos") == []
-    assert [s.name for s in db.list(search="badgers")] == ["alpha"]
+    assert db.list_all(search="kangaroos") == []
+    assert [s.name for s in db.list_all(search="badgers")] == ["alpha"]
     db._conn.execute("INSERT INTO skills_fts(skills_fts) VALUES('integrity-check')")
 
 
@@ -353,20 +353,20 @@ def test_search_orders_by_relevance(db):
     db.add("high-rated", "testing happens", rating=5.0)
     db.add("unrelated", "nothing to see here", rating=4.0)
 
-    hits = db.list(search="testing")
+    hits = db.list_all(search="testing")
     assert [s.name for s in hits] == ["best-match", "high-rated"]
     # Without a search the old ordering is still the one that applies.
-    assert [s.name for s in db.list()] == ["high-rated", "unrelated", "best-match"]
+    assert [s.name for s in db.list_all()] == ["high-rated", "unrelated", "best-match"]
 
 
 def test_search_still_filters_by_category(db):
     db.add("alpha", "testing body", category="code")
     db.add("beta", "testing body", category="chat")
-    assert [s.name for s in db.list(search="testing", category="code")] == ["alpha"]
+    assert [s.name for s in db.list_all(search="testing", category="code")] == ["alpha"]
 
 
 def test_delete_removes_the_skill_from_the_index(db):
     db.add("alpha", "testing body")
     assert db.delete("alpha") is True
-    assert db.list(search="testing") == []
+    assert db.list_all(search="testing") == []
     db._conn.execute("INSERT INTO skills_fts(skills_fts) VALUES('integrity-check')")

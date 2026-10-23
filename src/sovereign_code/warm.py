@@ -92,7 +92,7 @@ class WarmPool:
                     "model": model.tag,
                     "prompt": "Hello.",
                     "stream": False,
-                    "options": {"num_predict": 8, "temperature": 0},
+                    "options": {"num_predict": 8, "temperature": 0, "num_ctx": 4096},
                     "keep_alive": "15m",
                 },
                 timeout=httpx.Timeout(timeout, connect=5.0),

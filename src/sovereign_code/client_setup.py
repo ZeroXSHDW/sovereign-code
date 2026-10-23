@@ -35,7 +35,13 @@ def sovereign_argv() -> list[str]:
     Python, and resolving it drops the virtualenv, so `sovereign_code` cannot
     be imported by the launching app.
     """
-    return [sys.executable, "-m", "sovereign_code", "mcp"]
+    # Prefer the venv's `python` entry point: some launchers (uv run) expose
+    # sys.executable as `python3`, but desktop clients and tests look for a
+    # binary whose name is `python`.
+    exe = Path(sys.executable)
+    candidate = exe.with_name("python")
+    command = str(candidate) if candidate.exists() else str(exe)
+    return [command, "-m", "sovereign_code", "mcp"]
 
 
 def _backup(path: Path) -> None:
@@ -300,7 +306,9 @@ def opencode_config(include_cloud: bool = False) -> dict:
         },
     }
     if not include_cloud:
-        config["provider"].pop("openrouter", None)
+        provider = config.get("provider")
+        if isinstance(provider, dict) and "openrouter" in provider:
+            provider.pop("openrouter", None)
     return config
 
 

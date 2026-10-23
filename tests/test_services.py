@@ -13,6 +13,7 @@ def test_the_stack_is_a_known_set_of_services() -> None:
         "com.user.sovereign.gateway",
         "com.user.sovereign.tier",
         "com.user.sovereign.bridge",
+        "com.user.sovereign.mcp",
     ]
     # The always-on chat web UI and guardian were removed to stop paying RAM
     # and CPU for a 24/7 chat/restart loop.

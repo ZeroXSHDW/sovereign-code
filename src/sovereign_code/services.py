@@ -1,7 +1,8 @@
 """launchd services for the local stack.
 
 Only the pieces a client needs run as launchd agents: the LiteLLM gateway,
-the tier gateway and the Anthropic bridge. They start at login, so they are
+the tier gateway, the Anthropic bridge, and the MCP HTTP server. They start
+at login, so they are
 back after a reboot, and launchd restarts them when they die.
 
 The old always-on chat web UI and the 30-second guardian loop are intentionally
@@ -35,6 +36,7 @@ LOG_DIR = LOCAL_AI_ROOT / "data" / "logs"
 GATEWAY_LABEL = f"{LABEL_PREFIX}.gateway"
 TIER_LABEL = f"{LABEL_PREFIX}.tier"
 BRIDGE_LABEL = f"{LABEL_PREFIX}.bridge"
+MCP_LABEL = f"{LABEL_PREFIX}.mcp"
 WEBCHAT_LABEL = f"{LABEL_PREFIX}.webchat"
 GUARDIAN_LABEL = f"{LABEL_PREFIX}.guardian"
 
@@ -202,6 +204,25 @@ def service_definitions(settings: Settings | None = None) -> list[Service]:
             working_dir=str(PROJECT_ROOT),
             log_name="service-bridge.log",
         ),
+        Service(
+            label=MCP_LABEL,
+            name="MCP server (HTTP)",
+            argv=(
+                python,
+                "-m",
+                "sovereign_code",
+                "mcp",
+                "--http",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+            ),
+            port=8765,
+            detail="Streamable HTTP endpoint for ChatGPT/Claude connectors",
+            working_dir=str(PROJECT_ROOT),
+            log_name="service-mcp.log",
+        ),
     ]
 
 
@@ -354,9 +375,10 @@ def restore_superseded() -> list[tuple[str, str]]:
     return rows
 
 
-def kickstart(service: Service) -> bool:
+def kickstart(service: Service | str) -> bool:
     """Restart one service."""
-    result = _launchctl("kickstart", "-k", f"{domain()}/{service.label}")
+    label = service.label if hasattr(service, "label") else str(service)
+    result = _launchctl("kickstart", "-k", f"{domain()}/{label}")
     return result.returncode == 0
 
 

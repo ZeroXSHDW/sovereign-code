@@ -19,6 +19,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from . import config
 from .http import shared_client
@@ -353,7 +354,7 @@ def run_setup(
     if models == "none":
         stack = ()
     elif models in MODEL_STACKS:
-        stack = tuple(str(tag) for tag in MODEL_STACKS[models]["models"])
+        stack = tuple(str(tag) for tag in cast(list[Any], MODEL_STACKS[models]["models"]))
     else:
         stack = DEFAULT_STACK
     if stack:

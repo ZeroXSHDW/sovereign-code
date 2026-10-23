@@ -29,8 +29,10 @@ def referenced_tags(
     """Every model some part of the app would pick or route to."""
     tags = {base_tag(tag) for tag in alias_targets}
     for stack in stacks.values():
-        for tag in stack.get("models", ()):  # type: ignore[union-attr]
-            tags.add(base_tag(str(tag)))
+        models = stack.get("models", ())
+        if isinstance(models, (list, tuple)):
+            for tag in models:
+                tags.add(base_tag(str(tag)))
     for tags_for_task in preferences.values():
         for tag in tags_for_task:
             tags.add(base_tag(tag))

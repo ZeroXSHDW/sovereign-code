@@ -188,10 +188,10 @@ def parse_action(payload: str | dict) -> Action:
             raise ActionError("wait seconds must be a number")
         return Action(kind, seconds=max(0.0, min(5.0, float(seconds))))
     if kind == "extract":
-        target = data.get("id")
-        if target is not None:
-            target = _require_int(data, "id")
-        return Action(kind, target=target)
+        target_id = data.get("id")
+        if target_id is not None:
+            target_id = _require_int(data, "id")
+        return Action(kind, target=target_id if target_id is None else int(target_id))
     if kind == "handoff":
         return Action(kind, reason=str(data.get("reason") or "human review needed"))
     return Action(kind, summary=str(data.get("summary") or "Task complete"))

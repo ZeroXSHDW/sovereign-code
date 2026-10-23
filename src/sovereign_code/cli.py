@@ -16,6 +16,7 @@ import sys
 import time
 from dataclasses import fields as dc_fields
 from pathlib import Path
+from typing import Any, cast
 
 from rich.console import Console
 from rich.panel import Panel
@@ -303,7 +304,7 @@ def _status_json(snap: Snapshot) -> int:
 def _models_remote(snap: Snapshot, query: str | None = None) -> int:
     from .models import REMOTE_CATALOG
 
-    installed = {view.tag for view in snap.installed}
+    installed = {view.tag for view in cast(list[Any], snap.installed)}
     rows = []
     for tag, (desc, _size_gb) in sorted(REMOTE_CATALOG.items()):
         if query and query.lower() not in tag.lower():
@@ -566,9 +567,9 @@ def _pull_stack(settings: Settings, name: str, yes: bool = False) -> int:
         console.print(f"[red]Unknown stack:[/] {name}. Stacks: {', '.join(sorted(MODEL_STACKS))}")
         return 1
     stack = MODEL_STACKS[name]
-    models = stack["models"]
+    models = cast(list[Any], stack["models"])
     snap = _snapshot(settings)
-    installed = {view.tag for view in snap.installed}
+    installed = {view.tag for view in cast(list[Any], snap.installed)}
     to_pull = [m for m in models if m not in installed]
     if not to_pull:
         console.print(f"[green]Stack '{name}' is already fully installed.[/]")
@@ -1263,7 +1264,7 @@ def _backup(keep: int | None = None) -> int:
         path = create_backup(
             include,
             LOCAL_AI_ROOT / "backups",
-            exclude=exclude,
+            exclude=cast(dict[Any, Any], exclude),
             extra_files=extra,
             root=LOCAL_AI_ROOT,
         )
@@ -1487,7 +1488,7 @@ def _doctor(snap: Snapshot) -> int:
         (
             f"{coder.tag} needs the machine to itself; unload other models and lower "
             f"max_context ({coder_sel.context} now)"
-            if not fits
+            if not fits and coder is not None
             else ""
         ),
         warn=True,
@@ -3354,7 +3355,7 @@ def _warm_model(settings: Settings, model: str | None, task: str) -> int:
         if not selection.model:
             console.print("[yellow]No installed model to warm.[/]")
             return 1
-        tag, context = selection.tag, selection.context
+        tag, context = cast(str, selection.tag), selection.context
         # The router prefers a conservative window; 2k would make the warmed
         # model useless for real work, so keep at least a usable floor.
         if context <= 4096:
@@ -4916,9 +4917,9 @@ def _orchestrate(settings: Settings, args) -> int:
         console.print("[dim]Run:[/] sovereign setup --yes --models recommended")
         return 1
 
-    plan_model = args.plan_model or plan.model or edit.model
-    agent = args.agent or edit.model
-    review_model = args.review_model or review.model or edit.model
+    plan_model = str(args.plan_model or plan.model or edit.model)
+    agent = str(args.agent or edit.model)
+    review_model = str(args.review_model or review.model or edit.model)
     fix_model = args.fix_model or fix.model or agent
 
     console.print(
@@ -5273,9 +5274,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     undo = sub.add_parser("undo", help="restore the files changed by the last pipeline/code pass")
-    undo.add_argument(
-        "--path", default=None, help="project root (default: current directory)"
-    )
+    undo.add_argument("--path", default=None, help="project root (default: current directory)")
 
     pipeline = sub.add_parser("pipeline", help="plan -> implement -> review across models")
     pipeline.add_argument("prompt")
@@ -5768,7 +5767,7 @@ def _prompts(args) -> int:
     try:
         action = args.action or "list"
         if action == "list":
-            rows = db.list(
+            rows = db.list_all(
                 category=args.category,
                 tag=None,
                 search=args.search,
@@ -5832,10 +5831,13 @@ def _prompts(args) -> int:
             if not args.name:
                 console.print("[red]Give a name:[/] sovereign prompts get <name>")
                 return 1
-            p = (
-                db.get_version(args.name, args.version)
-                if args.version is not None
-                else db.get(args.name)
+            p = cast(
+                Any,
+                (
+                    db.get_version(args.name, args.version)
+                    if args.version is not None
+                    else db.get(args.name)
+                ),
             )
             if p is None:
                 console.print(f"[red]No such prompt:[/] {args.name}")
@@ -5880,7 +5882,7 @@ def _prompts(args) -> int:
             if not query:
                 console.print("[red]Give a query:[/] sovereign prompts search <words>")
                 return 1
-            rows = db.list(search=query, limit=args.limit)
+            rows = db.list_all(search=query, limit=args.limit)
             if not rows:
                 console.print(f"[dim]No prompts match '{query}'.[/]")
                 return 0
@@ -5926,7 +5928,7 @@ def _skill_db(args) -> int:
     try:
         action = args.action or "list"
         if action == "list":
-            rows = db.list(
+            rows = db.list_all(
                 category=args.category,
                 tag=None,
                 search=args.search,
@@ -5993,7 +5995,7 @@ def _skill_db(args) -> int:
             if not args.name:
                 console.print("[red]Give a name:[/] sovereign skill-db get <name>")
                 return 1
-            s = db.get(args.name)
+            s = cast(Any, db.get(args.name))
             if s is None:
                 console.print(f"[red]No such skill:[/] {args.name}")
                 return 1
@@ -6022,7 +6024,7 @@ def _skill_db(args) -> int:
             if not query:
                 console.print("[red]Give a query:[/] sovereign skill-db search <words>")
                 return 1
-            rows = db.list(search=query, limit=args.limit)
+            rows = db.list_all(search=query, limit=args.limit)
             if not rows:
                 console.print(f"[dim]No skills match '{query}'.[/]")
                 return 0
@@ -6568,9 +6570,7 @@ def main(argv: list[str] | None = None) -> int:
         return _model_info(settings, args.model)
     if command == "consult":
         models = (
-            [name.strip() for name in args.models.split(",") if name.strip()]
-            if args.models
-            else None
+            [name.strip() for name in args.models.split(",") if name.strip()] if args.models else []
         )
         return _consult(settings, args.prompt, models, args.tokens, args.domain)
     if command == "domains":

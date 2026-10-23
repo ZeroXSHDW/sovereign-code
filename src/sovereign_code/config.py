@@ -188,14 +188,22 @@ class Settings:
 
 def _as_int(value: object, fallback: int) -> int:
     try:
-        return int(value)  # type: ignore[arg-type]
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float, str, bytes, bytearray)):
+            return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         return fallback
 
 
 def _as_float(value: object, fallback: float) -> float:
     try:
-        return float(value)  # type: ignore[arg-type]
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float, str, bytes, bytearray)):
+            return float(value)
+        return float(str(value))
     except (TypeError, ValueError):
         return fallback
 

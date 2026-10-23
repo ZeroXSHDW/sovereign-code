@@ -64,12 +64,12 @@ def test_render_tracks_usage(db):
 def test_list_and_search(db):
     db.add("code-review", "Review code", category="code", tags="coding")
     db.add("chat-help", "Help chat", category="chat", tags="chat")
-    rows = db.list()
+    rows = db.list_all()
     assert len(rows) == 2
-    rows = db.list(category="code")
+    rows = db.list_all(category="code")
     assert len(rows) == 1
     assert rows[0].name == "code-review"
-    found = db.list(search="Review")
+    found = db.list_all(search="Review")
     assert len(found) == 1
     assert found[0].name == "code-review"
 
@@ -116,7 +116,7 @@ def test_export_import_json(db):
 def test_fts_search(db):
     db.add("code-review", "Review the python code for bugs", category="code")
     db.add("chat-help", "Help with chat UX", category="chat")
-    results = db.list(search="python bugs")
+    results = db.list_all(search="python bugs")
     assert len(results) == 1
     assert results[0].name == "code-review"
 

@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from ..errors import BrowserError, SensitiveFieldError
@@ -222,9 +223,9 @@ class BrowserSession:
         self.policy = policy
         self.headless = headless
         self.timeout_ms = timeout_ms
-        self._playwright = None
-        self.context = None
-        self.page = None
+        self._playwright: Any = None
+        self.context: Any = None
+        self.page: Any = None
         self._blocked_url: str | None = None
         self._last_allowed_url: str | None = None
 

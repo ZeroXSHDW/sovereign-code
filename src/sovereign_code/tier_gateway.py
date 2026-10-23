@@ -35,7 +35,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -489,7 +489,7 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
         add(alias, "sovereign", model=model, context=context)
 
     # The remaining route names: the tier aliases and the quality variants.
-    for alias, tier in TIER_ALIASES.items():
+    for alias, _tier in TIER_ALIASES.items():
         if alias in seen:
             continue
         if tier is None:
@@ -1642,9 +1642,9 @@ def resolve_route(
         target, context = fit_to_context(target, context, needed, installed)
         return Route("local", target, tier, context, think, f"quality {intent}/{tier}")
     if model in TIER_ALIASES:
-        tier = TIER_ALIASES[model]
-        if tier is None:
-            tier, reason = classify(
+        _tier_value = TIER_ALIASES[model]
+        if _tier_value is None:
+            _tier_value, reason = classify(
                 request.get("messages") or [], request.get("tools"), forced_tier
             )
         else:
@@ -1652,14 +1652,14 @@ def resolve_route(
         intent = ALIAS_INTENT.get(model) or detect_intent(
             request.get("messages") or [], bool(request.get("tools"))
         )
-        target, context, think = choose_model(tier, installed, intent)
+        target, context, think = choose_model(_tier_value, installed, intent)
         context = context_for_request(
             context, request.get("messages") or [], int(request.get("max_tokens") or 0)
         )
         target, context = fit_to_context(target, context, needed, installed)
-        if tier in (DEEP, ULTRA):
+        if _tier_value in (DEEP, ULTRA):
             reason = f"{reason}/{intent}"
-        return Route("local", target, tier, context, think, reason)
+        return Route("local", target, _tier_value, context, think, reason)
     if installed and not is_cloud_tag(model) and _model_available(model, installed):
         # A model name rather than a route: serve exactly that model, with the
         # context the catalog gives it. A client that names a model it can see
@@ -2068,7 +2068,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _responses(self, payload: dict[str, Any]) -> None:
         """Responses API adapter so Codex can use the tier gateway."""
         chat = responses_to_chat(payload)
-        port = self.server.server_address[1]
+        port = int(cast(Any, self.server.server_address)[1])
         target = f"http://127.0.0.1:{port}/v1/chat/completions"
         stream = bool(payload.get("stream"))
         response_id = f"resp_{uuid.uuid4().hex[:24]}"

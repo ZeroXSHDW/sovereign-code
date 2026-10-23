@@ -15,6 +15,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -177,7 +178,7 @@ render();
 """
 
 
-def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
+def _json(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
     body = json.dumps(payload).encode()
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")

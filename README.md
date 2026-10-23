@@ -1111,7 +1111,7 @@ logging out. `uninstall-login` removes it.
 
 ### Autostart, keep-alive and reboot
 
-`sovereign autostart --install` turns the three pieces the clients need into
+`sovereign autostart --install` turns the four pieces the clients need into
 launchd services. Each one starts at login, so the stack is back after a reboot,
 and launchd restarts it when it dies:
 
@@ -1120,6 +1120,7 @@ and launchd restarts it when it dies:
 | `com.user.sovereign.gateway` | the LiteLLM gateway | 4000 |
 | `com.user.sovereign.tier` | the tier gateway | 4010 |
 | `com.user.sovereign.bridge` | the Anthropic bridge for Claude | 4001 |
+| `com.user.sovereign.mcp` | the MCP server over Streamable HTTP | 8765 |
 
 The always-on `webchat` and `guardian` jobs are gone. They kept a chat server
 and a 30-second restart loop running 24/7 without serving a request; the
@@ -1129,7 +1130,7 @@ removes the old plists, so they do not come back at login.
 
 ```sh
 sovereign autostart              # what survives a reboot, right now
-sovereign autostart --install    # install the three services and retire the old two
+sovereign autostart --install    # install the four services and retire the old two
 sovereign autostart --restart    # restart every service
 sovereign autostart --repair     # rewrite the plists and reload the jobs
 sovereign autostart --uninstall  # remove them and put the old jobs back

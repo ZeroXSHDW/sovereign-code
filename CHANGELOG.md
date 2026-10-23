@@ -4,6 +4,8 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
 ### Added
 - **Hugging Face Hub integration** (`sovereign hf`): secure token login in the
   standard `~/.cache/huggingface/token` (mode 0600); model and dataset search
@@ -21,6 +23,11 @@ All notable changes to Sovereign Code.
   minute), `p` pause, `y` copy, `--json`, and `--demo` for deterministic
   screenshots. The skill/prompt cards now size correctly so live projects and
   activity are visible without scrolling through blank space.
+- **Roadmap** (`docs/ROADMAP.md`): prioritised work the agent starts from when
+  asked "what next", plus the principles every change must meet.
+- **Local menu-bar tests** (`tests/test_localbar.py`): app path, source path,
+  Info.plist bundle placeholder, install/compile behaviour, missing-source and
+  open-when-missing flows, and the `running()` pgrep probe.
 
 ## [0.3.0] - 2026-10-22
 

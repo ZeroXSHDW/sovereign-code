@@ -699,7 +699,7 @@ def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, A
     workdir = Path(cwd).expanduser() if cwd else Path.home()
     if not workdir.is_dir():
         raise ValueError(f"not a directory: {workdir}")
-    budget = max(1, min(3600, int(timeout or 120)))
+    budget = max(1, min(7200, int(timeout or 120)))
     _audit("run_command", command=text, cwd=str(workdir), timeout=budget)
     from .terminal import run_shell
 

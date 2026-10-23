@@ -686,7 +686,7 @@ def _repo_read(path: str, start: int, end: int) -> dict[str, Any]:
     from .repomap import read_slice
 
     target = _workspace_path(path)
-    return read_slice(target, start=start, end=end)
+    return read_slice(target, start=start, end=end, max_chars=32000)
 
 
 def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, Any]:

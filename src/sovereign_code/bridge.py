@@ -596,8 +596,8 @@ def iter_completion(
                     continue
                 if chunk.get("error"):
                     error = chunk["error"]
-                    detail_msg = error.get("message") if isinstance(error, dict) else error
-                    raise RuntimeError(f"gateway stream error: {str(detail_msg)[:400]}")
+                    detail = str(error.get("message")) if isinstance(error, dict) else str(error)
+                    raise RuntimeError(f"gateway stream error: {detail[:400]}")
                 yield chunk
 
 

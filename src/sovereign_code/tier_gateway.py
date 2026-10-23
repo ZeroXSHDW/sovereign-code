@@ -44,6 +44,7 @@ from .cache import MEMORY, cache_key_chat, disk_cache
 from .http import leased_client, shared_client
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
+from .scheduler import ModelScheduler
 from .serverguard import GuardedHandler, GuardedServer, content_length
 
 DEFAULT_HOST = "127.0.0.1"
@@ -522,7 +523,7 @@ def catalog_ids(installed: set[str] | None = None) -> set[str]:
     return {str(entry["id"]) for entry in catalog_models(installed)}
 
 
-_MODEL_LOCK = threading.Lock()
+_SCHEDULER = ModelScheduler()
 _SIZE_CACHE: tuple[float, dict[str, float]] | None = None
 
 
@@ -1756,6 +1757,11 @@ class _Handler(GuardedHandler):
                     "warm": warm,
                     "metrics": metrics_summary(),
                     "cache": CACHE.memory.stats(),
+                    "scheduler": {
+                        "active": _SCHEDULER.stats().active,
+                        "inflight": _SCHEDULER.stats().inflight,
+                        "waiting": _SCHEDULER.stats().waiting,
+                    },
                 },
             )
             return
@@ -1780,7 +1786,7 @@ class _Handler(GuardedHandler):
         self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
 
     def _stream_local(self, request: dict[str, Any], route: Route) -> None:
-        _MODEL_LOCK.acquire()
+        _SCHEDULER.enter(route.model)
         try:
             ensure_model_room(route.model, self.ollama, route.context)
         except Exception:
@@ -1891,7 +1897,7 @@ class _Handler(GuardedHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
         finally:
-            _MODEL_LOCK.release()
+            _SCHEDULER.exit(route.model)
             log_metric(
                 {
                     "ts": time.time(),
@@ -1926,7 +1932,7 @@ class _Handler(GuardedHandler):
             if candidate != route.model and context and context < needed:
                 continue
             payload = _ollama_payload(request, candidate, context, think, False)
-            _MODEL_LOCK.acquire()
+            _SCHEDULER.enter(candidate)
             try:
                 ensure_model_room(candidate, self.ollama, context)
             except Exception:
@@ -1946,7 +1952,7 @@ class _Handler(GuardedHandler):
                 last_error = str(exc)
                 continue
             finally:
-                _MODEL_LOCK.release()
+                _SCHEDULER.exit(candidate)
         if data is None:
             self._json(
                 502,
@@ -2325,7 +2331,7 @@ def warm_fast(ollama: str) -> None:
     model, context, _think = TIER_MODELS[FAST]
     if not _model_available(model, _installed(ollama)):
         return
-    _MODEL_LOCK.acquire()
+    _SCHEDULER.enter(model)
     try:
         ensure_model_room(model, ollama, context)
         shared_client().post(
@@ -2344,7 +2350,7 @@ def warm_fast(ollama: str) -> None:
     except Exception:  # a failed warm-up must never take the gateway down
         pass
     finally:
-        _MODEL_LOCK.release()
+        _SCHEDULER.exit(model)
 
 
 def serve(host: str, port: int, ollama: str, upstream: str) -> None:

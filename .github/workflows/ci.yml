@@ -25,12 +25,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/ruff-action@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          args: check --output-format=github
-      - uses: astral-sh/ruff-action@v4
-        with:
-          args: format --check --diff
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked --all-extras --dev
+      - name: Ruff check
+        run: uv run ruff check --output-format=github
+      - name: Ruff format
+        run: uv run ruff format --check --diff
 
   typecheck:
     name: typecheck

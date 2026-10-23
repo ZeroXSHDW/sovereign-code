@@ -6106,7 +6106,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--temperature", type=float, default=0.25)
     run.add_argument("--system", default=None)
     run.add_argument("--no-pull", action="store_true", help="fail instead of auto-pulling")
-    run.add_argument("--keep-alive", default="15m", help="how long Ollama keeps the model resident")
+    run.add_argument("--keep-alive", default="1h", help="how long Ollama keeps the model resident")
     run.add_argument(
         "--think",
         action="store_true",

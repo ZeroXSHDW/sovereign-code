@@ -228,7 +228,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "path": {"type": "string"},
             "start": {"type": "integer", "default": 1},
-            "end": {"type": "integer", "default": 200},
+            "end": {"type": "integer", "default": 300},
         },
         ["path"],
     ),
@@ -1164,7 +1164,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             _repo_read(
                 str(args.get("path") or ""),
                 int(args.get("start") or 1),
-                int(args.get("end") or 200),
+                int(args.get("end") or 300),
             )
         )
     if name == "repo_write":

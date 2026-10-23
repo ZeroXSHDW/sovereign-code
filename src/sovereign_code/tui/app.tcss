@@ -55,8 +55,12 @@ Footer {
 .card {
     margin: 0 0 1 0;
     padding: 1 2;
-    border: round #2a2a3a;
+    border: round #3a3a55;
     background: #101018;
+}
+
+.card:hover {
+    border: round #7c5cff;
 }
 
 #project-panel,

@@ -88,13 +88,14 @@ def stream_idle_timeout() -> float:
 
 
 def local_only() -> bool:
-    """Local-only is the default; set SOVEREIGN_LOCAL_ONLY=0 to allow cloud."""
-    return os.environ.get("SOVEREIGN_LOCAL_ONLY", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    """Local-only is the default. An explicit SOVEREIGN_LOCAL_ONLY wins; otherwise
+    the `local_only` setting in config.toml applies."""
+    raw = os.environ.get("SOVEREIGN_LOCAL_ONLY")
+    if raw is None or not raw.strip():
+        from .config import Settings
+
+        return Settings.load().local_only
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def cors_origins() -> tuple[str, ...]:

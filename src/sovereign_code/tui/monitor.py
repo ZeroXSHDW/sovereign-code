@@ -95,6 +95,7 @@ class MonitorApp(App[None]):
         Binding("p", "pause", "Pause"),
         Binding("y", "copy", "Copy", show=False),
         Binding("question_mark", "help", "Help", show=False),
+        Binding("f10", "open_terminal", "Terminal", show=False),
     ]
 
     def __init__(self, settings: Settings | None = None, demo: bool = False) -> None:
@@ -444,6 +445,17 @@ class MonitorApp(App[None]):
         self.copy_to_clipboard(self._summary_text())
         self._notice = "snapshot copied"
         self._render_status()
+
+    async def action_open_terminal(self) -> None:
+        from ..terminal import spawn_terminal
+
+        try:
+            result = await asyncio.to_thread(
+                spawn_terminal, cwd=self.settings.workspace, command="", dry_run=False
+            )
+            self._notice = f"opened terminal in {result['cwd']}"
+        except Exception as exc:
+            self._notice = f"terminal failed: {exc}"
 
     async def action_free(self) -> None:
         tags: list[str] = []

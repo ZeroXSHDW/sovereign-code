@@ -556,6 +556,17 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/whoami":
+            import getpass
+            import socket
+
+            await self.add_message("system", f"{getpass.getuser()}@{socket.gethostname()}")
+        elif command == "/env":
+            import os as _os
+
+            keys = ["PATH", "SHELL", "HOME", "PYTHONPATH"]
+            lines = [f"- `{k}` = `{_os.environ.get(k, '')}`" for k in keys]
+            await self.add_message("system", "\n".join(lines))
         elif command == "/calc":
             if not arg:
                 await self.add_message("system", "Usage: `/calc <expression>`")

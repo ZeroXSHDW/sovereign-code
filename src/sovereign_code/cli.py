@@ -3871,35 +3871,85 @@ def _pack(args, settings: Settings) -> int:
         console.print("[dim]sovereign pack brief KEY --path AGENTS.md[/]")
         return 0
 
+    if action == "skills":
+        table = Table(title=f"Skills for {p.label}", header_style="bold #b794f4")
+        table.add_column("Name", style="bold")
+        table.add_column("Description", overflow="fold")
+        for name, description in packs.pack_skills(p, limit=30):
+            table.add_row(name, description[:160])
+        console.print(table)
+        return 0
+
     if action == "models":
+        from .hf import HFError
+        from .vetting import assess
+
         snap = _snapshot(settings)
         installed = packs.installed_for(p, snap.views, snap.memory.free_gb)
         if installed:
-            console.print(f"[bold]Installed model for {p.key}:[/] {installed}")
+            console.print(f"[green]Installed now:[/] {installed} (router pick for this pack)")
         else:
-            console.print(f"[dim]No installed model matches the {p.key} pack.[/]")
-        console.print()
-        from .hf import HFError
-
+            console.print("[yellow]No installed model fits this pack yet.[/]")
+        proven = packs.verified_for(packs.verification_file(LOCAL_AI_ROOT), p.key)
+        if proven:
+            console.print(f"[green]Verified for {p.key}:[/] {', '.join(proven)}")
+        else:
+            console.print(
+                f"[dim]No model verified for {p.key} yet: sovereign pack verify {p.key} --model <tag>[/]"
+            )
+        if args.offline:
+            return 0
         try:
             found = packs.hf_candidates(p, limit=args.limit)
         except HFError as exc:
             console.print(f"[red]Hugging Face:[/] {exc}")
             return 1
         for query, hits in found.items():
-            console.print(f"[bold]{query}[/]")
-            for h in hits:
-                if "error" in h:
-                    console.print(f"  [red]{h['error']}[/]")
-                else:
-                    console.print(
-                        f"  {h['id']}  downloads={h['downloads']} "
-                        f"license={h['license']} gated={h['gated']}"
-                    )
+            table = Table(title=f"Hugging Face GGUF: {query!r}", header_style="bold #b794f4")
+            table.add_column("Repository", style="bold")
+            table.add_column("Downloads", justify="right")
+            table.add_column("License")
+            table.add_column("Trust")
+            for hit in hits:
+                if "error" in hit:
+                    table.add_row(str(hit["error"]), "", "", "")
+                    continue
+                vetted = assess(
+                    license=hit["license"],
+                    downloads=hit["downloads"],
+                    gated=hit["gated"],
+                    private=hit["private"],
+                )
+                table.add_row(
+                    hit["id"],
+                    str(hit["downloads"]),
+                    hit["license"] or "-",
+                    "ok" if vetted.trusted else "refused",
+                )
+            console.print(table)
         console.print(
-            "[dim]Candidates only — verify with `sovereign model-info` / `sovereign verify`.[/]"
+            "[dim]Candidates are search hits, not verified models. Check the licence, then "
+            "`sovereign hf import <repo>` and `sovereign verify`.[/]"
         )
         return 0
+
+    if action == "verify":
+        if not args.model:
+            console.print("[red]Usage:[/] sovereign pack verify <key> --model <installed-tag>")
+            return 1
+        from datetime import datetime
+
+        from .ollama import OllamaClient
+
+        probe_result = asyncio.run(
+            packs.run_probe(p, args.model, OllamaClient(settings.ollama_url))
+        )
+        when = datetime.now().isoformat(timespec="seconds")
+        packs.record_probe(packs.verification_file(LOCAL_AI_ROOT), probe_result, when)
+        status = "[green]PASS[/]" if probe_result.passed else "[red]FAIL[/]"
+        console.print(f"{status} {args.model} on {p.key} probe")
+        console.print(probe_result.reply.strip()[:400], markup=False)
+        return 0 if probe_result.passed else 1
 
     if action == "brief":
         path = Path(args.path)
@@ -5816,10 +5866,11 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="list",
-        choices=("list", "show", "models", "brief", "install"),
+        choices=("list", "show", "skills", "models", "brief", "verify", "install"),
         help="default: list",
     )
     pack.add_argument("key", nargs="?", default=None, help="pack key (pentest, vulnerability, …)")
+    pack.add_argument("--model", default=None, help="verify: the installed model to probe")
     pack.add_argument(
         "--path",
         "--brief",
@@ -5828,10 +5879,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="brief: write the managed block into this project file (default: AGENTS.md)",
     )
+    pack.add_argument("--offline", action="store_true", help="models: skip the Hugging Face search")
     pack.add_argument(
         "--target",
-        default="all",
-        help="install: all, or claude,codex,qwen,opencode,continue (default: all)",
+        default="opencode",
+        help="install: client to install the pack's skills into (default: opencode)",
     )
     pack.add_argument(
         "--limit",

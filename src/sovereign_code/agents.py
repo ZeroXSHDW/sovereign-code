@@ -39,7 +39,7 @@ def build_headless(
     agent_model: str,
     unattended: bool = False,
     wall_time: int | None = None,
-    max_tool_calls: int | None = 12,
+    max_tool_calls: int | None = 100,
     write: bool = True,
 ) -> HeadlessPlan:
     """Build a one-shot run.

@@ -217,7 +217,7 @@ class BrowserSession:
         profile_dir: Path,
         policy: BrowserPolicy,
         headless: bool = False,
-        timeout_ms: int = 15000,
+        timeout_ms: int = 60000,
     ) -> None:
         self.profile_dir = profile_dir
         self.policy = policy

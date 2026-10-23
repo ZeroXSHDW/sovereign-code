@@ -701,7 +701,7 @@ def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, A
     workdir = Path(cwd).expanduser() if cwd else Path.home()
     if not workdir.is_dir():
         raise ValueError(f"not a directory: {workdir}")
-    budget = max(1, min(600, int(timeout or 120)))
+    budget = max(1, min(3600, int(timeout or 120)))
     _audit("run_command", command=text, cwd=str(workdir), timeout=budget)
     try:
         result = subprocess.run(  # noqa: S602
@@ -929,7 +929,7 @@ def _browser_open(url: str, allow_local: bool = False, headless: bool = False) -
                 profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
                 policy=policy,
                 headless=headless,
-                timeout_ms=15000,
+                timeout_ms=60000,
             )
             _BROWSER.start(target)
             _BROWSER_MODE = mode
@@ -1033,7 +1033,7 @@ def _delegate(
         raise ValueError(f"not a directory: {target}")
     if client not in {"codex", "claude"}:
         raise ValueError("delegate supports codex or claude")
-    seconds = max(30, min(int(timeout or 240), 600))
+    seconds = max(30, min(int(timeout or 240), 3600))
     plan = build_headless(
         client,
         "local",

@@ -21,6 +21,10 @@ htmlcov/
 *.db-wal
 *.db-shm
 
+# Stale decompiled-bytecode test wrappers (not real tests).
+*_hidden.py
+*_extra_tmp.py
+
 # Self-contained runtime: config, data, gateway files and the model store live
 # here after migration. Never commit gigabytes of weights.
 runtime/

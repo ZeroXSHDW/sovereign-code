@@ -5211,7 +5211,7 @@ def _pipeline(
                 agent,
                 unattended=yes,
                 wall_time=max(30, int(agent_timeout) - 20),
-                max_tool_calls=12,
+                max_tool_calls=100,
             )
         except ValueError as exc:
             return False, str(exc)

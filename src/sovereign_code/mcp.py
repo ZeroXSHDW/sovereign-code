@@ -523,7 +523,7 @@ def load_skills_payload(
         for skill in load_curated()[:cap]:
             selected[skill.name] = skill
 
-    budget = max(200, min(80_000, max_tokens)) * 4
+    budget = max(200, min(100_000, max_tokens)) * 4
     used = 0
     rows: list[dict[str, Any]] = []
     omitted: list[str] = []

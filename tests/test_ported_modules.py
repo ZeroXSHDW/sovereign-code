@@ -11,6 +11,7 @@ from sovereign_code import (
     repomap,
     scheduler,
     skillmanifest,
+    skillrouter,
     skills_safety,
     vetting,
 )
@@ -167,6 +168,38 @@ def test_jump_module_imports() -> None:
 
 def test_patch_module_imports() -> None:
     assert patch is not None
+
+
+def test_skillrouter_route() -> None:
+    cards, note = skillrouter.route("harden a kubernetes cluster", limit=3)
+    assert len(cards) > 0
+    assert "card" in note.lower() or "token" in note.lower()
+
+
+def test_skillrouter_playbook() -> None:
+    pb = skillrouter.playbook("fix a bug")
+    assert isinstance(pb, list)
+
+
+def test_terminal_module() -> None:
+    from sovereign_code import terminal
+
+    assert terminal is not None
+
+
+def test_webchat_module() -> None:
+    from sovereign_code import webchat
+
+    assert webchat is not None
+
+
+def test_packs_module() -> None:
+    from sovereign_code import packs
+
+    assert len(packs.PACKS) > 0
+    p = packs.get_pack("pentest")
+    assert p is not None
+    assert p.label == "Penetration testing"
 
 
 def test_mlx_pure_functions() -> None:

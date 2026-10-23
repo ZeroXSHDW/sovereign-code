@@ -29,7 +29,7 @@ def desired_env(context: int = DEFAULT_CONTEXT) -> dict[str, str]:
     return {
         "OLLAMA_FLASH_ATTENTION": "1",
         "OLLAMA_KV_CACHE_TYPE": "q8_0",
-        "OLLAMA_KEEP_ALIVE": "15m",
+        "OLLAMA_KEEP_ALIVE": "1h",
         # One model at a time. With 2, Ollama tries to keep the previous model
         # and load the next; when the pair cannot fit the ~18 GB wired budget it
         # waits forever instead of evicting, which blocks every later request.

@@ -33,7 +33,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -44,6 +44,7 @@ from .cache import MEMORY, cache_key_chat, disk_cache
 from .http import leased_client, shared_client
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
+from .serverguard import GuardedHandler, GuardedServer, content_length
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
@@ -1673,7 +1674,7 @@ def resolve_route(
     return Route("proxy", model, "", 0, None, "explicit upstream alias")
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(GuardedHandler):
     protocol_version = "HTTP/1.1"
     server_version = "SovereignTierGateway/1.0"
     ollama = DEFAULT_OLLAMA
@@ -1713,7 +1714,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        length = content_length(self.headers.get("Content-Length"))
         raw = self.rfile.read(length) if length else b"{}"
         data = json.loads(raw or b"{}")
         return data if isinstance(data, dict) else {}
@@ -2233,7 +2234,7 @@ def make_server(
         (_Handler,),
         {"ollama": ollama, "upstream": upstream},
     )
-    return ThreadingHTTPServer((host, port), handler)
+    return GuardedServer((host, port), handler)
 
 
 def pid_path() -> Path:

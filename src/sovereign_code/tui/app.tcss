@@ -18,10 +18,11 @@ Footer {
 }
 
 #sidebar {
-    width: 38;
-    min-width: 30;
+    width: 42;
+    min-width: 32;
     border-right: solid #2a2a3a;
     padding: 0 1;
+    background: #0d0d16;
 }
 
 #main {

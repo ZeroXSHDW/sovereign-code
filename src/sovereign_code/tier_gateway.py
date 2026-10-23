@@ -2345,7 +2345,7 @@ def warm_fast(ollama: str) -> None:
                 "model": model,
                 "prompt": "",
                 "stream": False,
-                "keep_alive": "15m",
+                "keep_alive": "1h",
                 "options": {"num_ctx": context},
             },
             timeout=httpx.Timeout(120, connect=5),

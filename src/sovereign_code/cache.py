@@ -38,7 +38,7 @@ from .config import DATA_DIR
 from .safefile import harden
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
-TTL_DEFAULT = 3600.0  # one hour
+TTL_DEFAULT = 7200.0  # two hours
 
 __all__ = [
     "DEFAULT_DB",
@@ -83,7 +83,7 @@ def _completion_key(model: str, prompt: str, **options: Any) -> str:
 class MemoryCache:
     """Thread-safe in-memory LRU cache."""
 
-    def __init__(self, max_entries: int = 512, ttl: float = TTL_DEFAULT) -> None:
+    def __init__(self, max_entries: int = 1024, ttl: float = TTL_DEFAULT) -> None:
         self.max_entries = max_entries
         self.ttl = ttl
         self._data: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()

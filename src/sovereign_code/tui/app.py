@@ -65,6 +65,8 @@ class ModelListItem(ListItem):
         label.append("▶ " if view.loaded else ("● " if view.installed else "↓ "), style="bold")
         label.append(view.tag, style="bold" if view.loaded else "")
         label.append(f"  {view.size_gb:.1f}G", style="dim")
+        if view.context:
+            label.append(f"  {view.context} ctx", style="dim")
         if view.spec.role:
             label.append(f"  {view.spec.role}", style="dim italic")
         if view.runner:

@@ -202,6 +202,7 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
         "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/best",
         "small_model": "sovereign/balanced",
+        "permission": {"edit": "allow", "bash": "allow"},
         "provider": {
             "local": {
                 "npm": "@ai-sdk/openai-compatible",

@@ -60,6 +60,9 @@ bench:
 run:
 	$(SOVEREIGN)
 
+start:
+	bash bin/sovereign-start.command
+
 status:
 	$(SOVEREIGN) status
 

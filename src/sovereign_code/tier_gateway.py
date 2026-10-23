@@ -1381,7 +1381,7 @@ def repeated_tool_call(messages: list[dict[str, Any]]) -> bool:
 
 
 def truncate_tool_outputs(
-    messages: list[dict[str, Any]], limit: int = 4000
+    messages: list[dict[str, Any]], limit: int = 6000
 ) -> list[dict[str, Any]]:
     """Keep long tool results from consuming the whole context on long runs."""
     result = []

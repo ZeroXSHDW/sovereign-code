@@ -5622,6 +5622,11 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--json", action="store_true", help="print one report as JSON")
     monitor.add_argument("--demo", action="store_true", help="render the demo report")
     status = sub.add_parser("status", help="one-shot system status")
+
+    sub.add_parser(
+        "stack",
+        help="the whole local AI stack: services, models, and banks",
+    )
     status.add_argument("--json", action="store_true", help="machine-readable output")
     models = sub.add_parser("models", help="list installed and recommended models")
     models.add_argument("--remote", action="store_true", help="list downloadable models")
@@ -6972,6 +6977,8 @@ def main(argv: list[str] | None = None) -> int:
         return _projects(args)
     if command == "feed":
         return _feed(args)
+    if command == "stack":
+        return _stack()
     if command == "local-bar":
         from . import localbar
 
@@ -7319,3 +7326,55 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _stack() -> int:
+    """Show the whole local AI stack: clients, models, picks, and banks."""
+    import asyncio
+
+    from .monitor import banks, collect_live
+    from .status import collect
+
+    settings = _settings()
+
+    async def gather():
+        snapshot = await collect(settings)
+        report = collect_live(settings, snapshot)
+        return snapshot, report
+
+    snapshot, report = asyncio.run(gather())
+
+    # Services
+    services = Table(title="Services", header_style="bold #b794f4")
+    services.add_column("Service", style="bold")
+    services.add_column("State")
+    for svc in report.services:
+        services.add_row(svc.name, "[green]up[/]" if svc.up else "[red]down[/]")
+    console.print(services)
+
+    # Models
+    models = Table(title="Models", header_style="bold #b794f4")
+    models.add_column("")
+    models.add_column("Model", style="bold")
+    models.add_column("Size", justify="right")
+    models.add_column("Context", justify="right")
+    models.add_column("Role")
+    for view in snapshot.installed:
+        models.add_row(
+            "[green]●[/]" if view.loaded else "[dim]○[/]",
+            view.tag,
+            f"{view.size_gb:.1f}G",
+            f"{view.context // 1024}k" if view.context else "—",
+            view.spec.role or "—",
+        )
+    console.print(models)
+
+    # Banks
+    skill_bank, prompt_bank = banks()
+    console.print(
+        f"[dim]banks:[/] {skill_bank.total:,} skills ({skill_bank.size_mb:.1f} MB)"
+        f"  ·  {prompt_bank.total:,} prompts"
+        f"  ·  {report.memory.free_gb:.1f}G RAM free"
+        f"  ·  {(snapshot.installed and len(snapshot.installed)) or 0} models installed"
+    )
+    return 0

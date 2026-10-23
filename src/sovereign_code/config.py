@@ -85,10 +85,16 @@ class Settings:
     temperature: float = 0.25
     theme: str = "sovereign"
     login_enabled: bool = True
+    # True keeps every gateway request on this Mac; `sovereign mode unrestricted`
+    # sets it to False so provider routes can be used. The environment variable
+    # SOVEREIGN_LOCAL_ONLY, when set, still overrides this value.
+    local_only: bool = True
     workspace: str = "~/Documents"
     # 0 disables automatic pruning; the dashboard prunes at startup otherwise.
     session_retention_days: float = 0.0
     session_keep: int = 50
+    # How often the live monitor refreshes its report.
+    monitor_refresh_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         # Not a dataclass field: it must never be written to the TOML file.
@@ -158,10 +164,14 @@ class Settings:
         self.theme = str(self.theme)
         self.workspace = str(self.workspace)
         self.login_enabled = _as_bool(self.login_enabled)
+        self.local_only = _as_bool(self.local_only)
         self.max_context = max(2048, _as_int(self.max_context, 32768))
         self.temperature = min(2.0, max(0.0, _as_float(self.temperature, 0.25)))
         self.session_retention_days = max(0.0, _as_float(self.session_retention_days, 0.0))
         self.session_keep = max(0, _as_int(self.session_keep, 50))
+        self.monitor_refresh_seconds = min(
+            60.0, max(1.0, _as_float(self.monitor_refresh_seconds, 5.0))
+        )
         self.default_task = _as_task(self.default_task)
 
     def save(self) -> Path:
@@ -177,9 +187,11 @@ class Settings:
             f"temperature = {float(self.temperature)}",
             f"theme = {_toml_value(self.theme)}",
             f"login_enabled = {str(self.login_enabled).lower()}",
+            f"local_only = {str(self.local_only).lower()}",
             f"workspace = {_toml_value(self.workspace)}",
             f"session_retention_days = {float(self.session_retention_days)}",
             f"session_keep = {int(self.session_keep)}",
+            f"monitor_refresh_seconds = {float(self.monitor_refresh_seconds)}",
             "",
         ]
         self.config_path.write_text("\n".join(lines), encoding="utf-8")

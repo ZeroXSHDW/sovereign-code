@@ -3637,6 +3637,35 @@ def _domains(detect: str | None = None) -> int:
     return 0
 
 
+UNRESTRICTED_CONTEXT = 131072
+
+
+def _mode(settings: Settings, action: str) -> int:
+    env = os.environ.get("SOVEREIGN_LOCAL_ONLY")
+    if action == "status":
+        console.print(f"local_only: {'yes' if settings.local_only else 'no'} (config.toml)")
+        console.print(f"max_context: {settings.max_context}")
+        if env:
+            console.print(
+                f"[yellow]SOVEREIGN_LOCAL_ONLY={env} overrides the config for the gateway[/]"
+            )
+        return 0
+    if action == "local":
+        settings.local_only = True
+    else:
+        settings.local_only = False
+        settings.max_context = max(settings.max_context, UNRESTRICTED_CONTEXT)
+    path = settings.save()
+    console.print(f"[green]Mode:[/] {action} · saved to {path}")
+    if action == "unrestricted":
+        console.print(
+            "[yellow]Prompts sent to provider routes now leave this Mac. Larger windows apply "
+            "only when free memory fits them.[/]"
+        )
+    console.print("Restart the gateway to apply it: sovereign router --restart")
+    return 0
+
+
 def _project(args) -> int:
     from .packs import PACKS, get_pack
     from .projectsetup import init_project, profile
@@ -5507,6 +5536,14 @@ def build_parser() -> argparse.ArgumentParser:
     router.add_argument("--status", action="store_true", help="show tiers and whether it is up")
     router.add_argument("--stats", action="store_true", help="show recent latency by tier")
     local = sub.add_parser("local", help="audit every local agent path")
+
+    mode = sub.add_parser(
+        "mode",
+        help="local (default) or unrestricted: where prompts may go, and the context ceiling",
+    )
+    mode.add_argument(
+        "action", nargs="?", default="status", choices=("status", "local", "unrestricted")
+    )
     local.add_argument("--fix", action="store_true", help="rewrite local settings/MCP")
     local.add_argument("--strict", action="store_true", help="exit non-zero if not local")
     local.add_argument("--json", action="store_true", help="machine-readable output")
@@ -6748,6 +6785,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         MonitorApp(settings=settings).run()
         return 0
+    if command == "mode":
+        return _mode(settings, args.action)
     if command == "local-bar":
         from . import localbar
 

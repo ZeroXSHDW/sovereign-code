@@ -13,7 +13,6 @@ import subprocess
 import sys
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -22,6 +21,7 @@ import httpx
 
 from .config import LOCAL_AI_ROOT
 from .http import client_for
+from .serverguard import GuardedHandler, GuardedServer
 from .tier_gateway import local_only, port_open
 
 DEFAULT_PORT = 4020
@@ -178,7 +178,7 @@ render();
 """
 
 
-def _json(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
+def _json(handler: GuardedHandler, status: int, payload: Any) -> None:
     body = json.dumps(payload).encode()
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
@@ -188,7 +188,7 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
     handler.wfile.write(body)
 
 
-class Handler(BaseHTTPRequestHandler):
+class Handler(GuardedHandler):
     server_version = "SovereignChat/1.0"
     router = DEFAULT_ROUTER
     port = DEFAULT_PORT
@@ -416,7 +416,7 @@ def serve(port: int = DEFAULT_PORT, router: str = DEFAULT_ROUTER) -> None:
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
     Handler.router = router
     Handler.port = int(port)
-    server = ThreadingHTTPServer(("127.0.0.1", int(port)), Handler)
+    server = GuardedServer(("127.0.0.1", int(port)), Handler)
     print(f"ChatGPT Local · http://127.0.0.1:{port}", flush=True)
     try:
         server.serve_forever()

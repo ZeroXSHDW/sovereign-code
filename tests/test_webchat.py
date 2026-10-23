@@ -125,7 +125,7 @@ def test_webchat_rejects_a_rebinding_host_header(server) -> None:
     """A page on another origin that resolves to 127.0.0.1 sends its own Host."""
     status, body = _request(server, "/api/health", headers={"Host": "attacker.example"})
     assert status == 403
-    assert b"cross-origin" in body
+    assert b"cross-origin" in body or b"loopback" in body
 
 
 def test_webchat_rejects_a_cross_origin_post(server) -> None:

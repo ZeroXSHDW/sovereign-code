@@ -3666,6 +3666,64 @@ def _mode(settings: Settings, action: str) -> int:
     return 0
 
 
+def _projects(args) -> int:
+    from .monitor import live_projects
+
+    projects = live_projects(limit=args.limit or 20)
+    if args.active:
+        projects = [p for p in projects if p.active]
+    if args.search:
+        needle = args.search.lower()
+        projects = [
+            p
+            for p in projects
+            if needle in p.name.lower() or needle in p.path.lower() or needle in p.model.lower()
+        ]
+    projects = projects[: max(1, args.limit)]
+
+    if args.json:
+        payload = [
+            {
+                "name": p.name,
+                "path": p.path,
+                "model": p.model,
+                "active": p.active,
+                "source": p.source,
+                "age": p.age,
+            }
+            for p in projects
+        ]
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+
+    if not projects:
+        console.print(
+            "[dim]No project is using a model right now.[/]"
+            if args.active
+            else "[dim]No project has used a model recently.[/]"
+        )
+        return 0
+
+    table = Table(title="Live projects", header_style="bold #b794f4")
+    table.add_column("")
+    table.add_column("Project", style="bold")
+    table.add_column("Model")
+    table.add_column("Source")
+    table.add_column("Last", justify="right")
+    for project in projects:
+        table.add_row(
+            "[green]●[/]" if project.active else "[dim]○[/]",
+            project.name,
+            project.model or "—",
+            project.source,
+            project.age,
+        )
+    console.print(table)
+    active = sum(1 for p in projects if p.active)
+    console.print(f"[dim]{len(projects)} projects · {active} active[/]")
+    return 0
+
+
 def _project(args) -> int:
     from .packs import PACKS, get_pack
     from .projectsetup import init_project, profile
@@ -4714,6 +4772,69 @@ def _skills(
         else:
             console.print("[dim]Clients read SKILL.md; Continue reads prompt files.[/]")
         return 0
+
+    if action == "lint":
+        from .skills import search_skills
+        from .skills_install import load_curated
+        from .skills_safety import SEVERITY_ORDER, scan
+
+        if query:
+            chosen_skills = []
+            for name, _desc in search_skills(query, limit=max(1, min(limit, 200))):
+                from .skills_install import get_skill
+
+                skill = get_skill(name)
+                if skill is not None:
+                    chosen_skills.append(skill)
+        else:
+            chosen_skills = load_curated()
+        table = Table(title="Skill safety scan", header_style="bold #b794f4")
+        table.add_column("Skill", style="bold")
+        table.add_column("Risk")
+        table.add_column("Findings", overflow="fold")
+        worst = 0
+        for skill in chosen_skills:
+            scanned = scan(skill.body)
+            if scanned.risk == "ok":
+                continue
+            worst = max(worst, SEVERITY_ORDER[scanned.risk])
+            detail = "; ".join(
+                f"{finding.key} line {finding.line}: {finding.excerpt}"
+                for finding in scanned.findings[:3]
+            )
+            table.add_row(skill.name, scanned.risk, detail)
+        if worst:
+            console.print(table)
+            console.print(
+                "[dim]These are quoted commands and instructions, common in security skills. "
+                "Treat them as untrusted text; inspect before running.[/]"
+            )
+        else:
+            console.print(f"[green]Clean[/] {len(chosen_skills)} skill(s) scanned")
+        return 1 if worst >= SEVERITY_ORDER["high"] else 0
+
+    if action in ("manifest", "verify"):
+        from .skillmanifest import verify_manifest, write_manifest
+        from .skills_install import SKILL_DIR
+
+        root = PROJECT_ROOT / SKILL_DIR
+        if action == "manifest":
+            manifest_file = write_manifest(root)
+            console.print(f"[green]Wrote[/] {manifest_file}")
+            return 0
+        verified = verify_manifest(root)
+        if verified.ok:
+            console.print(f"[green]OK[/] {verified.checked} skills match the manifest")
+            return 0
+        for label, names in (
+            ("changed", verified.changed),
+            ("missing", verified.missing),
+            ("added", verified.added),
+        ):
+            for name in names[:20]:
+                console.print(f"[yellow]{label}[/] {name}")
+        console.print("[dim]Run `sovereign skills manifest` to accept the current library.[/]")
+        return 1
 
     rows = list_skills()
     table = Table(title="Skills", header_style="bold #b794f4")
@@ -6003,9 +6124,10 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="list",
-        choices=("list", "install", "search"),
+        choices=("list", "install", "search", "lint", "manifest", "verify"),
         help="default: list",
     )
+    skills.add_argument("--query", default=None, help="lint/verify: limit to matching skills")
     skills.add_argument("query", nargs="?", default=None, help="words to search for")
     skills.add_argument(
         "--target",
@@ -6097,6 +6219,15 @@ def build_parser() -> argparse.ArgumentParser:
     agents = sub.add_parser("agents", help="detect coding agents and list gateway targets")
     agents.add_argument("--json", action="store_true", help="machine-readable JSON output")
     agents.add_argument("--tsv", action="store_true", help="tab-separated output for shell scripts")
+
+    projects = sub.add_parser(
+        "projects",
+        help="list the projects that are using a model now, or used one recently",
+    )
+    projects.add_argument("--json", action="store_true", help="machine-readable output")
+    projects.add_argument("--limit", type=int, default=20, help="rows to list")
+    projects.add_argument("--active", action="store_true", help="only projects running right now")
+    projects.add_argument("--search", default=None, metavar="TEXT", help="filter by name or model")
 
     # --- prompts ----------------------------------------------------------
     prompts = sub.add_parser("prompts", help="prompt database: versioned, categorized, searchable")
@@ -6787,6 +6918,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "mode":
         return _mode(settings, args.action)
+    if command == "projects":
+        return _projects(args)
     if command == "local-bar":
         from . import localbar
 

@@ -79,7 +79,7 @@ jobs:
       - name: Coverage
         run: uv run pytest -q --cov=sovereign_code --cov-report=xml --cov-report=term
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ github.run_id }}
           path: coverage.xml
@@ -114,7 +114,7 @@ jobs:
         run: |
           uv run --isolated --with dist/*.whl sovereign --help
       - name: Upload distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ github.run_id }}
           path: dist/

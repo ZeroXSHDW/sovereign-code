@@ -163,7 +163,7 @@ async function browse(){
   const url=document.getElementById('burl').value.trim();const task=document.getElementById('btask').value.trim();
   if(!url||!task){document.getElementById('blog').textContent='URL and task required';return}
   const log=document.getElementById('blog');log.textContent='starting…';
-  try{const r=await fetch('/api/browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,task,allow_local:document.getElementById('blocal').checked,max_steps:10})});
+  try{const r=await fetch('/api/browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,task,allow_local:document.getElementById('blocal').checked,max_steps:20})});
     const reader=r.body.getReader(),dec=new TextDecoder();let buf='';
     while(true){const {value,done}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});let lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data: '))continue;try{const d=JSON.parse(line.slice(6));if(d.type==='start')log.textContent='browser opened…';if(d.type==='step')log.textContent='step '+d.step+': '+d.action;if(d.type==='done'){log.textContent=d.summary;if(d.screenshot){const img=document.getElementById('bshot');img.src='/api/last-shot?t='+Date.now();img.style.display='block'}}if(d.type==='error')log.textContent='error: '+d.message}catch(e){}}}
   }catch(e){log.textContent='error: '+e.message}

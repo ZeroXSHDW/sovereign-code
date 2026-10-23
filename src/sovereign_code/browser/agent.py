@@ -89,7 +89,7 @@ class ModelPlanner:
 
     def _observation(self, observation: dict) -> dict:
         elements = []
-        for element in observation.get("elements", [])[:40]:
+        for element in observation.get("elements", [])[:60]:
             item: dict = {}
             for key in (
                 "id",

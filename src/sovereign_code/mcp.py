@@ -28,6 +28,11 @@ from .diagnostics import note
 
 PROTOCOL_VERSION = "2024-11-05"
 
+# A single skill can be a full workflow document. Bulk loading is capped so a
+# broad query cannot return tens of megabytes to a client in one tool result.
+MAX_BULK_SKILLS = 50
+MAX_SKILL_BODY_CHARS = 20_000
+
 
 def _text(value: Any) -> str:
     if isinstance(value, str):
@@ -168,6 +173,18 @@ TOOLS: list[dict[str, Any]] = [
         "Return one skill's full Markdown body.",
         {"name": {"type": "string"}},
         ["name"],
+    ),
+    _tool(
+        "load_skills",
+        "Load several skill bodies in one call, by name and/or search query. "
+        "Enforces a token budget so several large skills cannot swallow the "
+        "context window.",
+        {
+            "names": {"type": "array", "items": {"type": "string"}},
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "default": 10},
+            "max_tokens": {"type": "integer", "default": 6000},
+        },
     ),
     _tool(
         "repo_map",
@@ -457,6 +474,78 @@ def list_skills_payload(query: str = "") -> list[dict[str, str]]:
     for skill in load_curated():
         rows.append({"name": skill.name, "description": skill.description})
     return rows
+
+
+def load_skills_payload(
+    names: list[str] | None = None,
+    query: str = "",
+    limit: int = 10,
+    max_tokens: int = 6000,
+) -> dict[str, Any]:
+    from .skills import search_skills
+    from .skills_install import get_skill, load_curated
+    from .skills_safety import scan
+
+    wanted = [str(name).strip() for name in (names or []) if str(name).strip()]
+    wanted = list(dict.fromkeys(wanted))
+    cap = max(1, min(int(limit or 10), MAX_BULK_SKILLS))
+    selected: dict[str, Any] = {}
+    missing: list[str] = []
+
+    for name in wanted:
+        skill = get_skill(name)
+        if skill is None:
+            missing.append(name)
+        elif skill.name not in selected:
+            selected[skill.name] = skill
+
+    needle = query.strip()
+    if needle:
+        for name, _description in search_skills(needle, limit=cap):
+            if len(selected) >= cap:
+                break
+            if name in selected:
+                continue
+            skill = get_skill(name)
+            if skill is not None:
+                selected[skill.name] = skill
+
+    if not wanted and not needle:
+        for skill in load_curated()[:cap]:
+            selected[skill.name] = skill
+
+    budget = max(200, min(80_000, max_tokens)) * 4
+    used = 0
+    rows: list[dict[str, Any]] = []
+    omitted: list[str] = []
+    for skill in list(selected.values())[:cap]:
+        body = skill.body
+        room = budget - used
+        if room < 400:
+            omitted.append(skill.name)
+            continue
+        text = body[: min(len(body), MAX_SKILL_BODY_CHARS, room)]
+        truncated = len(text) < len(body)
+        used += len(text)
+        found = scan(body)
+        rows.append(
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "body": text,
+                "truncated": truncated,
+                "tokens": max(1, len(text) // 4),
+                "risk": found.risk,
+                "warnings": [found.warning()] if found.warning() else [],
+            }
+        )
+    return {
+        "skills": rows,
+        "missing": missing,
+        "omitted": omitted,
+        "tokens_used": used // 4,
+        "budget_tokens": budget // 4,
+    }
 
 
 def _list_packs_payload() -> list[dict[str, str]]:
@@ -1032,6 +1121,18 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         if skill is None:
             raise ValueError(f"unknown skill: {wanted}")
         return skill.body
+    if name == "load_skills":
+        names = args.get("names")
+        if isinstance(names, str):
+            names = [names]
+        return _text(
+            load_skills_payload(
+                names=names,
+                query=str(args.get("query") or ""),
+                limit=int(args.get("limit") or 10),
+                max_tokens=int(args.get("max_tokens") or 6000),
+            )
+        )
     if name == "list_packs":
         return _text(_list_packs_payload())
     if name == "pack_profile":

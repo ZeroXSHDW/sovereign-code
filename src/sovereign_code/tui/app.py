@@ -140,7 +140,8 @@ class SovereignApp(App[None]):
         await self.add_message(
             "system",
             "**Sovereign Code** is running locally. No prompt leaves this Mac.\n\n"
-            "Type a question, or press `F2` to open Qwen Code in the current folder.",
+            "Type a question, press `F9` for a real terminal, or `F2` for Qwen Code.\n"
+            "Use `/help` for the full command list.",
         )
         if self.demo:
             self._apply_demo()
@@ -555,6 +556,10 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/time":
+            import datetime as _dt
+
+            await self.add_message("system", _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         elif command == "/version":
             from .. import __version__
 

@@ -36,7 +36,7 @@ def ensure_memory(cwd: Path | None = None) -> Path:
 PROJECT_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
 
 
-def project_context(cwd: Path | None = None, max_chars: int = 6000) -> str:
+def project_context(cwd: Path | None = None, max_chars: int = 8000) -> str:
     """Concatenate AGENTS.md/CLAUDE.md and project memory for prompt injection."""
     resolved = (cwd or Path.cwd()).resolve()
     parts: list[str] = []

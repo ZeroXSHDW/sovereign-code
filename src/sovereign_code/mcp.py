@@ -1067,9 +1067,10 @@ def _local_status() -> dict[str, Any]:
     settings = Settings.load()
     gateway: dict[str, Any] = {"up": False, "local_only": False, "tiers": {}}
     try:
-        import httpx
+        from .http import shared_client
 
-        health = httpx.get(f"{settings.router_url.rstrip('/')}/health", timeout=3.0).json()
+        url = f"{settings.router_url.rstrip('/')}/health"
+        health = shared_client(timeout=3.0, connect=3.0).get(url).json()
         gateway = {
             "up": True,
             "local_only": bool(health.get("local_only")),

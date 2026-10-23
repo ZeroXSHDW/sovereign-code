@@ -1046,10 +1046,10 @@ def _checks(path: str, commands: list[str] | None = None) -> dict[str, Any]:
     target = Path(path).expanduser().resolve()
     if commands:
         chosen = allowed_commands(commands)
-        result = run_allowed_checks(target, chosen, timeout=1800.0)
+        result = run_allowed_checks(target, chosen, timeout=3600.0)
     else:
         chosen = detect_checks(target)
-        result = run_checks(target, chosen, timeout=1800.0)
+        result = run_checks(target, chosen, timeout=3600.0)
     return {"ok": result.ok, "commands": chosen, "log": result.log[-6000:]}
 
 

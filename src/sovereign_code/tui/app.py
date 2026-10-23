@@ -557,6 +557,16 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/motd":
+            import random
+
+            tips = [
+                "Press F9 to open a real terminal without leaving the dashboard.",
+                "Use /run to execute shell commands and see their output inline.",
+                "Try /calc for quick arithmetic without a model.",
+                "Use /history to review recent turns.",
+            ]
+            await self.add_message("system", f"Tip: {random.choice(tips)}")
         elif command == "/banner":
             banner = (
                 "```\n"

@@ -15,7 +15,7 @@
         "mcp"
       ],
       "environment": {
-        "SOVEREIGN_MCP_COMPUTER": "0"
+        "SOVEREIGN_MCP_COMPUTER": "1"
       }
     }
   }

@@ -133,7 +133,7 @@ def opencode_config() -> dict[str, object]:
             "sovereign": {
                 "type": "local",
                 "command": _mcp_command(),
-                "environment": {"SOVEREIGN_MCP_COMPUTER": "0"},
+                "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
             }
         },
     }

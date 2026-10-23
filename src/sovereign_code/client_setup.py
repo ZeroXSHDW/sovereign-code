@@ -233,32 +233,50 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                     "best": {
                         "name": "Best — 30B code / GLM reasoning",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("best", 32768, max_context), "output": 8192},
+                        "limit": {
+                            "context": advertised_context("best", 32768, max_context),
+                            "output": 8192,
+                        },
                     },
                     "auto": {
                         "name": "Auto — fast for simple, deep for hard",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("auto", 32768, max_context), "output": 8192},
+                        "limit": {
+                            "context": advertised_context("auto", 32768, max_context),
+                            "output": 8192,
+                        },
                     },
                     "fast": {
                         "name": "Fast — small model, short tasks",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("fast", 8192, max_context), "output": 4096},
+                        "limit": {
+                            "context": advertised_context("fast", 8192, max_context),
+                            "output": 4096,
+                        },
                     },
                     "balanced": {
                         "name": "Balanced — 9B, tools and multi-turn",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("balanced", 16384, max_context), "output": 8192},
+                        "limit": {
+                            "context": advertised_context("balanced", 16384, max_context),
+                            "output": 8192,
+                        },
                     },
                     "deep": {
                         "name": "Deep — 30B code / GLM reasoning",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("deep", 32768, max_context), "output": 8192},
+                        "limit": {
+                            "context": advertised_context("deep", 32768, max_context),
+                            "output": 8192,
+                        },
                     },
                     "ultra": {
                         "name": "Ultra — 27B for the hardest reasoning",
                         "tool_call": True,
-                        "limit": {"context": advertised_context("ultra", 16384, max_context), "output": 8192},
+                        "limit": {
+                            "context": advertised_context("ultra", 16384, max_context),
+                            "output": 8192,
+                        },
                     },
                 },
             },
@@ -313,6 +331,7 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                 "type": "local",
                 "command": command,
                 "enabled": True,
+                "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
             }
         },
     }
@@ -323,7 +342,9 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
     return config
 
 
-def install_opencode_mcp(path: Path | None = None, include_cloud: bool = False) -> Path:
+def install_opencode_mcp(
+    path: Path | None = None, include_cloud: bool = False, max_context: int | None = None
+) -> Path:
     target = path or opencode_config_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -334,7 +355,7 @@ def install_opencode_mcp(path: Path | None = None, include_cloud: bool = False) 
     # Preserve the user's other settings and providers; add the working local
     # provider, and the MCP server. Cloud providers are only added when the
     # user asks for them, so a local-first install stays local-first.
-    merged = opencode_config(include_cloud=include_cloud)
+    merged = opencode_config(include_cloud=include_cloud, max_context=max_context)
     providers = merged["provider"]
     for key, value in (data.get("provider") or {}).items():
         if not isinstance(value, dict):

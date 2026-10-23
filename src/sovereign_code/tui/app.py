@@ -43,6 +43,8 @@ HELP_TEXT = """\
 - `/index [path]` — embed a directory for search
 - `/summarize <file|url>` — local-model summary
 - `/backup` — archive configs and chat data
+- `/run <command>` — run a shell command locally and show output
+- `/terminal [path]` — open a real Terminal window
 - `/skills`, `/skill <name>` — saved prompt templates
 - `/memory add <note>` — remember a project note (injected into chat)
 - `/free` — unload other models and free memory
@@ -452,6 +454,30 @@ class SovereignApp(App[None]):
             await self.add_message(
                 "system",
                 f"Opened a Terminal in `{result['cwd']}` ({result.get('method', '?')}).",
+            )
+        elif command == "/run":
+            if not arg:
+                await self.add_message("system", "Usage: `/run <command>`")
+                return
+            from ..terminal import run_shell
+
+            workspace = Path(self.settings.workspace).expanduser()
+            if not workspace.is_dir():
+                workspace = Path.cwd()
+            await self.add_message("system", f"Running `{arg}`…")
+            try:
+                result = await asyncio.to_thread(run_shell, arg, cwd=workspace, timeout=120)
+            except Exception as exc:
+                await self.add_message("system", f"Run failed: {exc}")
+                return
+            output = result.get("stdout", "")
+            if result.get("stderr"):
+                output += ("\n" if output else "") + result["stderr"]
+            if not output:
+                output = "(no output)"
+            mark = "OK" if result.get("ok") else "FAIL"
+            await self.add_message(
+                "system", f"**{mark}** (exit {result.get('returncode')})\n```\n{output}\n```"
             )
         elif command == "/codex":
             await self.action_launch_codex(arg or None)

@@ -625,7 +625,7 @@ class SovereignApp(App[None]):
                 content = " ".join(item.get("content", "").split())[:80]
                 lines.append(f"- **{role}**: {content}")
             await self.add_message("system", "\n".join(lines))
-        elif command == "/clear":
+        elif command in {"/clear", "/reset", "/cls"}:
             await self.clear_chat()
         elif command == "/quit":
             self.exit()

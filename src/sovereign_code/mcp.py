@@ -368,7 +368,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "prompt": {"type": "string"},
             "model": {"type": "string", "default": "best"},
-            "max_tokens": {"type": "integer", "default": 512},
+            "max_tokens": {"type": "integer", "default": 1024},
         },
         ["prompt"],
     ),
@@ -1249,7 +1249,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _ask(
             str(args.get("prompt") or ""),
             str(args.get("model") or "best"),
-            int(args.get("max_tokens") or 512),
+            int(args.get("max_tokens") or 1024),
         )
     if name == "run_checks":
         # The tool schema has no "commands" parameter: the client never picks

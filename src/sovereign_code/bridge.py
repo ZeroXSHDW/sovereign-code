@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 from collections.abc import Iterable
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .http import client_for, shared_client
+from .serverguard import GuardedHandler, GuardedServer, content_length
 from .tier_gateway import CLAUDE_MODEL_ROUTES
 
 DEFAULT_PORT = 4001
@@ -600,7 +601,7 @@ def iter_completion(
                 yield chunk
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(GuardedHandler):
     protocol_version = "HTTP/1.1"
     server_version = "SovereignBridge/1.0"
 
@@ -620,7 +621,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        length = content_length(self.headers.get("Content-Length"))
         raw = self.rfile.read(length) if length else b"{}"
         data = json.loads(raw or b"{}")
         return data if isinstance(data, dict) else {}
@@ -733,7 +734,7 @@ def make_server(
         (_Handler,),
         {"gateway_url": gateway_url, "default_model": default_model},
     )
-    return ThreadingHTTPServer((host, port), handler)
+    return GuardedServer((host, port), handler)
 
 
 def pid_path() -> Path:

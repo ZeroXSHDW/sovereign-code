@@ -21,7 +21,7 @@ import httpx
 
 from .config import LOCAL_AI_ROOT
 from .http import client_for
-from .serverguard import GuardedHandler, GuardedServer
+from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer, content_length
 from .tier_gateway import local_only, port_open
 
 DEFAULT_PORT = 4020
@@ -289,7 +289,11 @@ class Handler(GuardedHandler):
         _json(self, 404, {"error": "not found"})
 
     def _browse(self) -> None:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = content_length(self.headers.get("Content-Length"))
+        except BodyTooLarge:
+            _json(self, 413, {"error": "request body too large"})
+            return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
@@ -367,7 +371,11 @@ class Handler(GuardedHandler):
         if urlsplit(self.path).path != "/api/chat":
             _json(self, 404, {"error": "not found"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = content_length(self.headers.get("Content-Length"))
+        except BodyTooLarge:
+            _json(self, 413, {"error": "request body too large"})
+            return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:

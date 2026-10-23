@@ -50,6 +50,7 @@ HELP_TEXT = """\
 - `/free` — unload other models and free memory
 - `/clear` — new conversation
 - `/help` — this help
+- `/pwd` — show the working directory
 - `/quit` — exit
 
 **Keys:** `F2` Qwen Code · `F4` Codex · `F6` Claude · `F3` model · `F5` refresh
@@ -87,6 +88,7 @@ class SovereignApp(App[None]):
         Binding("f6", "launch_claude", "Claude"),
         Binding("f7", "verify", "Verify"),
         Binding("f8", "browse", "Browse"),
+        Binding("f9", "open_terminal", "Terminal"),
         Binding("ctrl+n", "clear_chat", "New"),
     ]
 
@@ -542,6 +544,8 @@ class SovereignApp(App[None]):
                         pass
                 await self.refresh_snapshot()
             await self.add_message("system", "Resident models unloaded.")
+        elif command == "/pwd":
+            await self.add_message("system", f"`{self.settings.workspace}`")
         elif command == "/clear":
             await self.clear_chat()
         elif command == "/quit":
@@ -568,6 +572,9 @@ class SovereignApp(App[None]):
         prompt.value = "/browse "
         prompt.cursor_position = len(prompt.value)
         prompt.focus()
+
+    async def action_open_terminal(self) -> None:
+        await self.handle_command("/terminal")
 
     def _project_memory(self) -> str:
         cwd = Path(self.settings.workspace).expanduser() if self.settings.workspace else Path.cwd()

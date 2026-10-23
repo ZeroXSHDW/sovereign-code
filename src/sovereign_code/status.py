@@ -220,6 +220,16 @@ async def collect(settings: Settings) -> Snapshot:
     snapshot.error = "; ".join(problems)
 
     snapshot.views = build_views(tags, ps, include_missing=True)
+    # Merge MLX models that have weights on disk: they are served by the
+    # mlx-lm server rather than Ollama, but the router and dashboard still
+    # need to see them as installed.
+    try:
+        from .models import mlx_views as _mlx_views
+
+        for tag, view in _mlx_views().items():
+            snapshot.views[tag] = view
+    except Exception:
+        pass
     snapshot.code_selection = choose(
         Task.CODE,
         snapshot.views,

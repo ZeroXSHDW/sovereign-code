@@ -4653,6 +4653,20 @@ def _hf_import(args, hub) -> int:
         source_repo = candidate.stem if candidate.is_file() else candidate.name
     else:
         info = hub.info_model(target, token=token)
+        if not args.allow_unvetted:
+            from .vetting import assess
+
+            vetted = assess(
+                license=info.license,
+                downloads=info.downloads,
+                gated=info.gated,
+                private=info.private,
+            )
+            if not vetted.trusted:
+                raise hub.HFError(
+                    f"{target} did not pass the trust gate: {vetted.summary()}. "
+                    "Pass --allow-unvetted to import it anyway."
+                )
         destination = hub.default_download_dir(target)
         files = sorted(destination.rglob("*.gguf")) if destination.is_dir() else []
 
@@ -6167,6 +6181,11 @@ def build_parser() -> argparse.ArgumentParser:
     hf.add_argument("--readme", action="store_true", help="info: show the repository README")
     hf.add_argument("--name", default=None, help="import: Ollama model name")
     hf.add_argument("--context", type=int, default=None, help="import: num_ctx override")
+    hf.add_argument(
+        "--allow-unvetted",
+        action="store_true",
+        help="import: skip the trust gate (licence, downloads, gating)",
+    )
     hf.add_argument("--yes", action="store_true", help="skip confirmations")
     hf.add_argument("--json", action="store_true")
 

@@ -1327,3 +1327,50 @@ def desktop_configs() -> dict[str, Path]:
         "continue": continue_config_path(),
         "local_ai": LOCAL_AI_ROOT,
     }
+
+
+MLX_BASE_URL = "http://127.0.0.1:8081/v1"
+
+MLX_MODELS: dict[str, tuple[str, int]] = {
+    "mlx-qwen3-14b-4bit": ("MLX Qwen3 14B 4-bit — strongest MLX coder", 32768),
+    "mlx-qwen3-8b-4bit": ("MLX Qwen3 8B 4-bit — fast general", 32768),
+    "mlx-qwen3-4b-4bit": ("MLX Qwen3 4B 4-bit — fastest", 16384),
+    "mlx-qwen2.5-coder-7b-4bit": ("MLX Qwen2.5 Coder 7B 4-bit — small coder", 32768),
+    "mlx-llama-3.1-8b-instruct-4bit": ("MLX Llama 3.1 8B 4-bit — chat", 32768),
+}
+
+MLX_ROUTES: dict[str, str] = {
+    "mlx": "MLX Auto — best available MLX model",
+    "mlx-code": "MLX Code — strongest MLX coder",
+    "mlx-balanced": "MLX Balanced — 8B class",
+    "mlx-fast": "MLX Fast — 4B class",
+    "mlx-chat": "MLX Chat — Llama 3.1 8B",
+}
+
+
+def mlx_provider_models() -> dict[str, dict[str, Any]]:
+    return {
+        name: {
+            "name": title,
+            "tool_call": True,
+            "limit": {"context": context, "output": 8192},
+        }
+        for name, (title, context) in MLX_MODELS.items()
+    }
+
+
+def advertised_context(tag: str, claimed: int, cap: int) -> int:
+    """The window OpenCode may fill for a model, never more than we can serve.
+
+    A client that is told 32768 for a model whose catalog entry says 16384, or
+    for a model running at 2048 under memory pressure, sends prompts the gateway
+    cannot fit. The advertised limit is the smallest of the claim, the catalog
+    ceiling and the user's ``max_context``.
+    """
+    from .models import CATALOG
+
+    spec = CATALOG.get(tag)
+    ceiling = min(claimed, cap)
+    if spec is not None:
+        ceiling = min(ceiling, spec.max_context)
+    return max(2048, ceiling)

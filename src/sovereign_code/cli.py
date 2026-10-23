@@ -3724,6 +3724,52 @@ def _projects(args) -> int:
     return 0
 
 
+def _feed(args) -> int:
+    from .monitor import activity_stats, recent_activity
+
+    limit = args.limit or 40
+    events = recent_activity(limit=limit)
+    if not events:
+        console.print("[dim]Nothing has happened yet.[/]")
+        return 0
+    table = Table(title="Live feed", header_style="bold #b794f4")
+    table.add_column("When", style="dim")
+    table.add_column("Tier")
+    table.add_column("Model", style="bold")
+    table.add_column("Ms", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Flags", style="dim")
+    for event in events:
+        flags = (
+            " · ".join(
+                mark
+                for mark, on in (
+                    ("tools", event.tools),
+                    ("stream", event.stream),
+                )
+                if on
+            )
+            or "—"
+        )
+        table.add_row(
+            time.strftime("%H:%M:%S", time.localtime(event.at)),
+            event.tier,
+            event.model,
+            "cache" if False else (str(event.ms) if event.ms else "—"),
+            str(event.total_tokens) if event.total_tokens else "—",
+            flags,
+        )
+    console.print(table)
+    stats = activity_stats(events)
+    console.print(
+        f"[dim]{stats.requests} requests in the window"
+        f" · p50 {stats.p50_ms / 1000:.1f}s"
+        f" · {stats.tokens:,} tokens"
+        f" · {stats.tools} tools[/]"
+    )
+    return 0
+
+
 def _project(args) -> int:
     from .packs import PACKS, get_pack
     from .projectsetup import init_project, profile
@@ -6229,6 +6275,10 @@ def build_parser() -> argparse.ArgumentParser:
     projects.add_argument("--active", action="store_true", help="only projects running right now")
     projects.add_argument("--search", default=None, metavar="TEXT", help="filter by name or model")
 
+    feed = sub.add_parser("feed", help="the live feed of requests, agents, models, and skills")
+    feed.add_argument("-f", "--follow", action="store_true", help="keep printing new events")
+    feed.add_argument("--limit", type=int, default=40, help="events to show")
+
     # --- prompts ----------------------------------------------------------
     prompts = sub.add_parser("prompts", help="prompt database: versioned, categorized, searchable")
     prompts.add_argument(
@@ -6920,6 +6970,8 @@ def main(argv: list[str] | None = None) -> int:
         return _mode(settings, args.action)
     if command == "projects":
         return _projects(args)
+    if command == "feed":
+        return _feed(args)
     if command == "local-bar":
         from . import localbar
 

@@ -462,7 +462,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "command": {"type": "string"},
             "cwd": {"type": "string", "description": "Working directory; defaults to $HOME"},
-            "timeout": {"type": "integer", "default": 120},
+            "timeout": {"type": "integer", "default": 300},
         },
         ["command"],
     ),

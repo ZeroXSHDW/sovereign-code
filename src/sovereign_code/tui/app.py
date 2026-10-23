@@ -557,6 +557,17 @@ class SovereignApp(App[None]):
             await self.add_message("system", "Resident models unloaded.")
         elif command == "/pwd":
             await self.add_message("system", f"`{self.settings.workspace}`")
+        elif command == "/banner":
+            banner = (
+                "```\n"
+                " ____  ____  ____  ____  ____  ____  ____  ____\n"
+                "||S ||||o ||||v ||||e ||||r ||||e ||||i ||||g ||\n"
+                "||__||||__||||__||||__||||__||||__||||__||||__||\n"
+                "|/  \\||/  \\||/  \\||/  \\||/  \\||/  \\||/  \\||/  \\|\n"
+                "```\n"
+                "Sovereign Code — local-first AI console"
+            )
+            await self.add_message("system", banner)
         elif command == "/whoami":
             import getpass
             import socket

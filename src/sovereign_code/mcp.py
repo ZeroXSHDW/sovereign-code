@@ -202,7 +202,7 @@ TOOLS: list[dict[str, Any]] = [
         "repository; it is far cheaper than listing directories.",
         {
             "path": {"type": "string", "default": "."},
-            "max_files": {"type": "integer", "default": 400},
+            "max_files": {"type": "integer", "default": 600},
             "max_tokens": {"type": "integer", "default": 1800},
         },
     ),
@@ -1144,7 +1144,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(
             _repo_map(
                 str(args.get("path") or "."),
-                int(args.get("max_files") or 400),
+                int(args.get("max_files") or 600),
                 int(args.get("max_tokens") or 1800),
             )
         )

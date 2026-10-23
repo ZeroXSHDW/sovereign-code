@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .diagnostics import note
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -28,6 +31,62 @@ def _text(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, indent=2, default=str)
+
+
+_COMPUTER_LOCK = threading.Lock()
+
+_SENSITIVE_NAMES = frozenset(
+    {"cloud.env", "auth.json", ".env", ".netrc", ".npmrc", ".pypirc", "credentials"}
+)
+_SENSITIVE_NAME_PREFIXES = (".env.", "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa")
+_SENSITIVE_DIRS = frozenset({".ssh", ".gnupg", ".aws", ".codex", ".claude", "Keychains"})
+
+
+def _refuse_sensitive(path: str | Path) -> Path:
+    """Resolve the path (following symlinks) and refuse credential files."""
+    resolved = Path(path).expanduser().resolve()
+    name = resolved.name
+    if (
+        name in _SENSITIVE_NAMES
+        or name.startswith(_SENSITIVE_NAME_PREFIXES)
+        or _SENSITIVE_DIRS.intersection(resolved.parts)
+    ):
+        raise ValueError(f"refused: {resolved} can hold credentials")
+    return resolved
+
+
+def _workspace_path(value: str) -> Path:
+    """Resolve a path that must live under an allowed workspace root."""
+    from .config import Settings
+
+    target = Path(value or ".").expanduser().resolve()
+    roots = [Path.cwd().resolve()]
+    env_root = os.environ.get("SOVEREIGN_WORKSPACE")
+    if env_root:
+        roots.append(Path(env_root).expanduser().resolve())
+    try:
+        roots.append(Path(Settings.load().workspace).expanduser().resolve())
+    except Exception as exc:
+        note("workspace-root", exc)
+    if not any(target == root or root in target.parents for root in roots):
+        allowed = ", ".join(str(root) for root in roots)
+        raise ValueError(f"refused: {target} is outside the workspace ({allowed})")
+    _refuse_sensitive(target)
+    return target
+
+
+def _audit(kind: str, **data: Any) -> None:
+    """Append one local, private record of a computer action."""
+    from .config import LOCAL_AI_ROOT
+    from .safefile import ensure_private_dir, open_private
+
+    folder = LOCAL_AI_ROOT / "data" / "computer"
+    ensure_private_dir(folder)
+    path = folder / "audit.jsonl"
+    record = {"ts": time.time(), "kind": kind, **data}
+    with _COMPUTER_LOCK:
+        with open_private(path, "a") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _tool(
@@ -74,6 +133,76 @@ TOOLS: list[dict[str, Any]] = [
         "Return one skill's full Markdown body.",
         {"name": {"type": "string"}},
         ["name"],
+    ),
+    _tool(
+        "repo_map",
+        "Outline a project: languages, every source file, and its classes and "
+        "functions with line numbers. Call this first when working in an unfamiliar "
+        "repository; it is far cheaper than listing directories.",
+        {
+            "path": {"type": "string", "default": "."},
+            "max_files": {"type": "integer", "default": 400},
+            "max_tokens": {"type": "integer", "default": 1800},
+        },
+    ),
+    _tool(
+        "repo_search",
+        "Search every source file for a term or regular expression and return "
+        "path:line matches. Use it to find a symbol, an error message or a config key "
+        "without reading whole files.",
+        {
+            "path": {"type": "string", "default": "."},
+            "query": {"type": "string"},
+            "regex": {"type": "boolean", "default": False},
+            "glob": {"type": "string"},
+            "limit": {"type": "integer", "default": 50},
+            "code_only": {"type": "boolean", "default": True},
+        },
+        ["query"],
+    ),
+    _tool(
+        "repo_read",
+        "Read numbered lines from one file. Use the line numbers from repo_search or "
+        "repo_map to read only the region you need.",
+        {
+            "path": {"type": "string"},
+            "start": {"type": "integer", "default": 1},
+            "end": {"type": "integer", "default": 200},
+        },
+        ["path"],
+    ),
+    _tool(
+        "repo_write",
+        "Create or replace one file inside the workspace, atomically. Refuses to "
+        "overwrite an existing file unless overwrite=true or expected_sha256 matches, "
+        "so a stale model cannot clobber a newer edit.",
+        {
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+            "overwrite": {"type": "boolean", "default": False},
+            "expected_sha256": {"type": "string"},
+        },
+        ["path", "content"],
+    ),
+    _tool(
+        "repo_edit",
+        "Replace one exact string in a file. Refuses an ambiguous match unless "
+        "replace_all=true. Set dry_run=true to see the unified diff first.",
+        {
+            "path": {"type": "string"},
+            "old": {"type": "string"},
+            "new": {"type": "string"},
+            "replace_all": {"type": "boolean", "default": False},
+            "dry_run": {"type": "boolean", "default": False},
+        },
+        ["path", "old", "new"],
+    ),
+    _tool(
+        "repo_patch",
+        "Apply a unified diff to one file inside the workspace. Every hunk must match "
+        "or nothing is written.",
+        {"path": {"type": "string"}, "patch": {"type": "string"}},
+        ["path", "patch"],
     ),
     _tool(
         "list_packs",
@@ -317,6 +446,100 @@ def _pack_profile_payload(key: str) -> dict[str, Any]:
             {"name": name, "description": packs._first(desc)} for name, desc in skills
         ],
     }
+
+
+def _repo_map(path: str, max_files: int, max_tokens: int) -> str:
+    from .repomap import repo_map
+
+    root = _workspace_path(path)
+    if not root.is_dir():
+        raise ValueError(f"not a directory: {root}")
+    limited_files = max(1, min(5_000, max_files))
+    limited_tokens = max(200, min(20_000, max_tokens))
+    return repo_map(root, max_files=limited_files, max_tokens=limited_tokens)
+
+
+def _repo_search(
+    path: str,
+    query: str,
+    regex: bool,
+    glob: str | None,
+    limit: int,
+    code_only: bool = True,
+) -> list[str]:
+    from .repomap import search_repo
+
+    root = _workspace_path(path)
+    if not root.is_dir():
+        raise ValueError(f"not a directory: {root}")
+    hits = search_repo(
+        root,
+        query,
+        regex=regex,
+        glob=glob,
+        limit=max(1, min(200, limit)),
+        code_only=code_only,
+    )
+    return [hit.as_line() for hit in hits] or ["no matches"]
+
+
+def _repo_write(
+    path: str,
+    content: str,
+    overwrite: bool,
+    expected_sha256: str | None,
+) -> dict[str, Any]:
+    from .repoedit import write_text
+
+    target = _workspace_path(path)
+    if target.exists() and not overwrite and not expected_sha256:
+        raise ValueError(f"{target} exists; pass overwrite=true or expected_sha256 to replace it")
+    result = write_text(target, content, expected_sha256=expected_sha256)
+    _audit("repo_write", path=str(target), bytes=result.bytes, created=result.created)
+    return {
+        "path": result.path,
+        "bytes": result.bytes,
+        "created": result.created,
+        "sha256": result.sha256,
+    }
+
+
+def _repo_edit(
+    path: str,
+    old: str,
+    new: str,
+    replace_all: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    from .repoedit import edit_text, preview
+
+    target = _workspace_path(path)
+    if dry_run:
+        return {"path": str(target), "diff": preview(target, old, new), "dry_run": True}
+    result = edit_text(target, old, new, replace_all=replace_all)
+    _audit("repo_edit", path=str(target), replacements=result.replacements)
+    return {
+        "path": result.path,
+        "replacements": result.replacements,
+        "first_line": result.first_line,
+        "sha256": result.sha256,
+    }
+
+
+def _repo_patch(root: str, patch: str) -> dict[str, Any]:
+    from .repoedit import apply_patch
+
+    base = _workspace_path(root)
+    result = apply_patch(base, patch)
+    _audit("repo_patch", path=result.path, changed=result.replacements)
+    return {"path": result.path, "changed": result.replacements, "sha256": result.sha256}
+
+
+def _repo_read(path: str, start: int, end: int) -> dict[str, Any]:
+    from .repomap import read_slice
+
+    target = _workspace_path(path)
+    return read_slice(target, start=start, end=end)
 
 
 def _hf_status_payload() -> dict[str, Any]:
@@ -717,6 +940,59 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(_list_packs_payload())
     if name == "pack_profile":
         return _text(_pack_profile_payload(str(args.get("key") or "")))
+    if name == "repo_map":
+        return _text(
+            _repo_map(
+                str(args.get("path") or "."),
+                int(args.get("max_files") or 400),
+                int(args.get("max_tokens") or 1800),
+            )
+        )
+    if name == "repo_search":
+        return _text(
+            _repo_search(
+                str(args.get("path") or "."),
+                str(args.get("query") or ""),
+                bool(args.get("regex", False)),
+                str(args.get("glob") or "") or None,
+                int(args.get("limit") or 50),
+                bool(args.get("code_only", True)),
+            )
+        )
+    if name == "repo_read":
+        return _text(
+            _repo_read(
+                str(args.get("path") or ""),
+                int(args.get("start") or 1),
+                int(args.get("end") or 200),
+            )
+        )
+    if name == "repo_write":
+        return _text(
+            _repo_write(
+                str(args.get("path") or ""),
+                str(args.get("content") or ""),
+                bool(args.get("overwrite", False)),
+                str(args.get("expected_sha256") or "") or None,
+            )
+        )
+    if name == "repo_edit":
+        return _text(
+            _repo_edit(
+                str(args.get("path") or ""),
+                str(args.get("old") or ""),
+                str(args.get("new") or ""),
+                bool(args.get("replace_all", False)),
+                bool(args.get("dry_run", False)),
+            )
+        )
+    if name == "repo_patch":
+        return _text(
+            _repo_patch(
+                str(args.get("path") or "."),
+                str(args.get("patch") or ""),
+            )
+        )
     if name == "hf_status":
         return _text(_hf_status_payload())
     if name == "search_hf_models":

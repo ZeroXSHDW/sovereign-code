@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md"
+  ],
+  "permission": {
+    "edit": "allow",
+    "bash": "allow"
+  },
+  "mcp": {
+    "sovereign": {
+      "type": "local",
+      "command": [
+        "/Users/user/.local/bin/sovereign",
+        "mcp"
+      ],
+      "environment": {
+        "SOVEREIGN_MCP_COMPUTER": "0"
+      }
+    }
+  }
+}

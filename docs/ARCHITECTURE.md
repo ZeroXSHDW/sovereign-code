@@ -12,7 +12,7 @@
 | `cloud.py` | Ollama Cloud readiness, enable/disable, alias rendering, provider routes, plan errors |
 | `bridge.py` | Anthropic Messages → streamed gateway completion → Anthropic SSE, so Claude Code shows text as it is generated and executes tools |
 | `tier_gateway.py` | Latency-aware OpenAI gateway: fast/balanced/deep/ultra routing, correct streamed tool calls, fallback, cache, metrics |
-| `mcp.py` | MCP stdio server: models, skills, project memory, checks, completions |
+| `mcp.py` | MCP stdio + Streamable HTTP server: models, skills, project memory, checks, completions |
 | `skills_install.py` | One curated skill library → Claude/Codex/Qwen/OpenCode/Continue + project index |
 | `client_setup.py` | Codex/OpenCode/Continue/Claude config and MCP registration, forced-local app configs with reversible cloud copies, live provider probe |
 | `gateway.py` | LiteLLM `/v1/models` probe |
@@ -133,6 +133,43 @@ bring them back at the next login.
 `launchctl setenv` and repairs drifted client configs when asked; it is no
 longer installed as a watch loop.
 
+## 24/7 coding loop (opt-in)
+
+`sovereign loop` is a separate, explicitly installed launchd job
+(`com.user.sovereign.loop`), not part of `service_definitions()`. The stack
+services keep the clients connected; the loop edits a project unattended, so it
+must never start because somebody installed the stack.
+
+One iteration lives in `src/sovereign_code/loop.py`:
+
+1. `check_guard()` refuses a dirty git tree unless `--allow-dirty` is set.
+2. `select_task()` prefers a failing check, then unchecked roadmap items, then
+   `TODO`/`FIXME` comments, then a rotating `IMPROVE_FOCUS` task.
+3. `relevant_skills()` asks `skillrouter.route()` for compact cards, loads only
+   the top bodies (capped), and runs the safety scanner; a risky body is
+   replaced by its warning.
+4. `build_prompt()` assembles the project brief, task, skills, and the local-
+   only/no-commit/small-change rules, capped at `PROMPT_LIMIT`.
+5. `make_runner()` builds a headless plan through `agents.build_headless()` and
+   runs OpenCode with `--auto`. With `agent_model="auto"` OpenCode uses the
+   `sovereign/auto` alias from its own config instead of a `local/auto` model
+   that does not exist.
+6. `make_verifier()` runs the project's detected checks (or `--checks`), and
+   `run_once()` persists the prompt, agent log, check log, and result under
+   `data/loop/runs/`.
+
+State is per project: `data/loop/<sha256(path)[:12]>.json` holds `enabled`,
+counters, completed task keys, attempt counts, the last failure, and a `paused`
+flag. A pid lock (`*.lock`) makes a second loop for the same tree exit instead
+of editing files concurrently. Enabling clears the old failure state so
+"disable, fix the tree, enable" is a real retry.
+
+The job runs `python -m sovereign_code loop run --dir <project>` with
+`KeepAlive: {SuccessfulExit: false}`: a clean exit means the user disabled or
+the loop paused, so launchd must not resurrect it; a crash is restarted. The
+plist adds Homebrew and the venv to `PATH` because launchd does not inherit the
+shell's path, which is where `opencode` usually lives.
+
 ## Gateway supervisor and TCC
 
 `~/Documents` is TCC-protected, and a `launchd` job is stricter than a shell.
@@ -221,6 +258,10 @@ OpenCode's built-in `ollama` provider does too. The working paths are:
   real `function_call` items. `--cloud` uses the ChatGPT login.
 - **OpenCode**: a custom `local/` OpenAI-compatible provider pointing at
   `127.0.0.1:11434/v1`, not the built-in `ollama` provider.
+  `client_setup.opencode_config()` writes native V2 (`providers`,
+  `mcp.servers`, ordered `permissions`) with read-only `reviewer`/`planner`
+  subagents and `/check` `/review` `/plan` commands; `install_opencode_mcp()`
+  translates an existing V1 `provider`/`permission`/`mcp` block.
 - **Claude Code**: `bridge.py` accepts Anthropic `/v1/messages`, asks the
   gateway's `/v1/chat/completions` for a stream, and re-emits text deltas as
   Anthropic SSE while buffering tool calls into complete `tool_use` blocks.
@@ -229,8 +270,9 @@ OpenCode's built-in `ollama` provider does too. The working paths are:
 - **Qwen Code**: native Ollama model, no proxy.
 - **Continue/VS Codium**: Ollama provider for chat/edit/autocomplete; prompts
   are installed under `~/.continue/prompts`.
-- **ChatGPT / Claude Desktop**: MCP via `sovereign mcp`; Codex's config is
-  shared by the ChatGPT app.
+- **ChatGPT / Claude Desktop**: MCP via `sovereign mcp` (stdio) or
+  `sovereign mcp --http` on loopback; Codex's config is shared by the ChatGPT
+  app.
 
 ## Forced-local desktop apps
 

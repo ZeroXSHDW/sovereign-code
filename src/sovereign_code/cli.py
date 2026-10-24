@@ -863,6 +863,14 @@ def _coerce_setting(value: str, current: object) -> object:
 
 def _config(settings: Settings, get_key: str | None, set_value: str | None) -> int:
     names = [field.name for field in dc_fields(settings)]
+    if settings.parse_error:
+        console.print(f"[red]Config error:[/] {settings.parse_error}")
+        console.print(
+            f"[dim]{settings.config_path} is being ignored; every value below is a default. "
+            "Fix or remove the file before saving new values.[/]"
+        )
+        if set_value is not None:
+            return 1
     if set_value is not None:
         key, separator, value = set_value.partition("=")
         key = key.strip()
@@ -1021,7 +1029,7 @@ def _browse(args, settings: Settings) -> int:
         profile_dir=profile,
         policy=policy,
         headless=args.headless,
-        timeout_ms=15000,
+        timeout_ms=120000,
     )
     try:
         session.start(start_url)
@@ -1421,6 +1429,13 @@ def _doctor(snap: Snapshot) -> int:
     def add(ok: bool, name: str, detail: str, hint: str = "", warn: bool = False) -> None:
         checks.append(("PASS" if ok else ("WARN" if warn else "FAIL"), name, detail, hint))
 
+    if snap.settings.parse_error:
+        add(
+            False,
+            "config file",
+            snap.settings.parse_error,
+            "fix or remove config.toml; every setting is currently a default",
+        )
     add(
         snap.ollama_up,
         "Ollama API",
@@ -1486,8 +1501,9 @@ def _doctor(snap: Snapshot) -> int:
         f"{wired:.1f} GB wired of {snap.memory.total_gb:.0f} GB"
         + (f" · {coder.tag} uses {weights:.1f} GB" if coder else ""),
         (
-            f"{coder.tag} needs the machine to itself; unload other models and lower "
-            f"max_context ({coder_sel.context} now)"
+            f"{coder.tag} equals the wired limit; unload another model or use a "
+            f"smaller coder (selected context {coder_sel.context}, "
+            f"max_context {snap.settings.max_context})"
             if not fits and coder is not None
             else ""
         ),
@@ -1542,7 +1558,7 @@ def _doctor(snap: Snapshot) -> int:
         gateway_models as _gateway_models,
     )
     from .tools import (
-        opencode_models as _opencode_models,
+        opencode_local_models as _opencode_local_models,
     )
     from .tools import (
         qwen_models as _qwen_models,
@@ -1555,7 +1571,9 @@ def _doctor(snap: Snapshot) -> int:
     referenced: set[str] = set(
         _gateway_models(_read_text(LOCAL_AI_ROOT / "gateway" / "config.yaml")).values()
     )
-    referenced.update(_opencode_models(_read_text(home / ".config" / "opencode" / "opencode.json")))
+    referenced.update(
+        _opencode_local_models(_read_text(home / ".config" / "opencode" / "opencode.json"))
+    )
     referenced.update(_qwen_models(_read_text(home / ".qwen" / "settings.json")))
     referenced.update(_continue_models(_read_text(home / ".continue" / "config.yaml")))
     # Cloud aliases are expected to be absent from the local model list.
@@ -2820,8 +2838,8 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
         model = config.get("model")
         if isinstance(model, dict):
             model = f"{model.get('providerID')}/{model.get('model')}"
-        provider = (config.get("provider") or {}).get("sovereign") or {}
-        options = provider.get("options") or {}
+        provider = (config.get("providers") or config.get("provider") or {}).get("sovereign") or {}
+        options = provider.get("settings") or provider.get("options") or {}
         opencode_local = (
             str(model) in {"sovereign/best", "sovereign/auto"}
             and options.get("baseURL") == "http://127.0.0.1:4010/v1"
@@ -3300,6 +3318,174 @@ def _autostart(
         )
     console.print(f"[dim]{report['verdict']}[/]")
     return 0 if report["ok"] else 1
+
+
+def _loop(settings: Settings, args) -> int:
+    """Enable, inspect, or run the opt-in 24/7 coding loop."""
+    import json as _json
+
+    from . import loop as loop_mod
+    from . import services as services_mod
+
+    target = Path(args.dir).expanduser().resolve()
+    checks = tuple(part.strip() for part in (args.checks or "").split(";") if part.strip())
+    config = loop_mod.LoopConfig(
+        directory=target,
+        agent=args.agent,
+        agent_model=args.agent_model,
+        interval=max(0.0, args.interval),
+        max_runs=max(0, args.max_runs),
+        agent_timeout=max(60.0, args.agent_timeout),
+        check_timeout=max(30.0, args.check_timeout),
+        checks=checks,
+        verify=not args.no_verify,
+        skill_cards=max(0, args.skills),
+        skill_tokens=max(0, args.skill_tokens),
+        idle=args.idle,
+        max_attempts=max(1, args.max_attempts),
+        allow_dirty=args.allow_dirty,
+        dry_run=args.dry_run,
+    )
+    action = args.action
+    state = loop_mod.load_state(target)
+    service = services_mod.loop_service_state()
+    agent_ready = command_exists(AGENT_CLIENTS.get(config.agent, config.agent))
+
+    if action == "status":
+        report = {
+            "target": str(target),
+            "state": state.as_dict(),
+            "service": service,
+            "interval": config.interval,
+            "agent": config.agent,
+            "agent_model": config.agent_model,
+            "agent_installed": agent_ready,
+            "checks": config.check_commands(),
+        }
+        if args.json:
+            print(_json.dumps(report, indent=2, default=str))
+            return 0 if state.enabled and not state.paused else 1
+        table = Table(title="24/7 coding loop · opt-in", header_style="bold #b794f4")
+        table.add_column("Field", style="bold")
+        table.add_column("Value", overflow="fold")
+        table.add_row("Enabled", "[green]yes[/]" if state.enabled else "[dim]no[/]")
+        if state.paused:
+            table.add_row("Paused", f"[yellow]{state.last_result or 'yes'}[/]")
+        table.add_row("Target", str(target))
+        table.add_row(
+            "Agent",
+            f"{config.agent} ({config.agent_model})"
+            + ("" if agent_ready else " · [red]CLI not installed[/]"),
+        )
+        table.add_row(
+            "Service",
+            ("[green]loaded[/]" if service["loaded"] else "[dim]not loaded[/]")
+            + (" · " + str(service["label"]) if service["installed"] else ""),
+        )
+        table.add_row("Runs", f"{state.runs} · {state.successes} ok · {state.failures} failed")
+        table.add_row("Last run", state.last_run_at or "—")
+        table.add_row("Last task", state.last_task or "—")
+        table.add_row("Last result", state.last_result or "—")
+        table.add_row("Interval", f"{config.interval:.0f}s")
+        table.add_row("Checks", ", ".join(config.check_commands()) or "not verified")
+        console.print(table)
+        if not state.enabled:
+            console.print(
+                "[dim]Enable it with:[/] sovereign loop enable --dir "
+                f"{target}  [dim](add --foreground to skip launchd)[/]"
+            )
+        elif service["installed"] and not service["loaded"]:
+            console.print(
+                "[yellow]The job is installed but not loaded.[/] Run: sovereign loop enable"
+            )
+        return 0 if state.enabled and not state.paused else 1
+
+    if action in {"enable", "install"}:
+        loop_mod.set_enabled(target, True)
+        if not agent_ready:
+            console.print(
+                f"[yellow]{config.agent} is not on PATH.[/] The loop will record the failure "
+                "until it is installed; run: sovereign install-clients"
+            )
+        if args.foreground:
+            console.print(
+                f"[green]Loop enabled[/] for {target} · run it with: "
+                f"sovereign loop run --dir {target}"
+            )
+            return 0
+        loaded, path = services_mod.install_loop_service(
+            target,
+            interval=config.interval,
+            agent=config.agent,
+            agent_model=config.agent_model,
+        )
+        if loaded:
+            console.print(
+                f"[green]24/7 loop enabled[/] for {target} · launchd job "
+                f"[bold]{services_mod.LOOP_LABEL}[/]"
+            )
+            console.print(f"[dim]plist:[/] {path}")
+            console.print(
+                "[dim]Stop it with:[/] sovereign loop disable "
+                f"--dir {target}  ·  [dim]logs:[/] sovereign logs loop -f"
+            )
+            return 0
+        loop_mod.set_enabled(target, False)
+        console.print(f"[red]Could not load {services_mod.LOOP_LABEL}.[/] The plist is at {path}.")
+        console.print(
+            f"[dim]You can still run it in the foreground:[/] sovereign loop run --dir {target}"
+        )
+        return 1
+
+    if action in {"disable", "uninstall"}:
+        loop_mod.set_enabled(target, False)
+        existed = services_mod.uninstall_loop_service()
+        console.print(f"[green]Loop disabled[/] for {target}")
+        if existed:
+            console.print(f"[dim]Removed {services_mod.LOOP_LABEL} from launchd.[/]")
+        else:
+            console.print("[dim]No launchd job was installed.[/]")
+        return 0
+
+    if action == "once":
+        run = loop_mod.run_once(
+            config,
+            settings=settings,
+            log=lambda message: console.print(f"[dim]{message}[/]"),
+        )
+        if run.task is not None:
+            console.print(f"[bold]Task[/] {run.task.title}  [dim]{run.task.source}[/]")
+        console.print(run.summary())
+        if run.run_dir:
+            console.print(f"[dim]run: {run.run_dir}[/]")
+        if run.check_log and not run.checks_ok:
+            console.print(Panel(Text(run.check_log[-4000:]), title="checks", border_style="red"))
+        return 0 if run.ok else 1
+
+    if action == "run":
+        if not state.enabled:
+            console.print(
+                "[red]The loop is disabled.[/] Enable it first: sovereign loop enable "
+                f"--dir {target}"
+            )
+            return 1
+        if not agent_ready:
+            console.print(
+                f"[red]{config.agent} is not installed.[/] Run: sovereign install-clients"
+            )
+            return 1
+        console.print(
+            f"[bold]24/7 coding loop[/] · {target} · {config.agent} ({config.agent_model}) "
+            f"· Ctrl-C to stop"
+        )
+        return loop_mod.run_forever(
+            config,
+            settings=settings,
+            log=lambda message: console.print(f"[dim]{message}[/]"),
+        )
+
+    console.print(f"[red]Unknown loop action:[/] {action}")
+    return 2
 
 
 def _prune(snap: Snapshot, apply: bool = False) -> int:
@@ -3990,6 +4176,12 @@ def _pack(args, settings: Settings) -> int:
             f"`sovereign pack brief KEY --path AGENTS.md`[/]"
         )
         return 0
+
+    if not args.key:
+        console.print("[red]A pack key is required.[/]")
+        console.print(f"[dim]Packs: {', '.join(sorted(packs.PACKS))}[/]")
+        console.print("[dim]Example: sovereign pack show pentest[/]")
+        return 1
 
     p = packs.get_pack(args.key)
     if p is None:
@@ -5812,10 +6004,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="rewrite the local app config if it drifted back to the cloud",
     )
-    sub.add_parser(
+    mcp_parser = sub.add_parser(
         "mcp",
         help="serve MCP over stdio (models, skills, memory, checks) for desktop clients",
     )
+    mcp_parser.add_argument(
+        "--http",
+        action="store_true",
+        help="serve Streamable HTTP instead of stdio (for the launchd service)",
+    )
+    mcp_parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
+    mcp_parser.add_argument("--port", type=int, default=8765, help="HTTP port")
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("backends", help="show which local inference servers are reachable")
@@ -5850,6 +6049,74 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--repair", action="store_true", help="rewrite the plists and reload")
     auto.add_argument("--restart", action="store_true", help="restart every service")
     auto.add_argument("--json", action="store_true", help="print machine readable output")
+    loop = sub.add_parser(
+        "loop",
+        help="opt-in 24/7 coding loop: pick tasks, run OpenCode auto, verify, repeat",
+    )
+    loop.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("status", "enable", "disable", "install", "uninstall", "run", "once"),
+        help="enable/disable the loop, install/remove the launchd job, or run it",
+    )
+    loop.add_argument("--dir", default=".", help="project to keep coding (default: .)")
+    loop.add_argument(
+        "--agent",
+        default="opencode",
+        choices=sorted(AGENT_CLIENTS),
+        help="headless coding client (default: opencode)",
+    )
+    loop.add_argument(
+        "--agent-model",
+        default="auto",
+        help="model for the client; 'auto' uses OpenCode's configured router",
+    )
+    loop.add_argument("--interval", type=float, default=900.0, help="seconds between tasks")
+    loop.add_argument("--max-runs", type=int, default=0, help="stop after N tasks (0 = no limit)")
+    loop.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=3600.0,
+        help="timeout for one coding-agent run, in seconds",
+    )
+    loop.add_argument(
+        "--check-timeout", type=float, default=900.0, help="timeout for one check command"
+    )
+    loop.add_argument(
+        "--checks",
+        default=None,
+        help="semicolon-separated check commands (default: detect from the project)",
+    )
+    loop.add_argument("--no-verify", action="store_true", help="skip the project checks")
+    loop.add_argument("--skills", type=int, default=3, help="skill cards to route per task")
+    loop.add_argument(
+        "--skill-tokens", type=int, default=1200, help="token budget for the skill cards"
+    )
+    loop.add_argument(
+        "--idle",
+        choices=("improve", "wait"),
+        default="improve",
+        help="when the backlog is empty: self-improve, or wait for a new task",
+    )
+    loop.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="pause after a task fails this many times (default: 3)",
+    )
+    loop.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="run even when the git working tree has uncommitted changes",
+    )
+    loop.add_argument(
+        "--foreground",
+        action="store_true",
+        help="enable without installing the launchd job",
+    )
+    loop.add_argument("--json", action="store_true", help="print machine readable output")
+    loop.add_argument("--dry-run", action="store_true", help="show the next task and prompt")
     prune = sub.add_parser("prune", help="list installed models nothing references")
     prune.add_argument("--apply", action="store_true", help="remove them (default: dry run)")
     warm = sub.add_parser("warm", help="preload a model so the first prompt is fast")
@@ -6475,7 +6742,7 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="text",
-        choices=("info", "text", "ocr", "images", "vision", "json"),
+        choices=("info", "text", "ocr", "images", "vision", "json", "tables", "figures"),
     )
     pdf.add_argument("path", nargs="?", default=None, help="PDF file")
     pdf.add_argument("--dpi", type=int, default=200, help="render DPI for OCR/vision")
@@ -7100,6 +7367,20 @@ def _pdf(args) -> int:
 
         console.print(_json.dumps(doc.to_dict(), indent=2))
         return 0
+    if action == "tables":
+        from .pdf import extract_tables
+
+        tables = extract_tables(target)
+        for table in tables:
+            console.print(table)
+        return 0
+    if action == "figures":
+        from .pdf import extract_figures
+
+        figures = extract_figures(target, dpi=args.dpi)
+        for figure in figures:
+            console.print(figure.path)
+        return 0
     console.print(f"[red]Unknown action:[/] {action}")
     return 1
 
@@ -7302,9 +7583,12 @@ def main(argv: list[str] | None = None) -> int:
             repair=args.repair,
         )
     if command == "mcp":
-        from .mcp import serve
+        from .mcp import serve, serve_http
 
-        serve()
+        if getattr(args, "http", False):
+            serve_http(host=args.host, port=args.port)
+        else:
+            serve()
         return 0
     if command == "env":
         _env(settings)
@@ -7346,6 +7630,8 @@ def main(argv: list[str] | None = None) -> int:
             restart=args.restart,
             as_json=args.json,
         )
+    if command == "loop":
+        return _loop(settings, args)
     if command == "prune":
         return _prune(_snapshot(settings), apply=args.apply)
     if command == "warm":

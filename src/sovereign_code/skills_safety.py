@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 SEVERITY_ORDER = {"ok": 0, "low": 1, "medium": 2, "high": 3}
-MAX_FINDINGS = 20
+MAX_FINDINGS = 40
 _ZERO_WIDTH = re.compile("[\u200b-\u200f\u202a-\u202e\ufeff]")
 _URL = re.compile(r"https?://\S+", re.IGNORECASE)
 _SECRET = re.compile(

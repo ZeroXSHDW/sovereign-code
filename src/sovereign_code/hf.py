@@ -31,6 +31,7 @@ import httpx
 
 from .config import LOCAL_AI_ROOT
 from .errors import HFError
+from .safefile import write_private
 from .stats import human_size
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
@@ -361,12 +362,11 @@ def save_token(
         verified = True
 
     path = token_path()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(value + "\n")
+    # Atomic private write: a crash cannot truncate the token, and replacing
+    # the path (instead of opening it) means a planted symlink cannot redirect
+    # the credential into another file.
+    write_private(path, value + "\n")
     try:
-        path.chmod(0o600)
         path.parent.chmod(0o700)
     except OSError:
         pass

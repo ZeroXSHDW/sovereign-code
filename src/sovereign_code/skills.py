@@ -102,7 +102,7 @@ STEM_CACHE_LIMIT = 32
 NAMES_CACHE_LIMIT = 8
 SNAPSHOT_CACHE_LIMIT = 8
 USABLE_CACHE_LIMIT = 16
-RESULT_CACHE_LIMIT = 64
+RESULT_CACHE_LIMIT = 128
 FS_BODIES_CACHE_LIMIT = 4
 
 _STEM_CACHE: dict[str, tuple[tuple[int, int], frozenset[str]]] = {}
@@ -383,8 +383,10 @@ def _term_groups(terms: list[str]) -> list[tuple[str, ...]]:
                 for token in re.findall(r"\w+", candidate)
             )
         )
-        if alternatives:
-            groups.append(alternatives)
+        # Keep one group per term even when the term has no word characters
+        # (``C++``/``++``). Dropping it made ``_groups_match`` zip a shorter
+        # list than ``terms`` and raise ValueError on a punctuation-only query.
+        groups.append(alternatives or (term,))
     return groups
 
 

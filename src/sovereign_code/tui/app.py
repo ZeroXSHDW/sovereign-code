@@ -42,6 +42,9 @@ HELP_TEXT = """\
 - `/search <query>` — semantic search over the indexed workspace
 - `/index [path]` — embed a directory for search
 - `/summarize <file|url>` — local-model summary
+- `/pdf <path>` — read a PDF (text/tables/figures)
+- `/ocr <path>` — OCR a PDF or image
+- `/memory`, `/pack`, `/domains`, `/stats`, `/sessions`, `/cache`, `/warm` — CLI pass-through
 - `/backup` — archive configs and chat data
 - `/hf ...` — search/download/import Hugging Face models
 - `/run <command>` — run a shell command locally and show output
@@ -82,7 +85,7 @@ class SovereignApp(App[None]):
     CSS_PATH = Path(__file__).with_name("app.tcss")
     TITLE = "Sovereign Code"
     SUB_TITLE = "local-first coding console"
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f2", "launch_code", "Qwen"),
         Binding("f3", "cycle_model", "Model"),
@@ -462,6 +465,10 @@ class SovereignApp(App[None]):
                 "system",
                 f"Opened a Terminal in `{result['cwd']}` ({result.get('method', '?')}).",
             )
+        elif command == "/terminfo":
+            from ..terminal import info
+
+            await self.add_message("system", f"Terminal info: `{info()}`")
         elif command in {"/run", "/shell", "/exec"}:
             if not arg:
                 await self.add_message("system", "Usage: `/run <command>`")
@@ -474,7 +481,7 @@ class SovereignApp(App[None]):
             await self.add_message("system", f"Running `{arg}`…")
             started = time.monotonic()
             try:
-                result = await asyncio.to_thread(run_shell, arg, cwd=workspace, timeout=120)
+                result = await asyncio.to_thread(run_shell, arg, cwd=workspace, timeout=300)
             except Exception as exc:
                 await self.add_message("system", f"Run failed: {exc}")
                 return
@@ -482,8 +489,8 @@ class SovereignApp(App[None]):
             output = result.get("stdout", "")
             if result.get("stderr"):
                 output += ("\n" if output else "") + result["stderr"]
-            if len(output) > 4000:
-                output = output[:2000] + "\n…[truncated]…\n" + output[-2000:]
+            if len(output) > 8000:
+                output = output[:4000] + "\n…[truncated]…\n" + output[-4000:]
             if not output:
                 output = "(no output)"
             mark = "OK" if result.get("ok") else "FAIL"
@@ -529,8 +536,8 @@ class SovereignApp(App[None]):
                 workspace = Path.cwd()
             await self._search_inline(arg, workspace)
         elif command == "/index":
-            workspace = str(Path(self.settings.workspace).expanduser())
-            await self._run_cli("index", arg or workspace)
+            index_workspace = str(Path(self.settings.workspace).expanduser())
+            await self._run_cli("index", arg or index_workspace)
         elif command == "/summarize":
             if not arg:
                 await self.add_message("system", "Usage: `/summarize <file|url>`")
@@ -539,6 +546,40 @@ class SovereignApp(App[None]):
                 await self._run_cli("summarize", "--url", arg)
             else:
                 await self._run_cli("summarize", arg)
+        elif command == "/pdf":
+            if not arg:
+                await self.add_message("system", "Usage: `/pdf <path>`")
+                return
+            await self._run_cli("pdf", *arg.split())
+        elif command == "/ocr":
+            if not arg:
+                await self.add_message("system", "Usage: `/ocr <path>`")
+                return
+            await self._run_cli("ocr", arg)
+        elif command == "/memory":
+            await self._run_cli("memory", *arg.split())
+        elif command == "/pack":
+            await self._run_cli("pack", *arg.split())
+        elif command == "/domains":
+            await self._run_cli("domains", *arg.split())
+        elif command == "/stats":
+            await self._run_cli("stats", *arg.split())
+        elif command == "/sessions":
+            await self._run_cli("sessions", *arg.split())
+        elif command == "/cache":
+            await self._run_cli("cache", *arg.split())
+        elif command == "/warm":
+            await self._run_cli("warm", *arg.split())
+        elif command == "/consult":
+            await self._run_cli("consult", *arg.split())
+        elif command == "/pipeline":
+            await self._run_cli("pipeline", *arg.split())
+        elif command == "/clone":
+            await self._run_cli("clone", *arg.split())
+        elif command == "/knowledge":
+            await self._run_cli("knowledge", *arg.split())
+        elif command == "/prompts":
+            await self._run_cli("prompts", *arg.split())
         elif command == "/backup":
             await self._run_cli("backup")
         elif command == "/hf":

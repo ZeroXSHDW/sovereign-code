@@ -52,7 +52,8 @@ check: lint typecheck test
 	$(VENV)/bin/ruff format --check .
 
 quality: check
-	$(VENV)/bin/pip-audit --strict || $(VENV)/bin/pip-audit
+	$(UV) export --no-emit-project --no-hashes -o /tmp/sovereign-audit-requirements.txt
+	$(VENV)/bin/pip-audit --strict -r /tmp/sovereign-audit-requirements.txt
 
 bench:
 	$(SOVEREIGN) bench

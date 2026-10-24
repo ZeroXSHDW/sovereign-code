@@ -12,6 +12,7 @@ logs/
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
 htmlcov/
 
 # Generated SQLite indexes. These are rebuilt on demand by

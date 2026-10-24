@@ -79,3 +79,10 @@ def test_every_domain_has_a_usable_shape():
         assert domain.key == key
         assert domain.alias and domain.fallback
         assert domain.system
+
+
+def test_compile_bare_star_matches_nothing():
+    from sovereign_code.domains import _compile
+
+    pattern = _compile("*")
+    assert not pattern.search("anything at all")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sovereign-code"
-version = "0.4.0"
+version = "0.4.1"
 description = "Terminal-first, local-first AI coding console for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,8 +29,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Floors match what CI verifies; the caps stop a major release from
-    # changing behaviour underneath the TUI.
     "textual>=8.2,<9",
     "httpx>=0.28,<1",
     "rich>=14.2,<16",
@@ -81,7 +79,7 @@ omit = ["*/__main__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 45
+fail_under = 50
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
@@ -99,7 +97,6 @@ check_untyped_defs = true
 disallow_untyped_defs = false
 warn_return_any = false
 ignore_missing_imports = true
-exclude = ["^src/sovereign_code/tui/"]
 
 [tool.ruff]
 target-version = "py311"

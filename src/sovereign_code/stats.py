@@ -25,7 +25,7 @@ def human_size(number: float) -> str:
         if size < 1024 or unit == "TB":
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
         size /= 1024
-    return f"{size:.1f} TB"
+    return f"{size:.1f} TB"  # pragma: no cover - loop always returns at "TB"
 
 
 def dir_size(path: Path) -> int:

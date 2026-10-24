@@ -11,7 +11,7 @@ from .config import LOCAL_AI_ROOT, LOG_DIR, PROJECT_ROOT
 # directory; the old path is still read so an existing install keeps working.
 WATCHDOG_LOG = LOG_DIR / "watchdog.log"
 LEGACY_WATCHDOG_LOG = Path("/tmp/sovereign-gateway-watchdog.log")  # noqa: S108 - legacy read-only path
-TARGETS = ("gateway", "watchdog", "dashboard", "bridge", "tier")
+TARGETS = ("gateway", "watchdog", "dashboard", "bridge", "tier", "loop")
 
 
 def log_path(target: str) -> Path:
@@ -25,6 +25,8 @@ def log_path(target: str) -> Path:
         return LOCAL_AI_ROOT / "data" / "logs" / "bridge.log"
     if target == "tier":
         return LOCAL_AI_ROOT / "data" / "logs" / "tier-gateway.log"
+    if target == "loop":
+        return LOG_DIR / "service-loop.log"
     raise ValueError(f"unknown log target: {target}")
 
 

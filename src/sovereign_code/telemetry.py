@@ -35,7 +35,7 @@ TAIL_BYTES = 256 * 1024
 
 # How many parsed records to retain for aggregations. The dashboard asks for
 # 500; keeping more makes a later, larger request free until the tail rolls.
-MAX_EVENTS = 4096
+MAX_EVENTS = 8192
 
 
 @dataclass(frozen=True)

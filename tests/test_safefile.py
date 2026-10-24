@@ -83,3 +83,33 @@ def test_open_private_binary_mode(tmp_path: Path) -> None:
         handle.write(b"\x00\x01\x02")
     assert target.read_bytes() == b"\x00\x01\x02"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_ensure_private_dir_tolerates_chmod_failure(tmp_path: Path, monkeypatch) -> None:
+    from sovereign_code import safefile
+
+    def boom(self, _mode):
+        raise OSError("read-only volume")
+
+    monkeypatch.setattr(Path, "chmod", boom)
+    target = tmp_path / "dir"
+    assert safefile.ensure_private_dir(target) == target
+    assert target.is_dir()
+
+
+def test_write_private_bytes_cleans_up_on_failure(tmp_path: Path, monkeypatch) -> None:
+    from sovereign_code import safefile
+
+    target = tmp_path / "out.bin"
+    monkeypatch.setattr(
+        safefile.os, "replace", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    monkeypatch.setattr(
+        safefile.os, "unlink", lambda *a, **k: (_ for _ in ()).throw(OSError("gone"))
+    )
+    try:
+        safefile.write_private_bytes(target, b"data")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected the replace failure to propagate")

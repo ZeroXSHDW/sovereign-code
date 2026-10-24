@@ -124,16 +124,22 @@ def _mcp_command() -> list[str]:
 
 
 def opencode_config() -> dict[str, object]:
-    """The project OpenCode config: brief, MCP server, no approval prompts."""
+    """The project OpenCode V2 config: brief, MCP server, safe unattended edits."""
     return {
         "$schema": "https://opencode.ai/config.json",
         "instructions": ["AGENTS.md"],
-        "permission": {"edit": "allow", "bash": "allow"},
+        "permissions": [
+            {"action": "*", "resource": "*", "effect": "allow"},
+            {"action": "external_directory", "resource": "*", "effect": "ask"},
+        ],
+        "experimental": {"todo": True},
         "mcp": {
-            "sovereign": {
-                "type": "local",
-                "command": _mcp_command(),
-                "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
+            "servers": {
+                "sovereign": {
+                    "type": "local",
+                    "command": _mcp_command(),
+                    "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
+                }
             }
         },
     }

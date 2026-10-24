@@ -13,6 +13,7 @@ there is no window at all.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import IO, Any
 
@@ -49,10 +50,33 @@ def open_private(path: Path, mode: str = "a") -> IO[Any]:
 
 
 def write_private(path: Path, text: str) -> Path:
-    """Write ``text`` to ``path`` with mode 0600, creating parents as needed."""
+    """Write ``text`` to ``path`` atomically, with mode 0600.
+
+    ``open_private(..., "w")`` truncates in place, so a crash halfway through
+    leaves an empty or partial file — a real problem for files such as the
+    Claude settings that this project rewrites. Stage the new contents in a
+    private temp file in the same directory and rename it into place instead.
+    """
+    return write_private_bytes(path, text.encode("utf-8"))
+
+
+def write_private_bytes(path: Path, data: bytes) -> Path:
+    """Byte-oriented :func:`write_private` (downloads, images, binary state)."""
     ensure_private_dir(path.parent)
-    with open_private(path, "w") as handle:
-        handle.write(text)
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, PRIVATE_FILE)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     harden(path)
     return path
 
@@ -72,4 +96,5 @@ __all__ = [
     "harden",
     "open_private",
     "write_private",
+    "write_private_bytes",
 ]

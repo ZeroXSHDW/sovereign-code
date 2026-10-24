@@ -28,7 +28,7 @@ from ..direct import FileWrite, apply_writes, resolve_target
 class PatchReview(ModalScreen[dict[str, Any] | None]):
     """A diff of each proposed file, with apply and cancel actions."""
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("a", "apply", "Apply"),
         Binding("r,escape", "cancel", "Cancel"),
     ]

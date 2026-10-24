@@ -25,11 +25,12 @@ from typing import Any
 from . import __version__
 from .diagnostics import note
 
-PROTOCOL_VERSION = "2024-11-05"
+PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({"2024-11-05", "2025-03-26", "2025-06-18"})
 
 # A single skill can be a full workflow document. Bulk loading is capped so a
 # broad query cannot return tens of megabytes to a client in one tool result.
-MAX_BULK_SKILLS = 50
+MAX_BULK_SKILLS = 100
 MAX_SKILL_BODY_CHARS = 20_000
 
 
@@ -41,7 +42,7 @@ def _text(value: Any) -> str:
 
 _COMPUTER_LOCK = threading.Lock()
 
-_MAX_OUTPUT = 100_000
+_MAX_OUTPUT = 200_000
 
 # Commands that can destroy the machine or lock the user out. The MCP server is
 # deliberately powerful, so the few irreversible operations are fenced off.
@@ -264,6 +265,24 @@ TOOLS: list[dict[str, Any]] = [
         ["source"],
     ),
     _tool(
+        "pdf_tables",
+        "Extract tables from a PDF as structured rows.",
+        {
+            "path": {"type": "string"},
+        },
+        ["path"],
+    ),
+    _tool(
+        "pdf_figures",
+        "Render a PDF's pages and return page images as base64.",
+        {
+            "path": {"type": "string"},
+            "dpi": {"type": "integer", "default": 200},
+            "max_pages": {"type": "integer", "default": 8},
+        },
+        ["path"],
+    ),
+    _tool(
         "repo_write",
         "Create or replace one file inside the workspace, atomically. Refuses to "
         "overwrite an existing file unless overwrite=true or expected_sha256 matches, "
@@ -463,6 +482,7 @@ TOOLS: list[dict[str, Any]] = [
                 "enum": [
                     "navigate",
                     "click",
+                    "hover",
                     "fill",
                     "select",
                     "press",
@@ -940,6 +960,7 @@ def _project_context(path: str) -> str:
     from .memory import project_context
 
     target = Path(path).expanduser().resolve()
+    _refuse_sensitive(target)
     memory = project_context(target)
     files: list[str] = []
     try:
@@ -981,6 +1002,27 @@ def _browser_policy(allow_local: bool, allowed_domains: list[str] | None = None)
     return BrowserPolicy(allow_local=allow_local, allowed_domains=tuple(allowed_domains or ()))
 
 
+def _start_browser(policy, headless: bool, target: str, mode) -> None:
+    """Start a browser session and cache it only once it is usable."""
+    global _BROWSER, _BROWSER_MODE
+    from .browser.executor import BrowserSession
+    from .config import LOCAL_AI_ROOT
+
+    session = BrowserSession(
+        profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
+        policy=policy,
+        headless=headless,
+        timeout_ms=120000,
+    )
+    try:
+        session.start(target)
+    except Exception:
+        session.close()
+        raise
+    _BROWSER = session
+    _BROWSER_MODE = mode
+
+
 def _browser_open(
     url: str,
     allow_local: bool = False,
@@ -989,27 +1031,30 @@ def _browser_open(
 ) -> dict:
     global _BROWSER, _BROWSER_MODE
     from .browser.actions import check_url
-    from .browser.executor import BrowserSession
-    from .config import LOCAL_AI_ROOT
 
     with _BROWSER_LOCK:
         mode = (allow_local, headless, tuple(allowed_domains or ()))
         if _BROWSER is not None and mode != _BROWSER_MODE:
             _BROWSER.close()
             _BROWSER = None
+            _BROWSER_MODE = None
         policy = _browser_policy(allow_local, allowed_domains)
         target = check_url(url, policy)
-        if _BROWSER is None:
-            _BROWSER = BrowserSession(
-                profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
-                policy=policy,
-                headless=headless,
-                timeout_ms=60000,
-            )
-            _BROWSER.start(target)
-            _BROWSER_MODE = mode
+        if _BROWSER is None or getattr(_BROWSER, "page", None) is None:
+            if _BROWSER is not None:
+                _BROWSER.close()
+                _BROWSER = None
+            _start_browser(policy, headless, target, mode)
         else:
-            _BROWSER.goto(target)
+            try:
+                _BROWSER.goto(target)
+            except Exception:
+                # The user closed the window (or Chromium crashed) while the
+                # session was cached. Rebuild once instead of failing every
+                # later call until the MCP process restarts.
+                _BROWSER.close()
+                _BROWSER = None
+                _start_browser(policy, headless, target, mode)
         return _browser_observation(_BROWSER.observe())
 
 
@@ -1043,7 +1088,19 @@ def _browser_act(arguments: dict[str, Any]) -> dict:
             key: value
             for key, value in arguments.items()
             if key
-            in {"action", "url", "id", "text", "key", "value", "direction", "amount", "seconds"}
+            in {
+                "action",
+                "url",
+                "id",
+                "text",
+                "key",
+                "value",
+                "direction",
+                "amount",
+                "seconds",
+                "summary",
+                "reason",
+            }
         }
         action = parse_action(payload)
         confirm = bool(arguments.get("confirm", False))
@@ -1104,9 +1161,12 @@ def _browser_task(
     settings = Settings.load()
     with _BROWSER_LOCK:
         mode = (allow_local, headless, tuple(allowed_domains or ()))
-        if _BROWSER is not None and mode != _BROWSER_MODE:
+        if _BROWSER is not None and (
+            mode != _BROWSER_MODE or getattr(_BROWSER, "page", None) is None
+        ):
             _BROWSER.close()
             _BROWSER = None
+            _BROWSER_MODE = None
         policy = BrowserPolicy(
             allow_local=allow_local,
             allowed_domains=tuple(allowed_domains or ()),
@@ -1120,12 +1180,14 @@ def _browser_task(
                 profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
                 policy=policy,
                 headless=headless,
-                timeout_ms=60000,
+                timeout_ms=120000,
             )
             try:
                 _BROWSER.start(target)
             except Exception as exc:
+                _BROWSER.close()
                 _BROWSER = None
+                _BROWSER_MODE = None
                 return {"error": f"could not start browser: {exc}"}
             _BROWSER_MODE = mode
         else:
@@ -1262,6 +1324,7 @@ def _delegate(
     target = Path(path).expanduser().resolve()
     if not target.is_dir():
         raise ValueError(f"not a directory: {target}")
+    _refuse_sensitive(target)
     if client not in {"codex", "claude"}:
         raise ValueError("delegate supports codex or claude")
     seconds = max(30, min(int(timeout or 240), 7200))
@@ -1299,6 +1362,7 @@ def _checks(path: str, commands: list[str] | None = None) -> dict[str, Any]:
     from .checks import allowed_commands, detect_checks, run_allowed_checks, run_checks
 
     target = Path(path).expanduser().resolve()
+    _refuse_sensitive(target)
     if commands:
         chosen = allowed_commands(commands)
         result = run_allowed_checks(target, chosen, timeout=3600.0)
@@ -1345,6 +1409,43 @@ def _local_status() -> dict[str, Any]:
             },
             "claude": {"local": claude_forced_local()},
         },
+    }
+
+
+def _pdf_figures_payload(
+    figures: list[Any],
+    max_pages: int = 8,
+    budget: int = 1_500_000,
+    total_pages: int | None = None,
+) -> dict[str, Any]:
+    """A bounded ``pdf_figures`` result.
+
+    A 20-page render at 200 DPI is tens of megabytes of base64, which no MCP
+    client can usefully load. Return the first pages, drop base64 once the
+    payload budget is spent, and say so explicitly so a caller can render the
+    rest in smaller batches.
+    """
+    limit = max(1, min(int(max_pages or 8), 50))
+    selected = figures[:limit]
+    payload: list[dict[str, Any]] = []
+    used = 0
+    for figure in selected:
+        encoded = str(getattr(figure, "image_base64", "") or "")
+        if used + len(encoded) > budget:
+            encoded = ""
+        used += len(encoded)
+        payload.append(
+            {
+                "page": getattr(figure, "page", 0),
+                "path": getattr(figure, "path", ""),
+                "image_base64": encoded,
+            }
+        )
+    return {
+        "figures": payload,
+        "total_pages": total_pages if total_pages is not None else len(figures),
+        "returned_pages": len(payload),
+        "truncated": (total_pages if total_pages is not None else len(figures)) > len(payload),
     }
 
 
@@ -1456,6 +1557,22 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             lang=str(args.get("lang") or "eng"),
         )
         return _text(auto_doc.to_dict() if hasattr(auto_doc, "to_dict") else str(auto_doc))
+    if name == "pdf_tables":
+        from .pdf import extract_tables
+
+        tables = extract_tables(str(args.get("path") or ""))
+        return _text([t.__dict__ if hasattr(t, "__dict__") else str(t) for t in tables])
+    if name == "pdf_figures":
+        from .pdf import extract_figures, page_count
+
+        source = str(args.get("path") or "")
+        limit = max(1, min(int(args.get("max_pages") or 8), 50))
+        figures = extract_figures(source, dpi=int(args.get("dpi") or 200), last=limit)
+        try:
+            total = page_count(source)
+        except Exception:
+            total = len(figures)
+        return _text(_pdf_figures_payload(figures, max_pages=limit, total_pages=total))
     if name == "repo_write":
         return _text(
             _repo_write(
@@ -1487,7 +1604,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             _run_command(
                 str(args.get("command") or ""),
                 str(args.get("cwd") or ""),
-                int(args.get("timeout") or 120),
+                int(args.get("timeout") or 300),
             )
         )
     if name == "hf_status":
@@ -1496,7 +1613,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(
             _hf_search_payload(
                 str(args.get("query") or ""),
-                int(args.get("limit") or 20),
+                int(args.get("limit") or 30),
                 bool(args.get("gguf_only", False)),
                 str(args.get("author") or "") or None,
                 str(args.get("sort") or "downloads"),
@@ -1513,7 +1630,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(
             _hf_search_payload(
                 str(args.get("query") or ""),
-                int(args.get("limit") or 20),
+                int(args.get("limit") or 30),
                 False,
                 str(args.get("author") or "") or None,
                 str(args.get("sort") or "downloads"),
@@ -1580,7 +1697,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 bool(args.get("allow_local", False)),
                 bool(args.get("headless", False)),
                 list(args.get("allowed_domains") or []),
-                int(args.get("max_steps") or 20),
+                int(args.get("max_steps") or 50),
                 bool(args.get("confirm_destructive", False)),
                 str(args.get("model") or "local-agent"),
             )
@@ -1675,8 +1792,12 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
         return None
     try:
         if method == "initialize":
+            requested = str(params.get("protocolVersion") or "")
+            # Echo a version we actually implement; otherwise advertise ours
+            # and let the client decide whether it can continue.
+            negotiated = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
             result: Any = {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": negotiated,
                 "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 "serverInfo": {"name": "sovereign-code", "version": __version__},
                 "instructions": (
@@ -1705,7 +1826,20 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
             result = {"tools": TOOLS}
         elif method == "tools/call":
             name = str(params.get("name") or "")
-            output = call_tool(name, params.get("arguments") or {})
+            try:
+                output = call_tool(name, params.get("arguments") or {})
+            except Exception as exc:
+                # A tool that refuses or fails is a tool error, not a broken
+                # server: report it in the result so clients can show it and
+                # continue the turn.
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": str(exc)[:500]}],
+                        "isError": True,
+                    },
+                }
             content = output if isinstance(output, list) else [{"type": "text", "text": output}]
             result = {"content": content, "isError": False}
         elif method == "resources/list":
@@ -1739,8 +1873,8 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def serve() -> None:
-    """Read newline-delimited JSON-RPC from stdin, write to stdout."""
+def _warm_stack() -> None:
+    """Best-effort start of the tier gateway before serving requests."""
     try:
         from .config import Settings
         from .tier_gateway import ensure_running as ensure_tier
@@ -1749,6 +1883,160 @@ def serve() -> None:
         ensure_tier(upstream=settings.gateway_url, ollama=settings.ollama_url)
     except Exception:
         pass
+
+
+def serve_http(host: str = "127.0.0.1", port: int = 8765) -> None:
+    """Serve the same JSON-RPC handler over Streamable HTTP.
+
+    The launchd service has always advertised this endpoint, but the CLI had
+    no ``--http`` flag and no transport behind it, so the job exited with
+    "unrecognized arguments" and launchd restarted it forever. POST accepts a
+    single JSON-RPC message or a batch and answers with JSON; GET returns 405,
+    which the Streamable HTTP spec permits for servers that do not offer a
+    server-initiated SSE stream.
+    """
+    from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer
+
+    allowed_origins = frozenset(
+        {
+            f"http://127.0.0.1:{int(port)}",
+            f"http://localhost:{int(port)}",
+            f"http://[::1]:{int(port)}",
+        }
+    )
+
+    class Handler(GuardedHandler):
+        protocol_version = "HTTP/1.1"
+        server_version = "SovereignMCP/1.0"
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+        def _send_json(self, code: int, payload: Any) -> None:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def _refuse_cross_origin(self) -> bool:
+            """Reject browser requests from any other origin.
+
+            ``Host`` already has to be loopback, but a web page can still POST
+            to 127.0.0.1 with its own Origin. This endpoint can run shell
+            commands, so a simple ``text/plain`` request must never reach it.
+            Non-browser clients (curl, MCP connectors) send no Origin.
+            """
+            origin = (self.headers.get("Origin") or "").strip().lower().rstrip("/")
+            if origin and origin not in allowed_origins:
+                self.send_error(403, "cross-origin request refused")
+                return True
+            content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if content_type != "application/json":
+                self.send_error(415, "Content-Type must be application/json")
+                return True
+            return False
+
+        def do_POST(self) -> None:
+            from .serverguard import content_length
+
+            if self._refuse_cross_origin():
+                return
+            if not self.headers.get("Content-Length") and self.headers.get("Transfer-Encoding"):
+                # Chunked bodies are not read by content_length(); answering
+                # without consuming them would corrupt the next request on a
+                # keep-alive connection.
+                self.close_connection = True
+                self.send_error(411, "Content-Length required")
+                return
+            try:
+                length = content_length(self.headers.get("Content-Length"))
+            except BodyTooLarge:
+                self.send_error(413, "request body too large")
+                return
+            except ValueError:
+                self.send_error(400, "invalid Content-Length")
+                return
+            raw = self.rfile.read(length)
+            try:
+                message = json.loads(raw)
+            except ValueError:
+                self._send_json(
+                    400,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "parse error"},
+                    },
+                )
+                return
+            if isinstance(message, list):
+                responses: list[dict[str, Any]] = []
+                for item in message:
+                    if not isinstance(item, dict):
+                        responses.append(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": None,
+                                "error": {"code": -32600, "message": "invalid request"},
+                            }
+                        )
+                        continue
+                    response = handle(item)
+                    if response is not None:
+                        responses.append(response)
+                if not responses:
+                    # A batch made entirely of notifications has no reply;
+                    # the Streamable HTTP spec asks for 202 with no body.
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self._send_json(200, responses)
+                return
+            if not isinstance(message, dict):
+                self._send_json(
+                    400,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32600, "message": "invalid request"},
+                    },
+                )
+                return
+            response = handle(message)
+            if response is None:
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send_json(200, response)
+
+        def do_GET(self) -> None:
+            self.send_response(405)
+            self.send_header("Allow", "POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    _warm_stack()
+    server = GuardedServer((host, int(port)), Handler)
+    print(f"sovereign MCP · http://{host}:{port}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def serve() -> None:
+    """Read newline-delimited JSON-RPC from stdin, write to stdout."""
+    _warm_stack()
     for line in sys.stdin:
         line = line.strip()
         if not line:

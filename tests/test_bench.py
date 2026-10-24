@@ -40,3 +40,14 @@ def test_bench_alias_reports_http_error() -> None:
     result = bench_alias("http://gw", "local-code", "hi", transport=transport)
     assert result.ok is False
     assert result.detail == "HTTP 503"
+
+
+def test_bench_alias_reports_transport_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    result = bench_alias("http://gw", "local-agent", "hi", transport=httpx.MockTransport(handler))
+    assert result.ok is False
+    assert result.detail == "ConnectError"
+    assert result.prompt_tokens == 0
+    assert result.completion_tokens == 0

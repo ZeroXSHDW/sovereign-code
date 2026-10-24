@@ -10,6 +10,7 @@ from sovereign_code.tools import (
     continue_models,
     gateway_models,
     opencode_default,
+    opencode_local_models,
     opencode_models,
     qwen_default,
     qwen_models,
@@ -72,6 +73,14 @@ def test_opencode_and_qwen_models_are_listed() -> None:
         "a:1",
         "b:2",
     ]
+    assert opencode_models('{"providers":{"sovereign":{"models":{"auto":{}}}}}') == ["auto"]
+    config = (
+        '{"providers":{'
+        '"local":{"models":{"local-a":{}}},'
+        '"sovereign":{"models":{"auto":{}}},'
+        '"openrouter":{"models":{"cloud-b":{}}}}}'
+    )
+    assert opencode_local_models(config) == ["local-a", "auto"]
     assert qwen_models('{"modelProviders":{"openai":[{"id":"x"},{"id":"y"}]}}') == ["x", "y"]
 
 

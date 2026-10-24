@@ -70,7 +70,7 @@ def test_get_skill_body_and_unknown_skill() -> None:
             "params": {"name": "get_skill", "arguments": {"name": "does-not-exist"}},
         }
     )
-    assert "error" in error
+    assert error["result"]["isError"] is True
 
 
 def test_hf_local_tool_returns_repository_rows() -> None:
@@ -206,4 +206,4 @@ def test_get_skill_refuses_to_leave_the_library() -> None:
         }
     )
     assert response is not None
-    assert "error" in response
+    assert response["result"]["isError"] is True

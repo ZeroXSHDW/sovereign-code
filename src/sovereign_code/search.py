@@ -90,7 +90,7 @@ def embed(
     ollama_url: str,
     model: str,
     texts: list[str],
-    timeout: float = 120.0,
+    timeout: float = 300.0,
 ) -> list[list[float]]:
     try:
         response = shared_client().post(
@@ -201,13 +201,17 @@ def index_path_for(root: Path) -> Path:
 
 class IndexStore:
     def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        from .safefile import ensure_private_dir, harden
+
+        ensure_private_dir(db_path.parent)
         self.db_path = db_path
         self.conn = sqlite3.connect(str(db_path))
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS chunks "
             "(id INTEGER PRIMARY KEY, path TEXT, line INTEGER, text TEXT, vec BLOB)"
         )
+        self.conn.commit()
+        harden(db_path)
 
     def clear(self) -> None:
         self.conn.execute("DROP TABLE IF EXISTS chunks")
@@ -278,8 +282,20 @@ def build_index(
     model: str = DEFAULT_EMBED,
     limit: int | None = None,
 ) -> tuple[int, int, IndexStore]:
-    store = IndexStore(index_path_for(root))
-    store.clear()
+    """Build an index without destroying the previous one on failure.
+
+    The old implementation cleared the live database before the first
+    embedding call. If Ollama was down (or the run was interrupted), the user
+    was left with no index at all and ``knowledge roots`` still showing the
+    previous counts. Build into a sibling file and swap it in only on success.
+    """
+    final_path = index_path_for(root)
+    temp_path = final_path.with_name(final_path.name + ".tmp")
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    store = IndexStore(temp_path)
     files = 0
     chunks = 0
     batch: list[tuple[str, int, str]] = []
@@ -295,22 +311,32 @@ def build_index(
         chunks += len(batch)
         batch.clear()
 
-    for path in iter_source_files(root):
-        if limit is not None and files >= limit:
-            break
-        try:
-            if path.suffix.lower() == ".pdf":
-                from .pdf import read_pdf
+    try:
+        for path in iter_source_files(root):
+            if limit is not None and files >= limit:
+                break
+            try:
+                if path.suffix.lower() == ".pdf":
+                    from .pdf import read_pdf
 
-                text = read_pdf(path).combined_text()
-            else:
-                text = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, RuntimeError, ValueError):
-            continue
-        files += 1
-        for line, chunk in chunk_text(text):
-            batch.append((str(path), line, chunk))
-            if len(batch) >= EMBED_BATCH:
-                flush()
-    flush()
-    return files, chunks, store
+                    text = read_pdf(path).combined_text()
+                else:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+            except (OSError, RuntimeError, ValueError):
+                continue
+            files += 1
+            for line, chunk in chunk_text(text):
+                batch.append((str(path), line, chunk))
+                if len(batch) >= EMBED_BATCH:
+                    flush()
+        flush()
+    except BaseException:
+        store.close()
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    store.close()
+    os.replace(temp_path, final_path)
+    return files, chunks, IndexStore(final_path)

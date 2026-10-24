@@ -137,3 +137,16 @@ def test_install_skill_refuses_an_unsafe_name(tmp_path) -> None:
     skill = Skill("../../evil", "A demo", "Body\n", tmp_path / "demo.md")
     with pytest.raises(ValueError, match="unsafe skill name"):
         install_skill(skill, tmp_path / "skills")
+
+
+def test_ponytail_skills_are_curated() -> None:
+    """The vendored ponytail skills flow through the default curated profile."""
+    names = {skill.name for skill in skills_install.load_curated()}
+    assert {
+        "ponytail",
+        "ponytail-review",
+        "ponytail-audit",
+        "ponytail-debt",
+        "ponytail-gain",
+        "ponytail-help",
+    } <= names

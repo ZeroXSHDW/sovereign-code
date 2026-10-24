@@ -16,6 +16,11 @@ def test_get_pack() -> None:
     assert pack.guardrails
 
 
+def test_get_pack_without_a_key_returns_none() -> None:
+    assert packs.get_pack(None) is None
+    assert packs.get_pack("  ") is None
+
+
 def test_pack_brief_writes_agents(tmp_path) -> None:
     root = tmp_path / "proj"
     root.mkdir()

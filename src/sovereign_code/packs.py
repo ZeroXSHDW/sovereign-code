@@ -215,7 +215,9 @@ PACKS: dict[str, Pack] = {
 }
 
 
-def get_pack(key: str) -> Pack | None:
+def get_pack(key: str | None) -> Pack | None:
+    if not key:
+        return None
     return PACKS.get(key.strip().lower())
 
 

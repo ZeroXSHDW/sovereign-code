@@ -96,7 +96,9 @@ def build_headless(
             argv += ["--model", env.get("ANTHROPIC_MODEL", "local-agent")]
     else:  # opencode
         argv = ["opencode", "run"]
-        if local:
+        # "auto" is the OpenCode config's own router alias (sovereign/auto).
+        # Pinning it as local/auto would name a model that does not exist.
+        if local and agent_model and agent_model != "auto":
             argv += ["-m", f"local/{agent_model}"]
         if unattended:
             argv.append("--auto")

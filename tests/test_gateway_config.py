@@ -6,6 +6,7 @@ from sovereign_code.gateway_config import (
     CLIENT_MODELS,
     ROLE_ALIASES,
     TIER_GATEWAY,
+    default_path,
     render,
     write,
 )
@@ -66,3 +67,7 @@ def test_render_includes_cloud_block_when_provided():
     )
     text = render(cloud_block=cloud_block)
     assert "cloud-kimi-k3" in text
+
+
+def test_default_path_under_local_ai_root():
+    assert default_path().name == "model_list.yaml"

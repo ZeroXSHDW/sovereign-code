@@ -49,6 +49,10 @@ def content_length(header: str | None) -> int:
 class GuardedHandler(BaseHTTPRequestHandler):
     """Base handler that rejects requests not addressed to the loopback name."""
 
+    # A client that sends headers and then stalls used to pin its worker
+    # thread (and its buffer) forever. Bound every read.
+    timeout = 30
+
     def parse_request(self) -> bool:
         if not super().parse_request():
             return False

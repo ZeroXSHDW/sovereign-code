@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -19,9 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR
-from .safefile import write_private
+from .safefile import ensure_private_dir, open_private, write_private
 
-MAX_OUTPUT = 200_000
+MAX_OUTPUT = 400_000
 _SUDO = re.compile(r"^\s*(sudo|doas)\s+(.*)$", re.DOTALL)
 
 
@@ -197,7 +198,7 @@ def run_shell(
     command: str,
     *,
     cwd: str | Path | None = None,
-    timeout: int = 120,
+    timeout: int = 300,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run any shell command, using the macOS auth dialog for a leading sudo."""
@@ -208,9 +209,12 @@ def run_shell(
     budget = max(1, min(7200, int(timeout or 120)))
     privileged = bool(_SUDO.match(text))
     if privileged and sys.platform == "darwin":
-        body = _SUDO.match(text)
-        if body is not None:
-            return _run_privileged(body.group(2), workdir, budget)
+        # Run the whole command, not just the part after "sudo". The
+        # authentication dialog already gives us root, so keeping the original
+        # text means "sudo -u www cmd" still runs cmd as www (root may sudo),
+        # while the old version executed the literal string "-u www cmd" and
+        # failed with "-u: command not found".
+        return _run_privileged(text, workdir, budget)
     try:
         import os as _os
 
@@ -255,9 +259,124 @@ def run_shell(
     }
 
 
+def tmux_available() -> bool:
+    """Return True when tmux is installed and usable."""
+    return shutil.which("tmux") is not None
+
+
+def run_background(
+    command: str,
+    *,
+    cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Launch ``command`` detached and return its pid + log path."""
+    text = command.strip()
+    if not text:
+        raise ValueError("command is empty")
+    workdir = _workdir(cwd)
+    folder = DATA_DIR / "terminals"
+    ensure_private_dir(folder)
+    log_path = folder / f"bg-{time.time_ns()}.log"
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    merged_env["SOVEREIGN_TERMINAL_FULL_ACCESS"] = "1"
+    merged_env["SOVEREIGN_MCP_COMPUTER"] = "1"
+    try:
+        with open_private(log_path, "w") as fh:
+            proc = subprocess.Popen(  # noqa: S602 - unrestricted shell access is the point
+                text,
+                shell=True,
+                cwd=str(workdir),
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                env=merged_env,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        return {"ok": False, "error": str(exc), "cwd": str(workdir)}
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "log": str(log_path),
+        "cwd": str(workdir),
+    }
+
+
+def tmux_session(
+    name: str,
+    *,
+    command: str = "",
+    cwd: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create (or attach to) a named tmux session running ``command``."""
+    if not tmux_available():
+        return {"ok": False, "error": "tmux not installed"}
+    workdir = _workdir(cwd)
+    base = ["tmux", "new-session", "-d", "-s", name, "-c", str(workdir)]
+    if command.strip():
+        base.append(command.strip())
+    completed = subprocess.run(base, capture_output=True, text=True, check=False)
+    if completed.returncode != 0 and "duplicate session" not in (completed.stderr or ""):
+        return {"ok": False, "stderr": completed.stderr.strip(), "cwd": str(workdir)}
+    return {"ok": True, "session": name, "cwd": str(workdir)}
+
+
+def available() -> bool:
+    """Return True when a real terminal can be opened on this platform."""
+    return sys.platform == "darwin"
+
+
+def list_terminals() -> list[Path]:
+    """List recorded terminal command files (newest first)."""
+    folder = DATA_DIR / "terminals"
+    if not folder.is_dir():
+        return []
+    return sorted(folder.glob("sovereign-*.command"), reverse=True)
+
+
+def cleanup_terminals(keep: int = 20) -> int:
+    """Remove old recorded terminal command files, keeping the newest ``keep``."""
+    files = list_terminals()
+    removed = 0
+    for path in files[keep:]:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def info() -> dict[str, Any]:
+    """Describe the terminal environment available to Sovereign Code."""
+    return {
+        "platform": sys.platform,
+        "shell": shell_path(),
+        "available": available(),
+        "max_output": MAX_OUTPUT,
+        "max_timeout": 7200,
+    }
+
+
+# Convenient aliases matching the rest of the codebase's naming.
+run = run_shell
+spawn = spawn_terminal
+
+
 __all__ = [
+    "available",
+    "cleanup_terminals",
+    "info",
+    "list_terminals",
+    "run",
+    "run_background",
     "run_shell",
     "session_command",
     "shell_path",
+    "spawn",
     "spawn_terminal",
+    "tmux_available",
+    "tmux_session",
 ]

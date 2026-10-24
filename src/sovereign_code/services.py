@@ -37,6 +37,7 @@ GATEWAY_LABEL = f"{LABEL_PREFIX}.gateway"
 TIER_LABEL = f"{LABEL_PREFIX}.tier"
 BRIDGE_LABEL = f"{LABEL_PREFIX}.bridge"
 MCP_LABEL = f"{LABEL_PREFIX}.mcp"
+LOOP_LABEL = f"{LABEL_PREFIX}.loop"
 WEBCHAT_LABEL = f"{LABEL_PREFIX}.webchat"
 GUARDIAN_LABEL = f"{LABEL_PREFIX}.guardian"
 
@@ -224,6 +225,106 @@ def service_definitions(settings: Settings | None = None) -> list[Service]:
             log_name="service-mcp.log",
         ),
     ]
+
+
+def _service_path() -> str:
+    """A launchd-safe PATH: the venv, Homebrew, then the user's own order."""
+    parts = [
+        str(Path(sys.executable).parent),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+    for part in os.environ.get("PATH", "").split(os.pathsep):
+        if part and part not in parts:
+            parts.append(part)
+    return os.pathsep.join(parts)
+
+
+def loop_service(
+    target: Path,
+    *,
+    interval: float = 900.0,
+    agent: str = "opencode",
+    agent_model: str = "auto",
+) -> Service:
+    """The opt-in 24/7 coding-loop agent.
+
+    It is deliberately not part of :func:`service_definitions`: the stack
+    services are what every client needs, while the loop edits the user's
+    project unattended. Installing it is an explicit ``sovereign loop`` action.
+    """
+    root = target.expanduser().resolve()
+    return Service(
+        label=LOOP_LABEL,
+        name="24/7 coding loop",
+        argv=(
+            sys.executable,
+            "-m",
+            "sovereign_code",
+            "loop",
+            "run",
+            "--dir",
+            str(root),
+            "--interval",
+            f"{max(0.0, float(interval)):.0f}",
+            "--agent",
+            agent,
+            "--agent-model",
+            agent_model,
+        ),
+        detail="runs OpenCode in auto mode against this project",
+        keep_alive=True,
+        working_dir=str(root),
+        env={"PATH": _service_path()},
+        log_name="service-loop.log",
+    )
+
+
+def install_loop_service(
+    target: Path,
+    *,
+    interval: float = 900.0,
+    agent: str = "opencode",
+    agent_model: str = "auto",
+    start: bool = True,
+) -> tuple[bool, Path]:
+    """Write and load the loop job. Returns (loaded, plist path)."""
+    service = loop_service(target, interval=interval, agent=agent, agent_model=agent_model)
+    path = write_plist(service)
+    if not start:
+        return False, path
+    return load_service(service), path
+
+
+def uninstall_loop_service() -> bool:
+    """Unload the loop job and remove its plist. True when it existed."""
+    path = AGENT_DIR / f"{LOOP_LABEL}.plist"
+    loaded = is_loaded(LOOP_LABEL)
+    existed = path.is_file()
+    if loaded:
+        unload_label(LOOP_LABEL)
+    if existed:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return loaded or existed
+
+
+def loop_service_state() -> dict[str, object]:
+    """Whether the opt-in loop job is installed and loaded right now."""
+    path = AGENT_DIR / f"{LOOP_LABEL}.plist"
+    return {
+        "label": LOOP_LABEL,
+        "installed": path.is_file(),
+        "loaded": is_loaded(LOOP_LABEL),
+        "plist": str(path),
+        "log": str(LOG_DIR / "service-loop.log"),
+    }
 
 
 def plist_text(service: Service) -> str:

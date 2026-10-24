@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR
-from .safefile import harden
+from .safefile import ensure_private_dir, harden
 
 DEFAULT_DB = DATA_DIR / "response_cache.db"
 TTL_DEFAULT = 7200.0  # two hours
@@ -157,9 +157,12 @@ class DiskCache:
 
     def __init__(self, path: str | Path | None = None, ttl: float = TTL_DEFAULT) -> None:
         self.path = Path(path) if path else DEFAULT_DB
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.path.parent)
         self.ttl = ttl
-        self._conn = sqlite3.connect(str(self.path))
+        # The tier gateway serves each request on its own thread, so the
+        # connection is deliberately shared across threads. All access is
+        # serialised by ``self._lock`` below.
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -169,10 +172,21 @@ class DiskCache:
         self._conn.commit()
         # The cached values are whole completions, which contain the user's
         # prompt and the model's reply. They are not anybody else's business.
-        harden(self.path)
+        self._harden_sidecars()
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+
+    def _harden_sidecars(self) -> None:
+        """Lock down the database and the WAL/SHM files SQLite creates.
+
+        ``harden(self.path)`` alone is not enough: in WAL mode the most recent
+        prompts and replies live in ``-wal``, which SQLite creates with the
+        process umask and which is therefore world-readable on a default
+        macOS account.
+        """
+        for suffix in ("", "-wal", "-shm"):
+            harden(Path(f"{self.path}{suffix}"))
 
     def close(self) -> None:
         try:
@@ -224,6 +238,8 @@ class DiskCache:
                 (key, blob, expires, now, model, tier),
             )
             self._conn.commit()
+            # The sidecars are created on the first write, after __init__.
+            self._harden_sidecars()
 
     def stats(self) -> dict[str, Any]:
         with self._lock:

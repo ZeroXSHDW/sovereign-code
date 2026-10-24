@@ -213,14 +213,22 @@ class Handler(GuardedHandler):
         return name in {"127.0.0.1", "localhost", "::1"}
 
     def _origin_is_local(self) -> bool:
-        """True when the request carries no cross-origin ``Origin``."""
-        origin = (self.headers.get("Origin") or "").strip().lower()
+        """True when the request carries no cross-origin ``Origin``.
+
+        Matching only the hostname is not enough: any *other* server on
+        loopback (``http://127.0.0.1:8888``) would pass, and it could then
+        drive ``/api/browse``. Require this server's exact origin.
+        """
+        origin = (self.headers.get("Origin") or "").strip().lower().rstrip("/")
         if not origin:
             # Same-origin fetches from the bundled page send no Origin.
             return True
-        name = origin.split("//", 1)[-1].split("/", 1)[0]
-        host = name.rsplit(":", 1)[0] if ":" in name else name
-        return host.strip("[]") in {"127.0.0.1", "localhost", "::1"}
+        port = int(getattr(self, "port", DEFAULT_PORT))
+        return origin in {
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+            f"http://[::1]:{port}",
+        }
 
     def _reject_cross_origin(self) -> bool:
         """Refuse a request that did not come from this page.
@@ -247,11 +255,14 @@ class Handler(GuardedHandler):
             self.wfile.write(body)
             return
         if path.path == "/api/health":
+            router = urlsplit(self.router)
             _json(
                 self,
                 200,
                 {
-                    "ok": port_open("127.0.0.1", 4010),
+                    # Follow the configured router instead of hardcoding 4010,
+                    # which reported "offline" when the gateway ran elsewhere.
+                    "ok": port_open(router.hostname or "127.0.0.1", router.port or 4010),
                     "local_only": local_only(),
                     "router": self.router,
                 },
@@ -294,6 +305,9 @@ class Handler(GuardedHandler):
         except BodyTooLarge:
             _json(self, 413, {"error": "request body too large"})
             return
+        except ValueError:
+            _json(self, 400, {"error": "invalid Content-Length"})
+            return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
@@ -329,7 +343,7 @@ class Handler(GuardedHandler):
                 profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
                 policy=policy,
                 headless=False,
-                timeout_ms=60000,
+                timeout_ms=120000,
             )
             session.start(url)
             planner = ModelPlanner(self.router, model="balanced")
@@ -375,6 +389,9 @@ class Handler(GuardedHandler):
             length = content_length(self.headers.get("Content-Length"))
         except BodyTooLarge:
             _json(self, 413, {"error": "request body too large"})
+            return
+        except ValueError:
+            _json(self, 400, {"error": "invalid Content-Length"})
             return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -462,10 +479,40 @@ def ensure_running(port: int = DEFAULT_PORT, router: str = DEFAULT_ROUTER) -> bo
     return False
 
 
+def _pid_is_webchat(pid: int) -> bool:
+    """True when ``pid`` still belongs to the web-chat server.
+
+    A pid file survives a crash and a reboot. The number can then be reused by
+    an unrelated process, and a blind ``SIGTERM`` would kill it.
+    """
+    try:
+        probe = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    command = probe.stdout.strip()
+    return (
+        probe.returncode == 0
+        and "sovereign" in command
+        and ("webchat" in command or "chat-web" in command or "chat_web" in command)
+    )
+
+
 def stop(port: int = DEFAULT_PORT) -> bool:
     try:
         pid = int(pid_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
+        return False
+    if not _pid_is_webchat(pid):
+        try:
+            pid_path().unlink()
+        except OSError:
+            pass
         return False
     try:
         os.kill(pid, signal.SIGTERM)

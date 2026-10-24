@@ -34,7 +34,7 @@ from ..ollama import OllamaClient
 from ..router import Task, choose
 from ..status import Snapshot, collect
 
-REFRESH_SECONDS = 5.0
+REFRESH_SECONDS = 2.0
 
 
 def _refresh_seconds() -> float:
@@ -69,7 +69,7 @@ run `sovereign code`.
 class MonitorHelp(ModalScreen[None]):
     """Keys and read-only guarantees, without taking space in the live view."""
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape,q,question_mark", "dismiss", "Close"),
         Binding("ctrl+q", "dismiss", "Close"),
     ]
@@ -83,7 +83,7 @@ class MonitorApp(App[None]):
     CSS_PATH = Path(__file__).with_name("app.tcss")
     TITLE = "Sovereign Code · live monitor"
     SUB_TITLE = "skill bank · prompt bank · live model use"
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f2", "launch_code", "Qwen"),
         Binding("f4", "launch_codex", "Codex"),
@@ -95,7 +95,7 @@ class MonitorApp(App[None]):
         Binding("p", "pause", "Pause"),
         Binding("y", "copy", "Copy", show=False),
         Binding("question_mark", "help", "Help", show=False),
-        Binding("f10", "open_terminal", "Terminal", show=False),
+        Binding("f10", "open_terminal", "Terminal", show=True),
     ]
 
     def __init__(self, settings: Settings | None = None, demo: bool = False) -> None:
@@ -120,10 +120,14 @@ class MonitorApp(App[None]):
                 yield Static("", id="system-panel", classes="panel")
                 yield Static("SERVICES", classes="section-title")
                 yield Static("", id="service-panel", classes="panel")
+                yield Static("APPLICATIONS", classes="section-title")
+                yield Static("", id="client-panel", classes="panel")
                 yield Static("MODEL INVENTORY", classes="section-title")
                 yield Static("", id="model-panel", classes="panel")
                 yield Static("RESIDENT MODELS", classes="section-title")
                 yield Static("", id="loaded-panel", classes="panel")
+                yield Static("ERRORS", classes="section-title")
+                yield Static("", id="error-panel", classes="panel")
             with VerticalScroll(id="main"):
                 with Horizontal(id="bank-row"):
                     with Vertical(id="skill-box"):
@@ -232,8 +236,10 @@ class MonitorApp(App[None]):
         self._render_health(report)
         self._render_system(report)
         self._render_services(report)
+        self._render_clients(report)
         self._render_inventory(report)
         self._render_loaded(report)
+        self._render_errors(report)
         self._render_banks(report)
         self._render_projects(report)
         self._render_activity_summary(report)
@@ -288,6 +294,43 @@ class MonitorApp(App[None]):
             text.append(f"{service.name}", style="bold" if service.up else "dim")
             text.append(f"  :{service.port}\n", style="dim")
         self.query_one("#service-panel", Static).update(text)
+
+    def _render_clients(self, _report: LiveReport) -> None:
+        from ..clients import local_clients, resolve_client_models
+
+        text = Text()
+        resolved = None
+        if self.snapshot is not None:
+            try:
+                resolved = resolve_client_models(
+                    self.snapshot.views,
+                    self.snapshot.potential_free_gb,
+                    self.settings.max_context,
+                )
+            except Exception:
+                resolved = None
+        try:
+            clients = local_clients(resolved)
+        except Exception as exc:
+            text.append(f"client list failed: {exc}", style="red")
+            self.query_one("#client-panel", Static).update(text)
+            return
+        for client in clients:
+            text.append(f"{client.name}\n", style="bold")
+            installed = "ready" if client.installed else "missing"
+            text.append(f"  {client.capability} · {client.model} · {installed}\n", style="dim")
+        if not clients:
+            text.append("no clients detected\n", style="dim")
+        self.query_one("#client-panel", Static).update(text)
+
+    def _render_errors(self, report: LiveReport) -> None:
+        text = Text()
+        if not report.errors:
+            text.append("no errors reported\n", style="green")
+        else:
+            for err in report.errors[:8]:
+                text.append(f"• {err}\n", style="red")
+        self.query_one("#error-panel", Static).update(text)
 
     def _render_inventory(self, report: LiveReport) -> None:
         text = Text()

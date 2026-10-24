@@ -5,6 +5,109 @@ All notable changes to Sovereign Code.
 ## [Unreleased]
 
 ### Added
+- **Native OpenCode V2 configuration**: the generated `opencode.json` now uses
+  `providers`, `mcp.servers`, and ordered `permissions` instead of the
+  deprecated V1 shapes. It adds read-only `reviewer` and `planner` subagents,
+  `/check`, `/review`, and `/plan` commands, `experimental.todo` tracking, and
+  background compaction. It also formats after edits and ignores generated
+  trees in the watcher. An existing V1 `provider`/`permission`/`mcp` block is
+  migrated when `install-clients` runs.
+- **Opt-in 24/7 coding loop** (`sovereign loop`): one iteration preflights the
+  project's checks, picks the next unchecked roadmap/backlog item or
+  `TODO`/`FIXME`, routes the task through the skill bank (cards plus a few
+  risk-scanned bodies), and hands a bounded local-only prompt to
+  `opencode run --auto`. It verifies with the project's own checks and records
+  every run under `data/loop/runs/`. `loop enable` installs an opt-in
+  `com.user.sovereign.loop` launchd job (not part of `autostart`), `loop
+  disable` unloads it, and a dirty git tree or repeated failure pauses the loop
+  instead of spinning. OpenCode's `auto` model now uses `sovereign/auto`
+  instead of a non-existent `local/auto` pin.
+
+## [0.4.1] - 2026-10-24
+
+### Fixed
+- **MCP over Streamable HTTP now exists**: `sovereign mcp --http --host --port`
+  serves the same JSON-RPC handler the launchd service always advertised on
+  8765. Previously the service passed flags the CLI rejected, exited 2, and
+  was restarted by launchd every 10 seconds. Protocol negotiation now echoes
+  a supported client version, and tool failures are returned as `isError`
+  results instead of JSON-RPC protocol errors.
+- **The tier gateway's disk cache works from request threads**: the SQLite
+  connection is opened with `check_same_thread=False` and guarded by the
+  existing lock, so cacheable non-streaming requests no longer fail with
+  "SQLite objects created in a thread can only be used in that same thread".
+  The WAL/SHM sidecars are also created owner-only.
+- **The model catalog reports the real model behind every alias**:
+  `sovereign-fast`, `local-code`, `local-agent` and the other tier aliases
+  were all advertised as `ultra`/27B because of a stale loop variable. The
+  routing itself was correct; the metadata was not.
+- **PDF downloads are fenced**: the filename from `Content-Disposition` is
+  reduced to a basename, the URL is checked against the browser policy on
+  every redirect hop, the body is capped at 50 MB, and non-PDF responses are
+  refused. `read_pdf_url` also accepts `output_dir`/`filename` again.
+- **PDF reads survive a broken renderer**: a missing `pdftoppm` or one damaged
+  page no longer discards text `pdftotext` already extracted; the failure is
+  recorded in `metadata["ocr_error"]`.
+- **PDF pages are ordered and numbered correctly**: rendered pages sort
+  numerically (`page-2` before `page-10`), a re-render clears the previous
+  range instead of returning stale images, `extract_figures` keeps the real
+  page number, and each `PDFPage` owns only its own image instead of a copy of
+  every image in the document.
+- **Sessions and backups cannot collide**: two sessions started in the same
+  second get distinct files, and backups use microsecond timestamps, write to
+  a `.partial` staging file, and rename into place. A corrupt JSONL line no
+  longer hides every later message in a session.
+- **Editing cannot corrupt files**: `repo_edit`/`repo_patch` refuse non-UTF-8
+  files instead of replacing every non-ASCII byte with U+FFFD, and patches
+  preserve CRLF line endings. `repo_map`/`repo_search` no longer follow
+  symlinks out of the workspace.
+- **Undo restores binary files**: a file that could not be read as UTF-8 is
+  recorded and restored as bytes instead of being treated as "did not exist"
+  and deleted. Journal paths are re-resolved inside the project.
+- **Browser policy covers legacy numeric hosts and glued labels**:
+  `127.1`, `0x7f.1` and `2130706433` are recognised as loopback, hostnames
+  resolving to private addresses are refused, subframe navigations are
+  policy-checked, and private subresources are aborted. `DeleteAccount`,
+  `SendMessage` and `BuyNow` now require confirmation like their spaced
+  forms.
+- **Prompt search is keyed by prompt id**: the FTS table is migrated to carry
+  `prompt_id`, deleting one version no longer erases the search rows of every
+  version, first/last tags are filterable, and re-importing the same export is
+  idempotent.
+- **A failed re-index keeps the old index**: `build_index` builds into a
+  sibling database and swaps it in only after a successful run.
+- **Knowledge search uses the indexed embedding model and configured Ollama
+  URL**, so a root indexed with another model no longer returns zero-score
+  noise.
+- **The web chat server requires its exact origin**: another loopback server
+  on a different port can no longer drive `/api/browse`, and health follows
+  the configured router port.
+- **`sudo -u user cmd` runs the requested command**: the macOS privileged path
+  no longer executes the literal option string as the command.
+- **Private data stays private**: the response cache sidecars, prompt and
+  knowledge databases, search index, project memory, session exports and PDF
+  page images are created owner-only; `write_private` stages and renames
+  instead of truncating in place.
+- **Local-first routing cannot select a cloud tag** as the fallback model, and
+  an unreadable `config.toml` is reported by `doctor` and blocks
+  `config --set` instead of being silently replaced by defaults.
+- **`pdf_figures` results are bounded**: the MCP tool returns at most
+  `max_pages` (default 8) with base64 dropped once a payload budget is spent,
+  instead of dumping every rendered page into one tool result.
+- **A failed backup leaves no partial archive**, so `prune_backups` cannot
+  mistake a truncated `.partial` file for the newest good backup.
+- **An MCP HTTP batch of only notifications answers 202** with no body, as the
+  Streamable HTTP specification requires.
+- **`shared_client` no longer reuses a pooled client across different
+  transports**, so a caller-supplied transport is honoured instead of silently
+  ignored after the first call.
+- **`install-clients` no longer writes a machine-specific BrowserOS endpoint**
+  into `opencode.json`; the complementary reference servers it does register
+  are documented in the README.
+
+### Added
+- **Browser hover action**: `hover` added to browser actions, executor, MCP schema, and agent prompt.
+- **PDF tables/figures**: `extract_tables` and `extract_figures` plus `pdf_tables`/`pdf_figures` MCP tools and CLI actions.
 - **PDF auto-read** (`src/sovereign_code/pdf.py`): `auto_read()` detects local paths vs URLs,
   downloads if needed, extracts text, OCRs scanned pages, and returns the document.
   Compatibility shims (`pdf_ocr`, `pdf_reader`, `pdf_tools`, `doc_ocr`, `document`,
@@ -15,7 +118,11 @@ All notable changes to Sovereign Code.
 ### Changed
 - Raised timeouts, limits and token budgets across the CLI, MCP server, tier gateway,
   browser agent, search, skills, terminal, repomap and webchat for the upgrade pass.
-- Aligned package version to 0.4.0.
+- **Tooling gates tightened**: mypy now checks the TUI as well (87 files), the
+  coverage floor rose from 45% to 50%, and the dependency audit runs
+  `pip-audit --strict` against an exported third-party requirements file instead
+  of falling back to a non-strict pass.
+- Aligned package version to 0.4.1.
 
 ## [0.4.0] - 2026-10-23
 

@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from .config import DATA_DIR
+from .safefile import ensure_private_dir, open_private, write_private
 
 
 def project_slug(cwd: Path) -> str:
@@ -27,9 +28,9 @@ def ensure_memory(cwd: Path | None = None) -> Path:
     """The memory file, created with its header when it does not exist yet."""
     resolved = (cwd or Path.cwd()).resolve()
     path = memory_path(resolved)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(path.parent)
     if not path.exists():
-        path.write_text(f"# Project memory · {resolved.name}\n", encoding="utf-8")
+        write_private(path, f"# Project memory · {resolved.name}\n")
     return path
 
 
@@ -66,7 +67,7 @@ def read_memory(cwd: Path | None = None) -> str:
 
 def add_memory(text: str, cwd: Path | None = None) -> Path:
     path = ensure_memory(cwd)
-    with path.open("a", encoding="utf-8") as handle:
+    with open_private(path, "a") as handle:
         handle.write(f"\n- {text.strip()}\n")
     return path
 

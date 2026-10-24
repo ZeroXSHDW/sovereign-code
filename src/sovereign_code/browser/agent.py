@@ -26,6 +26,7 @@ Reply with exactly one JSON object and nothing else.
 Allowed actions:
 {"action":"navigate","url":"https://example.com"}
 {"action":"click","id":3}
+{"action":"hover","id":3}
 {"action":"fill","id":4,"text":"..."}
 {"action":"select","id":5,"value":"..."}
 {"action":"press","key":"Enter"}

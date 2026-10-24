@@ -125,6 +125,21 @@ async def test_backup_command_delegates(monkeypatch):
     assert calls == [("backup",)]
 
 
+async def test_pdf_command_delegates(monkeypatch):
+    calls = []
+
+    async def fake_run_cli(*args):
+        calls.append(args)
+
+    app = SovereignApp(settings=Settings(), demo=True)
+    app._run_cli = fake_run_cli
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app.handle_command("/pdf /tmp/a.pdf")
+        await pilot.pause()
+    assert calls == [("pdf", "/tmp/a.pdf")]
+
+
 async def test_config_coercion_helpers():
     from sovereign_code.cli import _coerce_setting
 

@@ -707,7 +707,12 @@ questions reach the 4B and hard ones reach the 27B.
 **OpenCode.** The default model is `sovereign/auto` with
 `sovereign/balanced` for background calls; `opencode run --auto` edits files
 through the tier gateway. The `sovereign` MCP server is connected; `local/` and
-`openrouter/` providers remain available for explicit choices.
+`openrouter/` providers remain available for explicit choices. The generated
+config is native OpenCode V2: ordered `permissions` (with `rm -rf` and `sudo`
+denied, `git push`/`git commit` asking), read-only `reviewer` and `planner`
+subagents, `/check` `/review` `/plan` commands, todo tracking, and background
+compaction. Existing V1 `provider`/`permission`/`mcp` blocks are migrated on
+the next `sovereign install-clients`.
 
 ### Sovereign Local menu bar
 
@@ -789,7 +794,10 @@ windows remain cloud clients.
 
 ### MCP for ChatGPT, Claude Desktop, Codex, Claude Code, OpenCode, Qwen
 
-`sovereign mcp` serves newline-delimited JSON-RPC over stdio. It exposes:
+`sovereign mcp` serves newline-delimited JSON-RPC over stdio.
+`sovereign mcp --http --host 127.0.0.1 --port 8765` serves the same handler
+over Streamable HTTP for the launchd service and connector-style clients. It
+exposes:
 
 - `list_models` — installed local/cloud models and the gateway route.
 - `best_model(task)` — the router's pick and context window.
@@ -811,8 +819,9 @@ windows remain cloud clients.
 - `list_packs()` / `pack_profile(key)` — task packs (pentest, legal, forensics, …).
 - `browser_open(url)` / `browser_observe()` / `browser_act(...)` /
   `browser_screenshot()` / `browser_close()` — drive the visible local Chromium
-  browser: navigate, click, fill, select, press, scroll, extract, and screenshot.
-  Destructive actions require `confirm=true`; secrets are refused.
+  browser: navigate, click, hover, fill, select, press, scroll, wait, extract,
+  and screenshot. Destructive actions require `confirm=true`; secrets are
+  refused.
 - `hf_status` / `search_hf_models` / `hf_model_info` / `search_hf_datasets` /
   `hf_dataset_info` / `list_hf_local` — Hugging Face Hub discovery.
 
@@ -821,6 +830,29 @@ writes the server into Codex (`~/.codex/config.toml`, shared by the ChatGPT
 app), Claude Desktop (`claude_desktop_config.json`), Claude Code (`claude mcp`),
 OpenCode (`opencode.json`), and Qwen Code. Restart the desktop apps after the
 first install.
+
+### Complementary MCP servers
+
+`sovereign install-clients` keeps the `sovereign` server as the single source of
+truth for skills, browser, filesystem, and checks. It also registers two
+official reference servers alongside it; they are independent and never replace
+Sovereign's tools:
+
+- `@modelcontextprotocol/server-filesystem` — fast, sandboxed file reads/writes
+  for large trees, scoped to `~/Documents` and `~/Downloads`.
+- `@modelcontextprotocol/server-memory` — persistent knowledge graph across
+  sessions.
+
+Install any other reference server on demand with `npx -y` when you need more:
+
+- `@playwright/mcp` — full browser automation independent of Sovereign's
+  policy-checked browser.
+- `@modelcontextprotocol/server-git` / `server-fetch` — deeper git history and
+  HTTP fetching.
+
+All of these run on stdio and compose with the `sovereign` server; OpenCode,
+Claude Code, and Qwen Code can load any subset by adding an entry to their MCP
+config (see `docs/ARCHITECTURE.md`).
 
 ### Skills in every client
 
@@ -1067,6 +1099,8 @@ sovereign pdf report.pdf ocr             # force OCR of every page
 sovereign pdf report.pdf images --dpi 300 --out ./pages
 sovereign pdf report.pdf vision --model qwen3.8:27b
 sovereign pdf report.pdf json            # full structured document as JSON
+sovereign pdf report.pdf tables          # best-effort table rows per page
+sovereign pdf report.pdf figures --dpi 150  # rendered page images
 sovereign ocr scan.png                   # OCR a single image
 ```
 
@@ -1081,8 +1115,9 @@ sovereign ocr scan.png                   # OCR a single image
   clear `RuntimeError` pointing at `brew install poppler tesseract`.
 - **Knowledge indexing**: `sovereign index` and `sovereign knowledge` now
   include PDFs, so semantic search covers documents too.
-- **MCP tools**: `pdf_read`, `pdf_ocr`, `pdf_auto` are exposed to connected
-  agents.
+- **MCP tools**: `pdf_read`, `pdf_ocr`, `pdf_auto`, `pdf_tables` and
+  `pdf_figures` are exposed to connected agents. `pdf_figures` caps its output
+  (`max_pages`, base64 budget) so a long document cannot flood a client.
 
 Install: `brew install poppler tesseract`.
 
@@ -1125,6 +1160,48 @@ into every chat session, so project preferences persist. If a project has an
 code`, and `sovereign pipeline` automatically. `sovereign clone
 <url>` bootstraps a GitHub repo under `~/Documents/projects/` (then
 `sovereign index` it for search).
+
+### 24/7 coding loop (opt-in)
+
+```sh
+sovereign loop status                          # off by default
+sovereign loop enable --dir ~/projects/demo    # enable + install the launchd job
+sovereign loop enable --dir . --foreground     # enable, no launchd job
+sovereign loop run --dir .                     # run in this terminal
+sovereign loop once --dir . --dry-run          # show the next task and prompt
+sovereign loop disable --dir ~/projects/demo   # stop it and remove the job
+sovereign logs loop -f                         # follow the service log
+```
+
+`sovereign loop` keeps a project moving without a human in the loop. One
+iteration runs the project's own checks first (a red tree outranks new work),
+picks the next unchecked item from `docs/ROADMAP.md` / `TODO.md` or a
+`TODO`/`FIXME` comment, routes the task through the skill bank (compact cards,
+then a few risk-scanned bodies), and hands a bounded, local-only prompt to
+`opencode run --auto`. OpenCode uses the `sovereign/auto` router model that
+`sovereign install-clients` writes into its config; no cloud provider is
+selected. The loop then runs the project checks again, records the result under
+`data/loop/runs/`, and sleeps for `--interval` (15 minutes by default).
+
+When the backlog is empty, `--idle improve` (the default) rotates through one
+small tests / docs / quality / security / performance / DX improvement at a
+time; `--idle wait` stops instead. A task that fails `--max-attempts` times
+(3) pauses the loop rather than spinning. A dirty git tree blocks the loop
+unless `--allow-dirty` is explicit, and the prompt forbids commits, pushes,
+dependency installs, and any cloud call.
+
+`sovereign loop enable` installs `com.user.sovereign.loop` as a launchd job:
+it starts at login and launchd restarts it after a crash. It is deliberately
+**not** part of `sovereign autostart --install` — the stack services are needed
+by every client, while the loop edits your project unattended. Nothing runs
+until you enable it, and `sovereign loop disable` unloads the job and turns the
+loop off. The state file, run artifacts, and log are owner-only; read the log
+with `sovereign logs loop`.
+
+Prerequisite: OpenCode installed and configured once with
+`sovereign install-clients` (or `sovereign project init`, which writes a
+project-local `opencode.json`). The loop passes `--auto`, so the agent is not
+asked to approve each edit inside an unattended run.
 
 Honest limits: this is a 24 GB Mac. Models run one or two at a time (Ollama
 swaps automatically), MLX is already active for supported models, and "more

@@ -45,6 +45,31 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _read_text_strict(target: Path) -> str:
+    """Read a file as UTF-8, refusing instead of rewriting it lossily.
+
+    ``errors="replace"`` looks harmless on the read, but the next write turns
+    every non-UTF-8 byte into U+FFFD: one unrelated one-line edit corrupts a
+    Latin-1 source file from top to bottom. Refusing is the only safe option
+    until the caller asks for an explicit encoding.
+    """
+    try:
+        # newline="" keeps CRLF intact. The default universal-newline mode
+        # silently converts every line ending to LF on read, so the next write
+        # rewrote whole CRLF files.
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            return handle.read()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{target} is not valid UTF-8; refusing to rewrite it") from exc
+
+
+def _detect_newline(text: str) -> str:
+    """Return the newline style used by the majority of ``text``."""
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    return "\r\n" if crlf > lf else "\n"
+
+
 def _atomic_write(target: Path, text: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     mode = 0o644
@@ -56,7 +81,12 @@ def _atomic_write(target: Path, text: str) -> None:
     temporary = ""
     try:
         with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=target.parent, delete=False, prefix=".sovereign-"
+            "w",
+            encoding="utf-8",
+            newline="",
+            dir=target.parent,
+            delete=False,
+            prefix=".sovereign-",
         ) as handle:
             temporary = handle.name
             handle.write(text)
@@ -92,7 +122,7 @@ def write_text(
     if exists and target.is_dir():
         raise ValueError(f"is a directory: {target}")
     if expected_sha256:
-        current = target.read_text(encoding="utf-8", errors="replace") if exists else ""
+        current = _read_text_strict(target) if exists else ""
         if digest(current) != expected_sha256.strip().lower():
             raise ValueError("file changed since it was read (sha256 mismatch)")
     _atomic_write(target, content)
@@ -112,7 +142,7 @@ def edit_text(
         raise ValueError(f"not a file: {target}")
     if not old:
         raise ValueError("old string is empty")
-    text = target.read_text(encoding="utf-8", errors="replace")
+    text = _read_text_strict(target)
     occurrences = text.count(old)
     if occurrences == 0:
         raise ValueError("old string not found")
@@ -126,7 +156,7 @@ def edit_text(
 
 def preview(path: Path, old: str, new: str) -> str:
     """The unified diff an edit would produce, without touching the file."""
-    text = path.expanduser().read_text(encoding="utf-8", errors="replace")
+    text = _read_text_strict(path.expanduser())
     updated = text.replace(old, new, 1)
     return "".join(
         difflib.unified_diff(
@@ -157,8 +187,9 @@ def apply_patch(root: Path, patch: str, *, max_bytes: int = MAX_WRITE_BYTES) -> 
         raise ValueError(f"patch path is outside the workspace: {relative}")
     if not target.is_file():
         raise ValueError(f"not a file: {target}")
-    original = target.read_text(encoding="utf-8", errors="replace")
+    original = _read_text_strict(target)
     source = original.splitlines(keepends=True)
+    newline = _detect_newline(original)
 
     out: list[str] = []
     index = 2
@@ -202,7 +233,7 @@ def apply_patch(root: Path, patch: str, *, max_bytes: int = MAX_WRITE_BYTES) -> 
                 changed += 1
                 old_seen += 1
             elif tag == "+":
-                out.append(body + "\n")
+                out.append(body + newline)
                 changed += 1
                 new_seen += 1
             index += 1
@@ -222,4 +253,4 @@ def apply_patch(root: Path, patch: str, *, max_bytes: int = MAX_WRITE_BYTES) -> 
 def _matches(source: list[str], cursor: int, body: str) -> bool:
     if cursor >= len(source):
         return False
-    return source[cursor].rstrip("\n") == body.rstrip("\n")
+    return source[cursor].rstrip("\r\n") == body.rstrip("\r\n")

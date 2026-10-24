@@ -35,6 +35,8 @@ CURATED_PATTERNS = (
     "addy--*.md",
     "sovereign--*.md",
     "accessibility-compliance--*.md",
+    # Ponytail: the lazy-senior-dev ruleset and its review/audit/debt skills.
+    "ponytail--*.md",
     "agent--architect.md",
     "agent--architect-review.md",
     "agent--code-reviewer.md",
@@ -94,9 +96,21 @@ TOP_AGENT_PATTERNS = (
     "agent--test-automator.md",
 )
 
+# Fastest / highest-leverage skill families: debugging, browser automation,
+# and performance tooling — surfaced so every client can pick them without a
+# 22k-file search. The curated jpeetz--* set already covers browser automation,
+# frontend, performance and hardening by explicit filename.
+SPEED_PATTERNS = (
+    "jpeetz--*.md",
+    "agent--team-debugger.md",
+    "agent-teams--parallel-debugging.md",
+    "agent-teams--parallel-feature-development.md",
+    "python-development--python-performance-optimization.md",
+)
+
 PROFILES: dict[str, tuple[str, ...]] = {
     "core": CURATED_PATTERNS,
-    "quality": CURATED_PATTERNS + QUALITY_PATTERNS + TOP_AGENT_PATTERNS,
+    "quality": CURATED_PATTERNS + QUALITY_PATTERNS + TOP_AGENT_PATTERNS + SPEED_PATTERNS,
 }
 
 DEFAULT_PROFILE = "core"
@@ -333,6 +347,7 @@ def install_project(
 # task needs. `sovereign skills index` regenerates the managed block from here.
 BRIEF_SKILLS: tuple[str, ...] = (
     "using-agent-skills",
+    "ponytail",
     "spec-driven-development",
     "planning-and-task-breakdown",
     "incremental-implementation",

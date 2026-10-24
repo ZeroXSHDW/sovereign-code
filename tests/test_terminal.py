@@ -44,3 +44,22 @@ def test_run_shell_timeout_cap() -> None:
     # very large timeout is capped, command still runs
     result = terminal.run_shell("echo capped", timeout=100000)
     assert result["ok"] is True
+
+
+def test_run_background(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(terminal, "DATA_DIR", tmp_path)
+    result = terminal.run_background("echo bg-test")
+    assert result["ok"] is True
+    assert "pid" in result
+    assert "log" in result
+
+
+def test_tmux_available_returns_bool() -> None:
+    assert isinstance(terminal.tmux_available(), bool)
+
+
+def test_tmux_session_without_tmux() -> None:
+    if terminal.tmux_available():
+        return
+    result = terminal.tmux_session("sovereign-test")
+    assert result["ok"] is False

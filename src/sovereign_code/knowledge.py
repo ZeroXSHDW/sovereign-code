@@ -55,9 +55,19 @@ class KnowledgeBase:
         """,
     )
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, *, ollama_url: str | None = None) -> None:
+        from .safefile import ensure_private_dir
+
         self.path = Path(path) if path else DEFAULT_DB
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.path.parent)
+        if ollama_url is None:
+            try:
+                from .config import Settings
+
+                ollama_url = Settings.load().ollama_url
+            except Exception:
+                ollama_url = "http://127.0.0.1:11434"
+        self.ollama_url = ollama_url
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -65,6 +75,13 @@ class KnowledgeBase:
         for statement in self._SCHEMA:
             self._conn.execute(statement)
         self._conn.commit()
+        self._harden_sidecars()
+
+    def _harden_sidecars(self) -> None:
+        from .safefile import harden
+
+        for suffix in ("", "-wal", "-shm"):
+            harden(Path(f"{self.path}{suffix}"))
 
     def close(self) -> None:
         try:
@@ -94,7 +111,7 @@ class KnowledgeBase:
         if not root_path.is_dir():
             raise ValueError(f"not a directory: {root}")
         files, chunks, store = build_index(
-            root_path, "http://127.0.0.1:11434", model=embed_model, limit=limit
+            root_path, self.ollama_url, model=embed_model, limit=limit
         )
         store.close()
         now = datetime.now(UTC).isoformat()
@@ -111,6 +128,7 @@ class KnowledgeBase:
             (str(root_path), int(files), int(chunks), now, embed_model),
         )
         self._conn.commit()
+        self._harden_sidecars()
         return {"files": int(files), "chunks": int(chunks)}
 
     # ---------------------------------------------------------------- search
@@ -125,22 +143,26 @@ class KnowledgeBase:
     ) -> list[KnowledgeHit]:
         """Semantic search across indexed roots (or one root)."""
 
-        roots = self._roots()
+        rows = self._conn.execute(
+            "SELECT root, embed_model FROM roots ORDER BY indexed_at DESC"
+        ).fetchall()
         if root is not None:
             root_path = str(Path(root).expanduser().resolve())
-            if root_path not in roots:
+            rows = [row for row in rows if row["root"] == root_path]
+            if not rows:
                 return []
-            roots = [root_path]
         hits: list[KnowledgeHit] = []
         seen: set[str] = set()
-        for root_path in roots:
+        for row in rows:
+            root_path = str(row["root"])
             db = index_path_for(Path(root_path))
             if not db.is_file():
                 continue
+            # Use the model the root was actually indexed with. Searching a
+            # different embedding space returns zero-score noise.
+            stored_model = str(row["embed_model"] or embed_model)
             try:
-                results = search_query(
-                    "http://127.0.0.1:11434", db, query, model=embed_model, top=top
-                )
+                results = search_query(self.ollama_url, db, query, model=stored_model, top=top)
             except Exception:
                 continue
             for result in results:

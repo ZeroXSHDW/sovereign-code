@@ -29,11 +29,42 @@ args = ["-m", "sovereign_code", "mcp"]
 def test_opencode_config_has_working_provider_and_mcp() -> None:
     config = client_setup.opencode_config()
     assert config["model"] == "sovereign/auto"
-    local = config["provider"]["local"]
-    assert local["options"]["baseURL"] == "http://127.0.0.1:11434/v1"
-    assert local["models"]["qwen3-coder:30b"]["tool_call"] is True
-    assert config["mcp"]["sovereign"]["type"] == "local"
-    assert config["mcp"]["sovereign"]["command"][-2:] == ["sovereign_code", "mcp"]
+    local = config["providers"]["local"]
+    assert local["package"] == "@opencode/ai/providers/openai-compatible"
+    assert local["settings"]["baseURL"] == "http://127.0.0.1:11434/v1"
+    assert local["models"]["qwen3-coder:30b"]["capabilities"]["tools"] is True
+    assert config["mcp"]["servers"]["sovereign"]["type"] == "local"
+    assert config["mcp"]["servers"]["sovereign"]["command"][-2:] == ["sovereign_code", "mcp"]
+
+
+def test_opencode_config_is_native_v2_and_adds_coding_helpers() -> None:
+    config = client_setup.opencode_config()
+    # V2 maps and ordered rules, not the deprecated V1 shapes.
+    assert "provider" not in config
+    assert "permission" not in config
+    assert "providers" in config and "permissions" in config
+    assert isinstance(config["permissions"], list)
+    assert any(rule["action"] == "shell" for rule in config["permissions"])
+    assert config["agents"]["reviewer"]["mode"] == "subagent"
+    assert config["agents"]["reviewer"]["permissions"] == [
+        {"action": "edit", "resource": "*", "effect": "deny"}
+    ]
+    assert {"check", "review", "plan"} <= set(config["commands"])
+    assert config["experimental"]["todo"] is True
+    assert config["experimental"]["background_compaction"] is True
+    assert config["formatter"] is True
+    assert ".venv/**" in config["watcher"]["ignore"]
+    # The ponytail ruleset is pinned so an install keeps the lazy-senior-dev
+    # guard even before the user opens a fresh clone.
+    assert "@dietrichgebert/ponytail" in config["plugins"]
+
+
+def test_ponytail_installers_are_graceful_without_clis(monkeypatch) -> None:
+    """A missing CLI yields a message, never a crash or a hanging subprocess."""
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: None)
+    assert client_setup.install_ponytail() == "codex not installed"
+    assert client_setup.install_ponytail_claude() == "claude not installed"
+    assert client_setup.install_ponytail_qwen() == "qwen not installed"
 
 
 def test_opencode_cloud_provider_is_opt_in() -> None:
@@ -43,22 +74,22 @@ def test_opencode_cloud_provider_is_opt_in() -> None:
     OpenCode could leave the machine without the user asking for it.
     """
     local_only = client_setup.opencode_config()
-    assert "openrouter" not in local_only["provider"]
+    assert "openrouter" not in local_only["providers"]
 
     with_cloud = client_setup.opencode_config(include_cloud=True)
-    assert "moonshotai/kimi-k3" in with_cloud["provider"]["openrouter"]["models"]
+    assert "moonshotai/kimi-k3" in with_cloud["providers"]["openrouter"]["models"]
 
 
 def test_install_opencode_mcp_does_not_add_a_cloud_provider(tmp_path) -> None:
     path = tmp_path / "opencode.json"
     client_setup.install_opencode_mcp(path)
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert "openrouter" not in written["provider"]
-    assert "sovereign" in written["provider"]
+    assert "openrouter" not in written["providers"]
+    assert "sovereign" in written["providers"]
 
     client_setup.install_opencode_mcp(path, include_cloud=True)
     written = json.loads(path.read_text(encoding="utf-8"))
-    assert "openrouter" in written["provider"]
+    assert "openrouter" in written["providers"]
 
 
 def test_codex_mcp_block_is_idempotent(tmp_path) -> None:
@@ -91,15 +122,21 @@ def test_opencode_merge_updates_stale_mcp_command(tmp_path) -> None:
             {
                 "model": "local/qwen3-coder:30b",
                 "provider": {"local": {"models": {"qwen3-coder:30b": {"name": "old"}}}},
+                "permission": {"bash": "deny"},
                 "mcp": {"sovereign": {"type": "local", "command": ["/usr/bin/python", "-m"]}},
             }
         )
     )
     client_setup.install_opencode_mcp(path)
     data = json.loads(path.read_text())
-    command = data["mcp"]["sovereign"]["command"]
+    command = data["mcp"]["servers"]["sovereign"]["command"]
     assert "sovereign_code" in command
-    assert data["provider"]["local"]["models"]["qwen3-coder:30b"]["tool_call"] is True
+    capabilities = data["providers"]["local"]["models"]["qwen3-coder:30b"]["capabilities"]
+    assert capabilities["tools"] is True
+    assert {"action": "shell", "resource": "*", "effect": "deny"} in data["permissions"]
+    # The V1 input was translated, not copied through.
+    assert "provider" not in data
+    assert "permission" not in data
 
 
 def test_forced_local_pins_the_app_to_the_local_gateway(tmp_path) -> None:

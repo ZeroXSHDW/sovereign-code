@@ -42,15 +42,24 @@ DEFAULT_LIMITS = httpx.Limits(
 RETRY_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
+def _timeout(timeout: float, connect: float, read: float | None) -> httpx.Timeout:
+    if read is None:
+        return httpx.Timeout(timeout, connect=connect)
+    # Long total budget, short per-read budget: a stream that stops producing
+    # bytes fails fast even though a healthy stream may run for an hour.
+    return httpx.Timeout(timeout, connect=connect, read=read)
+
+
 def local_client(
     timeout: float = 30.0,
     connect: float = 3.0,
     follow_redirects: bool = False,
     transport: httpx.BaseTransport | None = None,
+    read: float | None = None,
 ) -> httpx.Client:
     """A pooled synchronous client for a loopback service."""
     return httpx.Client(
-        timeout=httpx.Timeout(timeout, connect=connect),
+        timeout=_timeout(timeout, connect, read),
         limits=DEFAULT_LIMITS,
         follow_redirects=follow_redirects,
         transport=transport,
@@ -62,6 +71,7 @@ def shared_client(
     connect: float = 3.0,
     follow_redirects: bool = False,
     transport: httpx.BaseTransport | None = None,
+    read: float | None = None,
 ) -> httpx.Client:
     """The process-wide synchronous client for a given configuration.
 
@@ -77,11 +87,18 @@ def shared_client(
             connect=connect,
             follow_redirects=follow_redirects,
             transport=transport,
+            read=read,
         )
-    key = (timeout, connect, follow_redirects)
+    key = (timeout, connect, follow_redirects, read, id(transport) if transport else None)
     client = _shared.get(key)
     if client is None or client.is_closed:
-        client = local_client(timeout=timeout, connect=connect, follow_redirects=follow_redirects)
+        client = local_client(
+            timeout=timeout,
+            connect=connect,
+            follow_redirects=follow_redirects,
+            read=read,
+            transport=transport,
+        )
         _shared[key] = client
     return client
 
@@ -91,6 +108,7 @@ def leased_client(
     timeout: float = 30.0,
     connect: float = 3.0,
     follow_redirects: bool = False,
+    read: float | None = None,
 ) -> Iterator[httpx.Client]:
     """Yield the shared client without closing it on exit.
 
@@ -98,7 +116,9 @@ def leased_client(
     block closes the connection pool — which would throw away the very thing
     this module exists to reuse.
     """
-    yield shared_client(timeout=timeout, connect=connect, follow_redirects=follow_redirects)
+    yield shared_client(
+        timeout=timeout, connect=connect, follow_redirects=follow_redirects, read=read
+    )
 
 
 @contextmanager
@@ -128,13 +148,13 @@ def client_for(
         yield client
 
 
-_shared: dict[tuple[float, float, bool], httpx.Client] = {}
+_shared: dict[tuple[float, float, bool, float | None, int | None], httpx.Client] = {}
 
 
 # An async client is bound to the event loop that first used it, so the cache
 # is keyed by loop as well as by name. The loop is kept alive by the stored
 # reference, which also stops its id from being reused.
-_async_clients: dict[tuple[int, str], tuple[Any, httpx.AsyncClient]] = {}
+_async_clients: dict[tuple[int, str, float, float], tuple[Any, httpx.AsyncClient]] = {}
 
 
 def async_client(
@@ -158,7 +178,25 @@ def async_client(
         loop: Any = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
-    cache_key = (id(loop), key)
+    # Callers such as the MCP tools run each collection with a fresh
+    # ``asyncio.run``. Without this sweep, every call left behind a closed
+    # loop, its client, and its connection pool for the life of the process.
+    for stale_key, (held_loop, stale_client) in list(_async_clients.items()):
+        if held_loop is loop:
+            continue
+        if held_loop is None or held_loop.is_closed():
+            _async_clients.pop(stale_key, None)
+            if loop is not None:
+                try:
+                    task = loop.create_task(stale_client.aclose())
+                except Exception:
+                    pass
+                else:
+                    # Closing an anyio pool created on another loop can raise
+                    # inside the task; consume it so Python does not emit
+                    # "Task exception was never retrieved" on every call.
+                    task.add_done_callback(lambda done: done.cancelled() or done.exception())
+    cache_key = (id(loop), key, float(timeout), float(connect))
     entry = _async_clients.get(cache_key)
     if entry is not None:
         held_loop, client = entry

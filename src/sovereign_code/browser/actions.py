@@ -5,7 +5,9 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import socket
 from dataclasses import dataclass
+from functools import lru_cache
 from urllib.parse import urljoin, urlparse
 
 from ..errors import ActionError, PolicyError
@@ -29,6 +31,7 @@ ALLOWED_KEYS = {
 ACTION_KINDS = {
     "navigate",
     "click",
+    "hover",
     "fill",
     "select",
     "press",
@@ -158,9 +161,9 @@ def parse_action(payload: str | dict) -> Action:
         if not url:
             raise ActionError("navigate needs a url")
         return Action(kind, url=url)
-    if kind in {"click", "fill", "select"}:
+    if kind in {"click", "hover", "fill", "select"}:
         target = _require_int(data, "id")
-        if kind == "click":
+        if kind in {"click", "hover"}:
             return Action(kind, target=target)
         if kind == "fill":
             return Action(kind, target=target, text=str(data.get("text") or ""))
@@ -197,13 +200,7 @@ def parse_action(payload: str | dict) -> Action:
     return Action(kind, summary=str(data.get("summary") or "Task complete"))
 
 
-def _is_private_host(host: str) -> bool:
-    if host in PRIVATE_HOSTS or host.endswith(".local"):
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
+def _address_is_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return (
         address.is_private
         or address.is_loopback
@@ -211,6 +208,51 @@ def _is_private_host(host: str) -> bool:
         or address.is_reserved
         or address.is_unspecified
     )
+
+
+def _is_private_host(host: str) -> bool:
+    if host in PRIVATE_HOSTS or host.endswith(".local"):
+        return True
+    # Browsers accept legacy numeric IPv4 spellings that ``ipaddress``
+    # rejects (``127.1``, ``0x7f.1``, ``2130706433``). ``inet_aton`` uses the
+    # same legacy parser as the resolver, so those forms are classified as
+    # the loopback addresses they actually are.
+    try:
+        address = ipaddress.ip_address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+    return _address_is_private(address)
+
+
+@lru_cache(maxsize=512)
+def _resolves_private(host: str) -> bool:
+    """True when any address a hostname resolves to is private.
+
+    ``check_url`` validates the name, but the browser resolves it later; a
+    public name can point at loopback or link-local space. Treat a resolution
+    failure as "not private" so an offline machine can still use the policy;
+    the literal-address check above still covers the direct forms.
+
+    The result is memoised per host: a page with a hundred assets must not make
+    a hundred blocking DNS calls on the Playwright route thread. A name that
+    later starts resolving privately is already subject to the same
+    resolve-after-check race in the browser itself.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if _address_is_private(address):
+            return True
+    return False
 
 
 def check_url(url: str, policy: BrowserPolicy, base: str | None = None) -> str:
@@ -228,7 +270,7 @@ def check_url(url: str, policy: BrowserPolicy, base: str | None = None) -> str:
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
         raise PolicyError("URL has no host")
-    if _is_private_host(host) and not policy.allow_local:
+    if not policy.allow_local and (_is_private_host(host) or _resolves_private(host)):
         raise PolicyError("local and private addresses need --allow-local")
     if policy.allowed_domains and not any(
         host == domain or host.endswith("." + domain) for domain in policy.allowed_domains
@@ -243,7 +285,29 @@ def is_destructive(text: str) -> bool:
     label = (text or "").strip()
     if not label:
         return False
-    return bool(OK_LABEL.match(label) or DESTRUCTIVE.search(label))
+    # Word boundaries miss labels where the verb is glued to the noun, such as
+    # "DeleteAccount", "DELETE_ACCOUNT" or "BuyNow". Split CamelCase and
+    # separators, then test the expanded form so those cannot slip past the
+    # confirmation gate.
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", label).replace("_", " ").replace("-", " ")
+    return bool(OK_LABEL.match(label) or DESTRUCTIVE.search(label) or DESTRUCTIVE.search(expanded))
+
+
+def is_private_url(url: str, *, resolve: bool = False) -> bool:
+    """True when a URL names a private/loopback host.
+
+    Used for subresources and subframes, where the full allowlist would be too
+    strict (a normal page loads assets from a CDN) but a request to localhost
+    or link-local space must still be stopped before it leaves the browser.
+    """
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    return _is_private_host(host) or (resolve and _resolves_private(host))
 
 
 def is_submit_control(tag: str, control_type: str = "") -> bool:

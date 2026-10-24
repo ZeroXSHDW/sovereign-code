@@ -57,3 +57,42 @@ def test_prune_backups_keeps_newest(tmp_path: Path) -> None:
     remaining = sorted(path.name for path in tmp_path.glob("sovereign-backup-*.tar.gz"))
     assert len(remaining) == 2
     assert remaining == ["sovereign-backup-3.tar.gz", "sovereign-backup-4.tar.gz"]
+
+
+def test_prune_backups_zero_keep_removes_nothing(tmp_path: Path) -> None:
+    from sovereign_code.backup import prune_backups
+
+    (tmp_path / "sovereign-backup-0.tar.gz").write_text("x", encoding="utf-8")
+    assert prune_backups(tmp_path, 0) == 0
+    assert (tmp_path / "sovereign-backup-0.tar.gz").exists()
+
+
+def test_prune_backups_tolerates_unlink_failure(tmp_path: Path, monkeypatch) -> None:
+    from sovereign_code.backup import prune_backups
+
+    (tmp_path / "sovereign-backup-0.tar.gz").write_text("x", encoding="utf-8")
+    (tmp_path / "sovereign-backup-1.tar.gz").write_text("x", encoding="utf-8")
+
+    def boom(self):
+        raise OSError("nope")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    assert prune_backups(tmp_path, 1) == 0
+
+
+def test_backup_skips_missing_extra_file(tmp_path: Path) -> None:
+    root = tmp_path / "local-ai"
+    data = root / "data"
+    data.mkdir(parents=True)
+    (data / "sessions").mkdir()
+    (data / "sessions" / "s.jsonl").write_text("y", encoding="utf-8")
+
+    path = create_backup(
+        [data],
+        tmp_path / "backups",
+        extra_files={tmp_path / "does-not-exist.txt": "config/missing.txt"},
+        root=root,
+    )
+    with tarfile.open(path, "r:gz") as archive:
+        names = archive.getnames()
+    assert not any("missing.txt" in name for name in names)

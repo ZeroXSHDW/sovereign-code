@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from collections.abc import Iterable
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR
+from .safefile import ensure_private_dir, harden, write_private_bytes
 
 DEFAULT_DPI = 200
 DEFAULT_LANG = "eng"
@@ -299,6 +301,23 @@ def needs_ocr(path: str | Path, *, min_chars: int = DEFAULT_MIN_TEXT_CHARS) -> b
     return total < threshold
 
 
+def _page_number(path: Path) -> int | None:
+    """The page number in a pdftoppm filename (``page-12.png`` -> 12)."""
+    match = re.search(r"-(\d+)\.", path.name)
+    return int(match.group(1)) if match else None
+
+
+def _render_sort_key(path: Path) -> tuple[int, str]:
+    """Sort rendered pages numerically: page-2 comes before page-10.
+
+    A plain lexicographic sort puts ``page-10`` before ``page-2``, which made
+    every consumer that indexes ``rendered[i]`` by page mis-attribute images
+    on documents with ten or more pages.
+    """
+    number = _page_number(path)
+    return (number if number is not None else 10**9, path.name)
+
+
 def render_pages(
     path: str | Path,
     *,
@@ -315,10 +334,26 @@ def render_pages(
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {target}")
     _require("pdftoppm")
+    managed = output_dir is None
     if output_dir is None:
         output_dir = DATA_DIR / "pdf" / "images" / _safe_stem(target)
     out = Path(output_dir).expanduser()
-    out.mkdir(parents=True, exist_ok=True)
+    if managed:
+        ensure_private_dir(out)
+    else:
+        # A caller-supplied directory (``--out .``) belongs to the user; do
+        # not chmod a whole project checkout to 0700 just to write images.
+        out.mkdir(parents=True, exist_ok=True)
+    # The default output directory is a deterministic per-document cache.
+    # Without clearing the previous render, asking for pages 1-2 after pages
+    # 5-6 returns four images and a vision review silently examines stale
+    # pages. A caller-supplied directory is never cleared.
+    if managed:
+        for stale in out.glob(f"{prefix}-*.{fmt}"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
     stem = out / prefix
     args = ["pdftoppm", f"-{fmt}", "-r", str(dpi)]
     if first is not None:
@@ -330,11 +365,29 @@ def render_pages(
     if result.returncode != 0:
         raise RuntimeError(_decode(result.stderr).strip() or "pdftoppm failed")
     pattern = f"{prefix}-*.{fmt}"
-    files = sorted(out.glob(pattern))
+    files = sorted(out.glob(pattern), key=_render_sort_key)
     # pdftoppm names files like page-1.png or page-01.png depending on page count
     if not files:
-        files = sorted(out.glob(f"*.{fmt}"))
-    return [p for p in files if p.is_file()]
+        files = sorted(out.glob(f"*.{fmt}"), key=_render_sort_key)
+    selected = [p for p in files if p.is_file()]
+    low = first if first is not None else 1
+    high = last
+    if high is None:
+        try:
+            high = page_count(target)
+        except Exception:
+            high = None
+    if first is not None or high is not None:
+        selected = [
+            p
+            for p in selected
+            if (number := _page_number(p)) is not None
+            and number >= low
+            and (high is None or number <= high)
+        ]
+    for image in selected:
+        harden(image)
+    return selected
 
 
 def _safe_stem(path: Path) -> str:
@@ -382,6 +435,9 @@ def ocr_pdf(
 ) -> str:
     """OCR a (scanned) PDF and return its text."""
     target = Path(path).expanduser()
+    if pages is not None and not pages:
+        # An explicit empty selection means "no pages", not "all pages".
+        return ""
     first = min(pages) if pages else None
     last = max(pages) if pages else None
     images = render_pages(target, dpi=dpi, first=first, last=last, timeout=timeout)
@@ -397,8 +453,9 @@ def ocr_pdf(
                     filtered.append(img)
             except ValueError:
                 filtered.append(img)
-        if filtered:
-            images = filtered
+        # Trust the filter even when it is empty: falling back to every page
+        # would OCR pages the caller did not ask for.
+        images = filtered
     # OCR pages in parallel for speed.
     workers = min(len(images), 4) or 1
     texts: list[str] = []
@@ -487,15 +544,24 @@ def read_pdf(
             if force_all or len("".join(page_text.split())) < min_chars:
                 sparse_indices.append(i)
 
-    # Render once for OCR and/or images.
+    # Render once for OCR and/or images. Rendering is best effort: a missing
+    # pdftoppm or one damaged page must not throw away text that pdftotext
+    # already extracted successfully.
     need_render = bool(sparse_indices) or render_images or vision
-    rendered: list[Path] = render_pages(target, dpi=dpi, timeout=timeout) if need_render else []
+    rendered: list[Path] = []
+    render_error = ""
+    if need_render:
+        try:
+            rendered = render_pages(target, dpi=dpi, timeout=timeout)
+        except Exception as exc:
+            render_error = str(exc)
 
     ocr_pages_text: list[str] = [""] * count
     if sparse_indices and rendered:
         workers = min(len(sparse_indices), 4) or 1
+        available = [i for i in sparse_indices if i < len(rendered)]
         if workers == 1:
-            for i in sparse_indices:
+            for i in available:
                 try:
                     ocr_pages_text[i] = ocr_image(rendered[i], lang=lang, psm=psm, timeout=timeout)
                 except RuntimeError:
@@ -504,7 +570,7 @@ def read_pdf(
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 future_to_index = {
                     executor.submit(ocr_image, rendered[i], lang=lang, psm=psm, timeout=timeout): i
-                    for i in sparse_indices
+                    for i in available
                 }
                 for future in as_completed(future_to_index):
                     i = future_to_index[future]
@@ -523,9 +589,10 @@ def read_pdf(
     pages: list[PDFPage] = []
     for i in range(count):
         has = len("".join(text_pages[i].split())) >= min_chars
-        page_images = images if (render_images or vision) else []
-        page_b64 = image_b64 if vision else []
-        # align per-page images if rendered individually; here keep all for simplicity
+        # Each page owns its own image. Copying the whole document onto every
+        # page made to_dict() O(n^2) in both paths and base64 payloads.
+        page_images = [images[i]] if (render_images or vision) and i < len(images) else []
+        page_b64 = [image_b64[i]] if vision and i < len(image_b64) else []
         pages.append(
             PDFPage(
                 number=i + 1,
@@ -550,6 +617,8 @@ def read_pdf(
         image_base64=image_b64,
         metadata={"dpi": dpi, "lang": lang, "ocr": do_ocr},
     )
+    if render_error:
+        doc.metadata["ocr_error"] = render_error
 
     if vision and ollama_url and model:
         try:
@@ -642,43 +711,108 @@ def vision_review_images(
     return out
 
 
+def _download_filename(name: str, url: str) -> str:
+    """A basename that cannot escape the download directory."""
+    candidate = (name or "").replace("\\", "/").split("/")[-1].strip()
+    candidate = re.sub(r"[\x00-\x1f\x7f]", "", candidate)
+    if not candidate or candidate in {".", ".."}:
+        candidate = url.split("?")[0].rstrip("/").split("/")[-1] or "document.pdf"
+    if not candidate.lower().endswith(".pdf"):
+        candidate = f"{candidate}.pdf"
+    return candidate
+
+
 def download_pdf(
     url: str,
     *,
     output_dir: str | Path | None = None,
     filename: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
+    max_bytes: int = 50 * 1024 * 1024,
+    allow_local: bool = False,
 ) -> Path:
-    """Download a PDF from a URL into the local cache."""
-    import re as _re
+    """Download a PDF from a URL into the local cache.
 
+    The URL is checked against the same policy as the browser (each redirect
+    hop separately), the body is capped, and only the basename of a
+    ``Content-Disposition`` filename is used. Without those checks a hostile
+    server could write ``../../.zshrc`` or make the process fetch a loopback
+    admin page.
+    """
     import httpx
+
+    from .browser.actions import BrowserPolicy, PolicyError, check_url
 
     if output_dir is None:
         output_dir = DATA_DIR / "pdf" / "downloads"
+        managed = True
+    else:
+        managed = False
     out = Path(output_dir).expanduser()
-    out.mkdir(parents=True, exist_ok=True)
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        response = client.get(url)
-    response.raise_for_status()
-    if filename is None:
-        # Try Content-Disposition, fall back to URL basename.
-        disposition = response.headers.get("content-disposition", "")
-        match = _re.search(r'filename="?([^";]+)"?', disposition)
-        if match:
-            filename = match.group(1)
+    if managed:
+        ensure_private_dir(out)
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+    policy = BrowserPolicy(allow_local=allow_local)
+    current = url
+    response: httpx.Response | None = None
+    data = b""
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        for _hop in range(6):
+            try:
+                current = check_url(current, policy)
+            except PolicyError as exc:
+                raise ValueError(f"refused to download {url}: {exc}") from exc
+            with client.stream("GET", current) as candidate:
+                if candidate.is_redirect and candidate.headers.get("location"):
+                    from urllib.parse import urljoin
+
+                    current = urljoin(current, candidate.headers["location"])
+                    continue
+                candidate.raise_for_status()
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in candidate.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"PDF is larger than the {max_bytes} byte download limit")
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                response = candidate
+                break
         else:
-            filename = url.split("?")[0].rstrip("/").split("/")[-1] or "document.pdf"
-        if not filename.lower().endswith(".pdf"):
-            filename = f"{filename}.pdf"
-    target = out / filename
-    target.write_bytes(response.content)
+            raise ValueError(f"too many redirects while downloading {url}")
+    if response is None or not data:
+        raise ValueError(f"could not download {url}")
+    if not data.startswith(b"%PDF-"):
+        raise ValueError(f"{current} did not return a PDF")
+    if filename is None:
+        disposition = response.headers.get("content-disposition", "")
+        match = re.search(r'filename="?([^";]+)"?', disposition)
+        filename = match.group(1) if match else ""
+    name = _download_filename(filename or "", current)
+    target = (out / name).resolve()
+    if target.parent != out.resolve():
+        raise ValueError(f"refusing to write outside the download directory: {name}")
+    if managed:
+        write_private_bytes(target, data)
+    else:
+        # Do not chmod the caller's directory; harden the file after writing.
+        target.write_bytes(data)
+        harden(target)
     return target
 
 
 def read_pdf_url(url: str, **kwargs: Any) -> PDFDocument:
     """Download (if needed) and read a PDF from a URL."""
-    path = download_pdf(url)
+    download_options: dict[str, Any] = {
+        key: kwargs.pop(key) for key in ("output_dir", "filename") if key in kwargs
+    }
+    if "timeout" in kwargs:
+        download_options["timeout"] = kwargs["timeout"]
+    if "allow_local" in kwargs:
+        download_options["allow_local"] = kwargs.pop("allow_local")
+    path = download_pdf(url, **download_options)
     return read_pdf(path, **kwargs)
 
 
@@ -792,6 +926,104 @@ class PDFReader:
         return f"PDFReader({self.path!r})"
 
 
+# --------------------------------------------------------------------------- #
+# extended extraction API (tables, figures, validation)
+# --------------------------------------------------------------------------- #
+
+
+class PDFReaderError(Exception):
+    """Base error raised by the PDF reader."""
+
+
+class PDFExtractError(PDFReaderError):
+    """Raised when a PDF cannot be extracted."""
+
+
+@dataclass
+class TableData:
+    """A table extracted from one PDF page."""
+
+    page: int
+    rows: list[list[str]] = field(default_factory=list)
+    text: str = ""
+
+
+@dataclass
+class FigureData:
+    """A figure/image extracted from one PDF page."""
+
+    page: int
+    path: str = ""
+    image_base64: str = ""
+
+
+def is_valid_pdf(path: str | Path) -> bool:
+    """Return True when ``path`` looks like a readable PDF."""
+    target = Path(path).expanduser()
+    if not target.is_file():
+        return False
+    try:
+        return page_count(target) >= 1
+    except Exception:
+        try:
+            return target.read_bytes()[:5] == b"%PDF-"
+        except OSError:
+            return False
+
+
+def extract_text_from_pdf(path: str | Path, **kwargs: Any) -> str:
+    """Extract text from a PDF (alias for :func:`extract_text`)."""
+    try:
+        return extract_text(path, **kwargs)
+    except Exception as exc:
+        raise PDFExtractError(str(exc)) from exc
+
+
+def extract_tables(path: str | Path, **kwargs: Any) -> list[TableData]:
+    """Best-effort table extraction: group lines with 2+ columns."""
+    allowed = {"timeout", "first", "last", "layout"}
+    filtered = {k: v for k, v in kwargs.items() if k in allowed}
+    try:
+        pages = extract_pages(path, **filtered)
+    except Exception as exc:
+        raise PDFExtractError(str(exc)) from exc
+    if not pages:
+        try:
+            pages = [extract_text(path, **filtered)]
+        except Exception:
+            pages = []
+    tables: list[TableData] = []
+    for i, page_text in enumerate(pages, 1):
+        rows: list[list[str]] = []
+        for line in page_text.splitlines():
+            cols = [c.strip() for c in re.split(r"\s{2,}", line.strip()) if c.strip()]
+            if len(cols) >= 2:
+                rows.append(cols)
+        if rows:
+            tables.append(TableData(page=i, rows=rows, text=page_text))
+    return tables
+
+
+def extract_figures(path: str | Path, **kwargs: Any) -> list[FigureData]:
+    """Render a PDF and return one :class:`FigureData` per page image."""
+    allowed = {"dpi", "timeout", "output_dir", "fmt", "first", "last", "prefix"}
+    filtered = {k: v for k, v in kwargs.items() if k in allowed}
+    try:
+        rendered = render_pages(path, **filtered)
+    except Exception as exc:
+        raise PDFExtractError(str(exc)) from exc
+    figures: list[FigureData] = []
+    for i, img in enumerate(rendered, 1):
+        try:
+            b64 = _b64_file(img)
+        except OSError:
+            b64 = ""
+        # Keep the real page number when the caller asked for a range
+        # (e.g. first=5); renumbering from 1 would lie about the source page.
+        figures.append(FigureData(page=_page_number(img) or i, path=str(img), image_base64=b64))
+    return figures
+
+
 PDFOCR = PDFReader
 PDFExtractor = PDFReader
 OCRReader = PDFReader
@@ -805,24 +1037,32 @@ __all__ = [
     "PDF",
     "PDFOCR",
     "Document",
+    "FigureData",
     "OCRReader",
     "PDFDocument",
+    "PDFExtractError",
     "PDFExtractor",
     "PDFPage",
     "PDFReader",
+    "PDFReaderError",
+    "TableData",
     "auto_read",
     "available",
     "count_pages",
     "download_pdf",
+    "extract_figures",
     "extract_pages",
     "extract_pdf",
     "extract_pdf_text",
+    "extract_tables",
     "extract_text",
+    "extract_text_from_pdf",
     "get_pdf_text",
     "get_text",
     "has_text",
     "images_base64",
     "is_pdf",
+    "is_valid_pdf",
     "load_pdf",
     "load_pdf_text",
     "needs_ocr",

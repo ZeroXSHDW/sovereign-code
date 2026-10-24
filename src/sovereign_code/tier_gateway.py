@@ -492,14 +492,14 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
         add(alias, "sovereign", model=model, context=context)
 
     # The remaining route names: the tier aliases and the quality variants.
-    for alias, _tier in TIER_ALIASES.items():
+    for alias, alias_tier in TIER_ALIASES.items():
         if alias in seen:
             continue
-        if tier is None:
+        if alias_tier is None:
             add(alias, "sovereign", tier="auto")
             continue
-        model, context, _think = TIER_MODELS[tier]
-        add(alias, "sovereign", tier=tier, model=model, context=context)
+        model, context, _think = TIER_MODELS[alias_tier]
+        add(alias, "sovereign", tier=alias_tier, model=model, context=context)
     for alias in QUALITY_ALIASES:
         add(alias, "sovereign", tier="auto")
 
@@ -1813,7 +1813,9 @@ class _Handler(GuardedHandler):
             self.wfile.write(b": sovereign\n\n")
             self.wfile.write(_chunk(route.model, {"role": "assistant", "content": ""}, cid=cid))
             self.wfile.flush()
-            with leased_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0) as client:
+            with leased_client(
+                timeout=request_timeout(), connect=5.0, read=stream_idle_timeout()
+            ) as client:
                 with client.stream(
                     "POST", f"{self.ollama.rstrip('/')}/api/chat", json=payload
                 ) as response:
@@ -2026,6 +2028,7 @@ class _Handler(GuardedHandler):
             return
         stream = bool(request.get("stream"))
         headers = {"Authorization": "Bearer local", "Content-Type": "application/json"}
+        stream_started = False
         try:
             if stream:
                 self.send_response(200)
@@ -2037,6 +2040,7 @@ class _Handler(GuardedHandler):
                 self._cors()
                 self.close_connection = True
                 self.end_headers()
+                stream_started = True
                 with httpx.Client(
                     timeout=httpx.Timeout(stream_idle_timeout(), connect=5)
                 ) as client:
@@ -2047,7 +2051,14 @@ class _Handler(GuardedHandler):
                         json=request,
                     ) as response:
                         if response.status_code >= 400:
-                            self.wfile.write(response.read())
+                            # Headers are already committed as an SSE stream,
+                            # so the upstream JSON body cannot be replayed
+                            # raw: a client would not see an error at all.
+                            body = response.read().decode("utf-8", "replace")[:400]
+                            error = {"error": {"message": body, "type": "upstream_error"}}
+                            self.wfile.write(f"data: {json.dumps(error)}\n\n".encode())
+                            self.wfile.write(b"data: [DONE]\n\n")
+                            self.wfile.flush()
                             return
                         for chunk in response.iter_bytes():
                             self.wfile.write(chunk)
@@ -2068,6 +2079,18 @@ class _Handler(GuardedHandler):
                 self.end_headers()
                 self.wfile.write(response.content)
         except (httpx.HTTPError, BrokenPipeError, ConnectionResetError) as exc:
+            if stream_started:
+                # The status line and headers are already on the wire. Write a
+                # structured SSE error; calling _json here would embed a second
+                # HTTP response inside the stream body.
+                try:
+                    error = {"error": {"message": str(exc), "type": "upstream_error"}}
+                    self.wfile.write(f"data: {json.dumps(error)}\n\n".encode())
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
             try:
                 self._json(502, {"error": {"message": str(exc), "type": "upstream_error"}})
             except (BrokenPipeError, ConnectionResetError):
@@ -2106,7 +2129,9 @@ class _Handler(GuardedHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                with leased_client(timeout=DEFAULT_REQUEST_TIMEOUT, connect=5.0) as client:
+                with leased_client(
+                    timeout=request_timeout(), connect=5.0, read=stream_idle_timeout()
+                ) as client:
                     with client.stream("POST", target, json=chat) as result:
                         if result.status_code != 200:
                             body = result.read().decode("utf-8", "replace")[:400]

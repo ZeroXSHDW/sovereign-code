@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR
+from .safefile import ensure_private_dir, harden
 
 DEFAULT_DB = DATA_DIR / "prompts.db"
 
@@ -60,10 +61,14 @@ _SCHEMA = (
     """,
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(
-        name, tags, category, content, tokenize='unicode61'
+        prompt_id UNINDEXED, name, tags, category, content, tokenize='unicode61'
     )
     """,
 )
+
+# Kept separate so an old database (whose FTS table had no ``prompt_id``) can
+# be rebuilt without copying the SQL.
+_FTS_DEFINITION = _SCHEMA[-1]
 
 
 def _now() -> str:
@@ -118,7 +123,7 @@ class PromptDB:
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else DEFAULT_DB
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.path.parent)
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -127,6 +132,32 @@ class PromptDB:
         for statement in _SCHEMA:
             self._conn.execute(statement)
         self._conn.commit()
+        # Older databases keyed the FTS rows by rowid, which silently drifted
+        # out of step with ``prompts.id`` after any deletion. Rebuild once with
+        # an explicit prompt_id so search can never return the wrong prompt.
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(prompts_fts)").fetchall()
+        }
+        if "prompt_id" not in columns:
+            self._conn.execute("DROP TABLE IF EXISTS prompts_fts")
+            self._conn.execute(_FTS_DEFINITION)
+            for row in self._conn.execute(
+                "SELECT id, name, tags, category, content FROM prompts"
+            ).fetchall():
+                self._fts_write(
+                    str(row["id"]),
+                    str(row["name"]),
+                    str(row["tags"]),
+                    str(row["category"]),
+                    str(row["content"]),
+                )
+            self._conn.commit()
+        self._harden_sidecars()
+
+    def _harden_sidecars(self) -> None:
+        for suffix in ("", "-wal", "-shm"):
+            harden(Path(f"{self.path}{suffix}"))
 
     # ------------------------------------------------------------------ close
 
@@ -197,8 +228,9 @@ class PromptDB:
                 """,
                 row,
             )
-            self._fts_write(name, tags_csv, category, content)
+            self._fts_write(pid, name, tags_csv, category, content)
             self._conn.commit()
+            self._harden_sidecars()
         except sqlite3.IntegrityError:
             if not replace:
                 raise ValueError(f"prompt already exists: {name}") from None
@@ -264,22 +296,24 @@ class PromptDB:
             ),
         )
         category_value = row["category"] if category is None else category
-        self._fts_write(name, tags_csv, category_value, content)
+        self._fts_write(pid, name, tags_csv, category_value, content)
         self._conn.commit()
+        self._harden_sidecars()
         row = self._conn.execute("SELECT * FROM prompts WHERE id = ?", (pid,)).fetchone()
         prompt = self._row_to_prompt(row)
         if prompt is None:
             raise KeyError(f"prompt {pid!r} not found")
         return prompt
 
-    def _fts_write(self, name: str, tags: str, category: str, content: str) -> None:
+    def _fts_write(self, prompt_id: str, name: str, tags: str, category: str, content: str) -> None:
         self._conn.execute(
-            "INSERT INTO prompts_fts(name, tags, category, content) VALUES (?, ?, ?, ?)",
-            (name, tags, category, content),
+            "INSERT INTO prompts_fts(prompt_id, name, tags, category, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (prompt_id, name, tags, category, content),
         )
 
-    def _fts_delete(self, name: str) -> None:
-        self._conn.execute("DELETE FROM prompts_fts WHERE name = ?", (name,))
+    def _fts_delete(self, prompt_id: str) -> None:
+        self._conn.execute("DELETE FROM prompts_fts WHERE prompt_id = ?", (prompt_id,))
 
     def _row_to_prompt(self, row: sqlite3.Row | None) -> Prompt | None:
         if row is None:
@@ -333,10 +367,12 @@ class PromptDB:
             clauses.append("category = ?")
             params.append(category)
         if tag:
-            clauses.append("tags LIKE ?")
+            # Tags are stored as "a,b,c". Wrapping the stored value in commas
+            # makes the first and last tag match as reliably as the middle.
+            clauses.append("(',' || tags || ',') LIKE ?")
             params.append(f"%,{tag},%")
         if search:
-            clauses.append("rowid IN (SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?)")
+            clauses.append("id IN (SELECT prompt_id FROM prompts_fts WHERE prompts_fts MATCH ?)")
             params.append(search)
         sql = "SELECT * FROM prompts"
         if clauses:
@@ -369,6 +405,7 @@ class PromptDB:
             (_now(), _now(), row["id"]),
         )
         self._conn.commit()
+        self._harden_sidecars()
 
     def render(self, prompt_name: str, *, version: int | None = None, **variables: str) -> str:
         """Render a prompt with ``{{variable}}`` substitution.
@@ -394,16 +431,17 @@ class PromptDB:
             ).fetchone()
             if row is None:
                 return False
-            self._fts_delete(name)
+            self._fts_delete(str(row["id"]))
             self._conn.execute("DELETE FROM prompts WHERE id = ?", (row["id"],))
         else:
             rows = self._conn.execute("SELECT id FROM prompts WHERE name = ?", (name,)).fetchall()
             if not rows:
                 return False
-            for _row in rows:
-                self._fts_delete(name)
+            for row in rows:
+                self._fts_delete(str(row["id"]))
             self._conn.execute("DELETE FROM prompts WHERE name = ?", (name,))
         self._conn.commit()
+        self._harden_sidecars()
         return True
 
     # ---------------------------------------------------------------- import/export
@@ -416,12 +454,24 @@ class PromptDB:
 
         written = 0
         for row in rows:
+            name = str(row["name"])
+            version = int(row.get("version") or 1)
+            # Re-importing the same export used to bump the version every
+            # time. Treat an already-present (name, version) as imported.
+            if (
+                self._conn.execute(
+                    "SELECT 1 FROM prompts WHERE name = ? AND version = ?",
+                    (name, version),
+                ).fetchone()
+                is not None
+            ):
+                continue
             self.add(
-                str(row["name"]),
+                name,
                 str(row["content"]),
                 category=str(row.get("category") or "general"),
                 tags=str(row.get("tags") or ""),
-                version=int(row.get("version") or 1),
+                version=version,
                 source=str(row.get("source") or "imported"),
                 engine=str(row.get("engine") or "sovereign"),
                 replace=True,

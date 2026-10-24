@@ -17,6 +17,7 @@ from .actions import (
     BrowserPolicy,
     PolicyError,
     check_url,
+    is_private_url,
     needs_confirmation,
 )
 
@@ -217,7 +218,7 @@ class BrowserSession:
         profile_dir: Path,
         policy: BrowserPolicy,
         headless: bool = False,
-        timeout_ms: int = 60000,
+        timeout_ms: int = 120000,
     ) -> None:
         self.profile_dir = profile_dir
         self.policy = policy
@@ -276,8 +277,15 @@ class BrowserSession:
             try:
                 req = request if request is not None else route.request
                 target = str(req.url)
-                if self._is_main_frame_navigation(req):
+                if self._is_main_frame_navigation(req) or req.is_navigation_request():
+                    # Frame navigations load a whole document, so the full
+                    # policy (allowlist included) applies.
                     check_url(target, self.policy)
+                elif not self.policy.allow_local and is_private_url(target, resolve=True):
+                    # Subresources are not subject to the allowlist (pages
+                    # legitimately load assets from CDNs), but they must not
+                    # reach loopback/link-local space behind the policy's back.
+                    raise PolicyError("subresource targets a private address")
             except PolicyError:
                 self._blocked_url = target or None
                 try:
@@ -365,6 +373,7 @@ class BrowserSession:
     def back(self) -> str:
         if self.page is None:
             raise BrowserError("browser is not running")
+        self._blocked_url = None
         try:
             self.page.go_back(wait_until="domcontentloaded", timeout=self.timeout_ms)
         except Exception as exc:
@@ -376,6 +385,7 @@ class BrowserSession:
     def forward(self) -> str:
         if self.page is None:
             raise BrowserError("browser is not running")
+        self._blocked_url = None
         try:
             self.page.go_forward(wait_until="domcontentloaded", timeout=self.timeout_ms)
         except Exception as exc:
@@ -387,6 +397,7 @@ class BrowserSession:
     def reload(self) -> str:
         if self.page is None:
             raise BrowserError("browser is not running")
+        self._blocked_url = None
         try:
             self.page.reload(wait_until="domcontentloaded", timeout=self.timeout_ms)
         except Exception as exc:
@@ -531,6 +542,15 @@ class BrowserSession:
             target = self.goto(action.url)
             return {"ok": True, "detail": f"navigated to {target}"}
 
+        if action.kind == "hover":
+            locator = self._element(action.target or 0)
+            try:
+                locator.hover(timeout=self.timeout_ms)
+            except Exception as exc:
+                raise self._failure("hover failed", exc) from exc
+            self.page.wait_for_timeout(200)
+            return {"ok": True, "detail": f"hovered element {action.target}"}
+
         if action.kind == "click":
             locator = self._element(action.target or 0)
             tag, control_type, visible = self._control_info(locator)
@@ -549,8 +569,8 @@ class BrowserSession:
                         "detail": f'cancelled click on "{label}"' if label else "cancelled click",
                     }
             self._check_click_target(locator, self.page.url)
-            locator.scroll_into_view_if_needed()
             try:
+                locator.scroll_into_view_if_needed()
                 locator.click(timeout=self.timeout_ms)
             except Exception as exc:
                 raise self._failure("click failed", exc) from exc
@@ -597,13 +617,16 @@ class BrowserSession:
             return {"ok": True, "detail": f"pressed {action.key}"}
 
         if action.kind == "scroll":
-            if action.direction == "top":
-                self.page.evaluate("window.scrollTo(0, 0)")
-            elif action.direction == "bottom":
-                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            else:
-                delta = 600 * action.amount * (1 if action.direction == "down" else -1)
-                self.page.mouse.wheel(0, delta)
+            try:
+                if action.direction == "top":
+                    self.page.evaluate("window.scrollTo(0, 0)")
+                elif action.direction == "bottom":
+                    self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                else:
+                    delta = 600 * action.amount * (1 if action.direction == "down" else -1)
+                    self.page.mouse.wheel(0, delta)
+            except Exception as exc:
+                raise self._failure("scroll failed", exc) from exc
             self.page.wait_for_timeout(300)
             return {"ok": True, "detail": f"scrolled {action.direction}"}
 
@@ -612,11 +635,14 @@ class BrowserSession:
             return {"ok": True, "detail": f"waited {action.seconds:g}s"}
 
         if action.kind == "extract":
-            text = (
-                self._element(action.target).inner_text()
-                if action.target is not None
-                else self.page.inner_text("body")
-            )
+            try:
+                text = (
+                    self._element(action.target).inner_text()
+                    if action.target is not None
+                    else self.page.inner_text("body")
+                )
+            except Exception as exc:
+                raise self._failure("extract failed", exc) from exc
             return {"ok": True, "detail": "extracted text", "extract": text[:8000]}
 
         if action.kind in {"handoff", "done"}:

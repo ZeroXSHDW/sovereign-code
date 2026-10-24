@@ -8,12 +8,13 @@ No tool calls, no loop, one round trip (plus repair rounds from the pipeline).
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 MAX_FILES = 8
-MAX_FILE_BYTES = 200_000
+MAX_FILE_BYTES = 400_000
 
 _STRICT = re.compile(
     r"<<<FILE:\s*(?P<path>[^\n>]+?)\s*>>>\r?\n(?P<body>.*?)\r?\n?<<<END>>>",
@@ -80,6 +81,44 @@ def resolve_target(root: Path, relative: str) -> Path | None:
 UNDO_FILE = ".sovereign-undo.json"
 
 
+def _capture_backup(target: Path) -> object:
+    """Record the previous contents of ``target`` for a later undo.
+
+    ``None`` means the file did not exist yet. A binary or unreadable file is
+    recorded as a dict instead, because collapsing it to ``None`` would make
+    :func:`undo_writes` delete a file it could not back up.
+    """
+    if not target.is_file():
+        return None
+    try:
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            return handle.read()
+    except UnicodeDecodeError:
+        try:
+            return {"binary": base64.b64encode(target.read_bytes()).decode("ascii")}
+        except OSError:
+            return {"unreadable": True}
+    except OSError:
+        return {"unreadable": True}
+
+
+def _restore_backup(target: Path, previous: object) -> None:
+    """Put one file back; raise rather than deleting an unknown backup."""
+    if previous is None:
+        target.unlink(missing_ok=True)
+        return
+    if isinstance(previous, str):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(previous)
+        return
+    if isinstance(previous, dict) and isinstance(previous.get("binary"), str):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(previous["binary"]))
+        return
+    raise OSError(f"no usable backup for {target}")
+
+
 def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[str]]:
     """Write the files. Returns (written, rejected).
 
@@ -103,16 +142,10 @@ def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[s
         staged.append((target, item.content))
 
     # Record the previous state so the whole batch can be undone.
-    backups: dict[str, str | None] = {}
+    backups: dict[str, object] = {}
     for target, _content in staged:
         rel = str(target.relative_to(root))
-        if target.is_file():
-            try:
-                backups[rel] = target.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                backups[rel] = None
-        else:
-            backups[rel] = None
+        backups[rel] = _capture_backup(target)
 
     # Write everything. If one write fails, restore the ones already written.
     newly_written: list[str] = []
@@ -125,12 +158,8 @@ def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[s
         # Best-effort rollback of the files already written.
         for rel in newly_written:
             target = root / rel
-            previous = backups.get(rel)
             try:
-                if previous is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    target.write_text(previous, encoding="utf-8")
+                _restore_backup(target, backups.get(rel))
             except OSError:
                 pass
         raise
@@ -172,15 +201,17 @@ def undo_writes(root: Path) -> list[str]:
     except (OSError, ValueError):
         return []
     backups = journal.get("backups") or {}
+    if not isinstance(backups, dict):
+        return []
     restored: list[str] = []
     for rel, previous in backups.items():
-        target = root / rel
+        target = resolve_target(root, str(rel))
+        if target is None:
+            # A journal is a file on disk and can be edited or shipped in a
+            # clone; never let it name a path outside the project.
+            continue
         try:
-            if previous is None:
-                target.unlink(missing_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(previous, encoding="utf-8")
+            _restore_backup(target, previous)
             restored.append(rel)
         except OSError:
             continue
@@ -197,7 +228,14 @@ def relevant_files(root: Path, prompt: str, limit_bytes: int = 30_000) -> dict[s
     mentioned = {token for token in re.findall(r"[\w.-]+\.\w{1,5}", prompt)}
     candidates: list[Path] = []
     for path in root.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        # Only skip ignored directories *inside* the project. Checking the
+        # absolute parts also skipped every project whose parent happened to
+        # be named "build" or "dist", leaving the model with no context.
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            continue
+        if any(part in SKIP_DIRS for part in relative_parts):
             continue
         if not path.is_file() or path.suffix not in CODE_SUFFIXES:
             continue

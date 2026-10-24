@@ -3,20 +3,118 @@
   "instructions": [
     "AGENTS.md"
   ],
-  "permission": {
-    "edit": "allow",
-    "bash": "allow"
+  "permissions": [
+    {
+      "action": "*",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "rm -rf *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "sudo *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push *",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "git commit *",
+      "effect": "ask"
+    },
+    {
+      "action": "external_directory",
+      "resource": "*",
+      "effect": "ask"
+    }
+  ],
+  "agents": {
+    "reviewer": {
+      "description": "Review the working tree without editing files",
+      "mode": "subagent",
+      "model": "sovereign/auto",
+      "system": "Review the current changes for correctness, security, and missing tests. Do not edit files. Return concrete findings with file:line and a short verdict.",
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "planner": {
+      "description": "Plan a change before any file is edited",
+      "mode": "subagent",
+      "model": "sovereign/best",
+      "system": "Read the relevant code and tests, then produce a small ordered implementation plan with acceptance checks. Do not edit files.",
+      "permissions": [
+        {
+          "action": "edit",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    }
+  },
+  "commands": {
+    "check": {
+      "description": "Run the project's own checks",
+      "template": "Call the sovereign run_checks MCP tool for this project. Report the exact failing command and output, then fix only what is needed."
+    },
+    "review": {
+      "description": "Review the working tree without editing",
+      "agent": "reviewer",
+      "template": "Review the current working tree. Focus on correctness, security, and missing tests. Return findings with file:line and a short verdict."
+    },
+    "plan": {
+      "description": "Plan a change before editing",
+      "agent": "planner",
+      "template": "Read the relevant code and tests, then write a small ordered implementation plan with acceptance checks. Do not edit."
+    }
+  },
+  "experimental": {
+    "todo": true,
+    "background_compaction": true
+  },
+  "compaction": {
+    "auto": true,
+    "keep": {
+      "tokens": 6000
+    },
+    "buffer": 6000
   },
   "mcp": {
-    "sovereign": {
-      "type": "local",
-      "command": [
-        "/Users/user/.local/bin/sovereign",
-        "mcp"
-      ],
-      "environment": {
-        "SOVEREIGN_MCP_COMPUTER": "1"
+    "servers": {
+      "sovereign": {
+        "type": "local",
+        "command": [
+          "/Users/user/.local/bin/sovereign",
+          "mcp"
+        ],
+        "environment": {
+          "SOVEREIGN_MCP_COMPUTER": "1"
+        }
       }
     }
+  },
+  "formatter": true,
+  "watcher": {
+    "ignore": [
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      "coverage/**",
+      ".venv/**",
+      "venv/**",
+      "runtime/**",
+      "skills/**"
+    ]
   }
 }

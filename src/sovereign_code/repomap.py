@@ -216,6 +216,11 @@ def iter_files(
             if entry.name in IGNORED_FILES:
                 continue
             rel = entry.relative_to(root).as_posix()
+            # Never follow symlinks: a repository can contain a link to ~/.ssh
+            # or /etc, and following it would hand files outside the workspace
+            # to the model (the root-only sandbox check cannot catch this).
+            if entry.is_symlink():
+                continue
             if entry.is_dir():
                 if entry.name in IGNORED_DIRS or _parts_ignored(tuple(rel.split("/"))):
                     continue
@@ -430,7 +435,23 @@ def read_slice(
         raise ValueError(f"not a file: {target}")
     text = _read_text(target)
     if not text:
-        return {"path": str(target), "binary": True, "content": ""}
+        try:
+            head = target.read_bytes()[:4096]
+        except OSError:
+            head = b""
+        if b"\x00" in head:
+            return {"path": str(target), "binary": True, "content": ""}
+        # An empty (or whitespace-only) text file is not binary: return the
+        # same shape as every other file so callers can read ``lines``.
+        return {
+            "path": str(target),
+            "lines": 0,
+            "start": 1,
+            "end": 0,
+            "truncated": False,
+            "binary": False,
+            "content": "",
+        }
     lines = text.splitlines()
     first = max(1, min(start, len(lines) or 1))
     last = max(first, min(end, len(lines) or first))

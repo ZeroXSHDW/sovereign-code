@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import SESSIONS_DIR, ensure_layout
+from .safefile import open_private
 
 
 def _now() -> str:
@@ -31,7 +33,20 @@ class SessionWriter:
     def create(cls, model: str, cwd: str | None = None) -> SessionWriter:
         ensure_layout()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = SESSIONS_DIR / f"{stamp}-{_slug(model)}.jsonl"
+        base = f"{stamp}-{_slug(model)}"
+        # The filename only has second precision, and opening with "a" would
+        # silently merge two sessions started in the same second. Reserve the
+        # name with O_EXCL and add a numeric suffix until one is free.
+        for attempt in range(1000):
+            path = SESSIONS_DIR / f"{base}{'' if attempt == 0 else f'-{attempt + 1}'}.jsonl"
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                continue
+            os.close(fd)
+            break
+        else:
+            raise RuntimeError("could not allocate a unique session file")
         writer = cls(path=path, model=model, cwd=cwd or str(Path.cwd()))
         writer._append_record(
             {
@@ -102,23 +117,43 @@ def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
 def export_sessions(dest: Path, directory: Path | None = None) -> int:
     """Write every session record to a single JSONL file; returns the record count."""
     records = 0
-    with dest.open("w", encoding="utf-8") as output:
+    with open_private(dest, "w") as output:
         for info in scan_sessions(directory):
             for record in read_session(info.path):
                 record["_session"] = info.path.name
                 output.write(json.dumps(record, ensure_ascii=False) + "\n")
                 records += 1
+    # An export contains every chat message, so it is private like the
+    # session files themselves.
+    try:
+        dest.chmod(0o600)
+    except OSError:
+        pass
     return records
 
 
 def read_session(path: Path) -> list[dict]:
+    """Read a session file, skipping a corrupt line instead of losing the rest.
+
+    A crash during an append can leave one truncated JSONL line. The previous
+    implementation aborted on it and returned everything *before* the bad line,
+    so every later message became invisible to search, export and the session
+    list.
+    """
     records: list[dict] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                records.append(json.loads(line))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return records
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
     return records
 
 

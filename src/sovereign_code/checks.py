@@ -19,7 +19,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-MAX_LOG = 6000
+MAX_LOG = 12000
 
 # The commands a caller may pick. The list is deliberately small: only
 # well-known test and lint runners, so a connected client cannot turn the

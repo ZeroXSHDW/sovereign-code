@@ -93,12 +93,49 @@ def opencode_models(text: str) -> list[str]:
     except ValueError:
         return []
     found: list[str] = []
-    providers = data.get("provider") or {}
+    providers = data.get("providers") or data.get("provider")
+    if not isinstance(providers, dict):
+        return found
+    # Known local providers first, then any other provider so a cloud block
+    # cannot hide from doctor/prune.
+    ordered = [
+        providers[key]
+        for key in ("local", "ollama", "sovereign")
+        if isinstance(providers.get(key), dict)
+    ]
+    ordered.extend(
+        provider
+        for key, provider in providers.items()
+        if key not in {"local", "ollama", "sovereign"} and isinstance(provider, dict)
+    )
+    for provider in ordered:
+        models = provider.get("models")
+        if isinstance(models, dict):
+            found.extend(str(name) for name in models)
+    return found
+
+
+def opencode_local_models(text: str) -> list[str]:
+    """Model ids from the local Ollama and Sovereign providers only.
+
+    A remote OpenRouter/Anthropic model is not expected to exist in Ollama, so
+    it must not be reported as a dangling local reference.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    providers = data.get("providers") or data.get("provider")
+    if not isinstance(providers, dict):
+        return []
+    found: list[str] = []
     for key in ("local", "ollama", "sovereign"):
         provider = providers.get(key)
         if not isinstance(provider, dict):
             continue
-        found.extend(str(name) for name in (provider.get("models") or {}))
+        models = provider.get("models")
+        if isinstance(models, dict):
+            found.extend(str(name) for name in models)
     return found
 
 
@@ -108,8 +145,17 @@ def qwen_models(text: str) -> list[str]:
         data = json.loads(text)
     except ValueError:
         return []
-    entries = (data.get("modelProviders") or {}).get("openai") or []
-    return [str(entry.get("id")) for entry in entries if entry.get("id")]
+    providers = data.get("modelProviders")
+    if not isinstance(providers, dict):
+        return []
+    entries = providers.get("openai") or []
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list):
+        return []
+    return [
+        str(entry.get("id")) for entry in entries if isinstance(entry, dict) and entry.get("id")
+    ]
 
 
 def continue_models(text: str) -> list[str]:
@@ -120,7 +166,7 @@ def continue_models(text: str) -> list[str]:
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ""
 
 

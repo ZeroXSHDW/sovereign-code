@@ -84,6 +84,43 @@ def continue_config_path() -> Path:
     return Path.home() / ".continue" / "config.yaml"
 
 
+def complementary_mcp_servers() -> dict[str, dict[str, Any]]:
+    """The reference MCP servers wired alongside Sovereign.
+
+    Paths are derived from the current home directory: the previous revision
+    hardcoded ``/Users/user/Documents``, which silently exposed the wrong
+    directories (or none) on any other account.
+    """
+    home = Path.home()
+    roots = [str(home / "Documents"), str(home / "Downloads")]
+    return {
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", *roots],
+        },
+        "memory": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-memory"],
+        },
+        # Full browser automation independent of Sovereign's policy-checked
+        # browser, for when an agent needs raw CDP access.
+        "playwright": {
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest"],
+        },
+        # Deeper git history and blame than the repo_* tools expose.
+        "git": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-git"],
+        },
+        # Arbitrary HTTP fetching, for docs and API references.
+        "fetch": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-fetch"],
+        },
+    }
+
+
 def install_codex_mcp(path: Path | None = None) -> Path:
     target = path or codex_config_path()
     try:
@@ -91,22 +128,35 @@ def install_codex_mcp(path: Path | None = None) -> Path:
     except (OSError, UnicodeDecodeError):
         text = ""
     command, *args = sovereign_argv()
-    block = (
+    parts = [
         "[mcp_servers.sovereign]\n"
         f'command = "{command}"\n'
         f"args = [{', '.join(json.dumps(arg) for arg in args)}]\n"
-        "startup_timeout_sec = 30\n"
-    )
+        "startup_timeout_sec = 30"
+    ]
+    for name, spec in complementary_mcp_servers().items():
+        args_text = ", ".join(json.dumps(str(arg)) for arg in spec["args"])
+        parts.append(
+            f"[mcp_servers.{name}]\n"
+            f"command = {json.dumps(str(spec['command']))}\n"
+            f"args = [{args_text}]"
+        )
+    block = "\n\n".join(parts) + "\n"
     marker = "[mcp_servers.sovereign]"
     if marker in text:
         import re
 
-        text = re.sub(
-            r"(?ms)^\[mcp_servers\.sovereign\].*?(?=^\[|\Z)",
-            block + "\n",
-            text,
-        )
-        return _write(target, text)
+        # Remove every block this function owns before appending the new
+        # versions. Replacing only the sovereign block left the previous
+        # filesystem/memory tables behind, so the next run produced duplicate
+        # TOML tables and the client refused the whole config.
+        for name in ("sovereign", *complementary_mcp_servers()):
+            text = re.sub(
+                rf"(?ms)^\[mcp_servers\.{re.escape(name)}\].*?(?=^\[|\Z)",
+                "",
+                text,
+            )
+        return _write(target, text.rstrip() + "\n\n" + block)
     return _write(target, text.rstrip() + "\n\n" + block)
 
 
@@ -124,6 +174,8 @@ def install_claude_desktop_mcp(path: Path | None = None) -> Path:
         data["mcpServers"] = servers
     command, *args = sovereign_argv()
     servers["sovereign"] = {"command": command, "args": args}
+    for name, spec in complementary_mcp_servers().items():
+        servers.setdefault(name, spec)
     return _write(target, json.dumps(data, indent=2) + "\n")
 
 
@@ -180,14 +232,106 @@ OPENCODE_MODELS = {
 }
 
 
-def opencode_config(include_cloud: bool = False, max_context: int | None = None) -> dict:
-    """The OpenCode configuration this project writes.
+OPENCODE_PACKAGE = "@opencode/ai/providers/openai-compatible"
+
+
+def _opencode_model(
+    name: str, title: str, context: int, max_context: int, output: int = 8192
+) -> dict[str, object]:
+    """One V2 model entry: explicit tools, media, and context limits."""
+    return {
+        "name": title,
+        "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
+        "limit": {
+            "context": advertised_context(name, context, max_context),
+            "output": output,
+        },
+    }
+
+
+def _opencode_permissions() -> list[dict[str, str]]:
+    """V2 permission rules. Last match wins, so the broad default stays first."""
+    return [
+        {"action": "*", "resource": "*", "effect": "allow"},
+        {"action": "shell", "resource": "rm -rf *", "effect": "deny"},
+        {"action": "shell", "resource": "sudo *", "effect": "deny"},
+        {"action": "shell", "resource": "git push *", "effect": "ask"},
+        {"action": "shell", "resource": "git commit *", "effect": "ask"},
+        {"action": "external_directory", "resource": "*", "effect": "ask"},
+    ]
+
+
+def _opencode_agents() -> dict[str, dict[str, object]]:
+    """Read-only helpers a coding session can delegate to."""
+    read_only = [{"action": "edit", "resource": "*", "effect": "deny"}]
+    return {
+        "reviewer": {
+            "description": "Review the working tree without editing files",
+            "mode": "subagent",
+            "model": "sovereign/auto",
+            "system": (
+                "Review the current changes for correctness, security, and missing "
+                "tests. Do not edit files. Return concrete findings with file:line "
+                "and a short verdict."
+            ),
+            "permissions": read_only,
+        },
+        "planner": {
+            "description": "Plan a change before any file is edited",
+            "mode": "subagent",
+            "model": "sovereign/best",
+            "system": (
+                "Read the relevant code and tests, then produce a small ordered "
+                "implementation plan with acceptance checks. Do not edit files."
+            ),
+            "permissions": read_only,
+        },
+    }
+
+
+def _opencode_commands() -> dict[str, dict[str, object]]:
+    """Reusable slash commands for the work a coding session repeats."""
+    return {
+        "check": {
+            "description": "Run the project's own checks",
+            "template": (
+                "Call the sovereign run_checks MCP tool for this project. Report the "
+                "exact failing command and output, then fix only what is needed."
+            ),
+        },
+        "review": {
+            "description": "Review the working tree without editing",
+            "agent": "reviewer",
+            "template": (
+                "Review the current working tree. Focus on correctness, security, and "
+                "missing tests. Return findings with file:line and a short verdict."
+            ),
+        },
+        "plan": {
+            "description": "Plan a change before editing",
+            "agent": "planner",
+            "template": (
+                "Read the relevant code and tests, then write a small ordered "
+                "implementation plan with acceptance checks. Do not edit."
+            ),
+        },
+    }
+
+
+def opencode_config(include_cloud: bool = False, max_context: int | None = None) -> dict[str, Any]:
+    """The native OpenCode V2 configuration this project writes.
 
     The cloud provider block is only included when ``include_cloud`` is set.
     Writing it unconditionally put an OpenRouter provider and eight remote
     models into the user's live config, so a prompt typed in OpenCode could
     leave the machine even though the whole project is local-first. It is now
     opt-in, the way the README describes it.
+
+    V2 names the maps ``providers`` and ``mcp.servers``, uses ordered
+    ``permissions`` rules, and adds subagents, commands, todo tracking and
+    background compaction. The previous ``provider``/``permission``/``mcp``
+    shapes still parse as deprecated V1 fields, but writing them keeps a new
+    install on the old feature set.
     """
     command = sovereign_argv()
     if max_context is None:
@@ -198,149 +342,182 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
         except Exception:
             max_context = 32768
     max_context = max(2048, int(max_context))
-    config = {
-        "$schema": "https://opencode.ai/config.json",
-        "model": "sovereign/auto",
-        "small_model": "sovereign/balanced",
-        "permission": {"edit": "allow", "bash": "allow"},
-        "provider": {
-            "local": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Sovereign Ollama",
-                "options": {
-                    "baseURL": "http://127.0.0.1:11434/v1",
-                    "apiKey": "ollama",
-                },
-                "models": {
-                    name: {
-                        "name": title,
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context(name, context, max_context),
-                            "output": 8192,
-                        },
-                    }
-                    for name, (title, context) in OPENCODE_MODELS.items()
-                },
+    providers: dict[str, dict[str, object]] = {
+        "local": {
+            "name": "Sovereign Ollama",
+            "package": OPENCODE_PACKAGE,
+            "settings": {
+                "baseURL": "http://127.0.0.1:11434/v1",
+                "apiKey": "ollama",
             },
-            "sovereign": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Sovereign tier gateway",
-                "options": {
-                    "baseURL": "http://127.0.0.1:4010/v1",
-                    "apiKey": "local",
-                },
-                "models": {
-                    "best": {
-                        "name": "Best — 30B code / GLM reasoning",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("best", 32768, max_context),
-                            "output": 8192,
-                        },
-                    },
-                    "auto": {
-                        "name": "Auto — fast for simple, deep for hard",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("auto", 32768, max_context),
-                            "output": 8192,
-                        },
-                    },
-                    "fast": {
-                        "name": "Fast — small model, short tasks",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("fast", 8192, max_context),
-                            "output": 4096,
-                        },
-                    },
-                    "balanced": {
-                        "name": "Balanced — 9B, tools and multi-turn",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("balanced", 16384, max_context),
-                            "output": 8192,
-                        },
-                    },
-                    "deep": {
-                        "name": "Deep — 30B code / GLM reasoning",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("deep", 32768, max_context),
-                            "output": 8192,
-                        },
-                    },
-                    "ultra": {
-                        "name": "Ultra — 27B for the hardest reasoning",
-                        "tool_call": True,
-                        "limit": {
-                            "context": advertised_context("ultra", 16384, max_context),
-                            "output": 8192,
-                        },
-                    },
-                },
-            },
-            "openrouter": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "OpenRouter",
-                "options": {
-                    "baseURL": "https://openrouter.ai/api/v1",
-                    "apiKey": "{env:OPENROUTER_API_KEY}",
-                },
-                "models": {
-                    "moonshotai/kimi-k3": {
-                        "name": "Kimi K3",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "moonshotai/kimi-k2.6": {
-                        "name": "Kimi K2.6",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "deepseek/deepseek-v4.1-flash": {
-                        "name": "DeepSeek V4.1 Flash",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "deepseek/deepseek-v4-pro": {
-                        "name": "DeepSeek V4 Pro",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "z-ai/glm-5.3": {
-                        "name": "GLM 5.3",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "z-ai/glm-5.3-flash": {
-                        "name": "GLM 5.3 Flash",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                    "z-ai/glm-5.2": {
-                        "name": "GLM 5.2",
-                        "tool_call": True,
-                        "limit": {"context": 131072, "output": 8192},
-                    },
-                },
+            "models": {
+                name: _opencode_model(name, title, context, max_context)
+                for name, (title, context) in OPENCODE_MODELS.items()
             },
         },
-        "mcp": {
-            "sovereign": {
-                "type": "local",
-                "command": command,
-                "enabled": True,
-                "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
-            }
+        "sovereign": {
+            "name": "Sovereign tier gateway",
+            "package": OPENCODE_PACKAGE,
+            "settings": {
+                "baseURL": "http://127.0.0.1:4010/v1",
+                "apiKey": "local",
+            },
+            "models": {
+                "best": _opencode_model(
+                    "best", "Best — 30B code / GLM reasoning", 32768, max_context
+                ),
+                "auto": _opencode_model(
+                    "auto", "Auto — fast for simple, deep for hard", 32768, max_context
+                ),
+                "fast": _opencode_model(
+                    "fast", "Fast — small model, short tasks", 8192, max_context, 4096
+                ),
+                "balanced": _opencode_model(
+                    "balanced", "Balanced — 9B, tools and multi-turn", 16384, max_context
+                ),
+                "deep": _opencode_model(
+                    "deep", "Deep — 30B code / GLM reasoning", 32768, max_context
+                ),
+                "ultra": _opencode_model(
+                    "ultra", "Ultra — 27B for the hardest reasoning", 16384, max_context
+                ),
+            },
+        },
+        "openrouter": {
+            "name": "OpenRouter",
+            "package": OPENCODE_PACKAGE,
+            "settings": {
+                "baseURL": "https://openrouter.ai/api/v1",
+                "apiKey": "{env:OPENROUTER_API_KEY}",
+            },
+            "models": {
+                name: _opencode_model(name, title, 131072, 131072)
+                for name, title in (
+                    ("moonshotai/kimi-k3", "Kimi K3"),
+                    ("moonshotai/kimi-k2.6", "Kimi K2.6"),
+                    ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+                    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro"),
+                    ("z-ai/glm-5.3", "GLM 5.3"),
+                    ("z-ai/glm-5.3-flash", "GLM 5.3 Flash"),
+                    ("z-ai/glm-5.2", "GLM 5.2"),
+                )
+            },
         },
     }
     if not include_cloud:
-        provider = config.get("provider")
-        if isinstance(provider, dict) and "openrouter" in provider:
-            provider.pop("openrouter", None)
-    return config
+        providers.pop("openrouter", None)
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "model": "sovereign/auto",
+        "small_model": "sovereign/balanced",
+        # Ponytail: the "lazy senior dev" ruleset that makes agents write ~53%
+        # less code, ~41% faster and ~26% cheaper, while keeping every safety
+        # guard. It ships as an OpenCode plugin plus /ponytail commands.
+        "plugins": ["@dietrichgebert/ponytail"],
+        "permissions": _opencode_permissions(),
+        "agents": _opencode_agents(),
+        "commands": _opencode_commands(),
+        "experimental": {"todo": True, "background_compaction": True},
+        "compaction": {"auto": True, "keep": {"tokens": 6000}, "buffer": 6000},
+        # Format after edits and stop generated trees from waking the watcher.
+        "formatter": True,
+        "watcher": {
+            "ignore": [
+                "node_modules/**",
+                "dist/**",
+                "build/**",
+                "coverage/**",
+                ".venv/**",
+                "venv/**",
+                "runtime/**",
+            ]
+        },
+        "providers": providers,
+        "mcp": {
+            "servers": {
+                "sovereign": {
+                    "type": "local",
+                    "command": command,
+                    "enabled": True,
+                    "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
+                },
+                **{
+                    name: {
+                        "type": "local",
+                        "command": [str(spec["command"]), *[str(arg) for arg in spec["args"]]],
+                        "enabled": True,
+                    }
+                    for name, spec in complementary_mcp_servers().items()
+                },
+            },
+        },
+    }
+
+
+def _normalise_provider(value: dict) -> dict[str, Any]:
+    """Translate a V1 provider block to V2 and keep the user's model overrides."""
+    normalized: dict[str, Any] = {
+        key: item
+        for key, item in value.items()
+        if key not in {"npm", "options", "models", "tool_call"}
+    }
+    if "package" not in normalized and isinstance(value.get("npm"), str):
+        normalized["package"] = value["npm"]
+    if "settings" not in normalized and isinstance(value.get("options"), dict):
+        normalized["settings"] = value["options"]
+    models: dict[str, dict] = {}
+    for name, model in (value.get("models") or {}).items():
+        if not isinstance(model, dict):
+            continue
+        item = {key: val for key, val in model.items() if key != "tool_call"}
+        capabilities = dict(item.get("capabilities") or {})
+        if model.get("tool_call"):
+            capabilities.setdefault("tools", True)
+        capabilities.setdefault("tools", True)
+        capabilities.setdefault("input", ["text"])
+        capabilities.setdefault("output", ["text"])
+        item["capabilities"] = capabilities
+        models[str(name)] = item
+    if models:
+        normalized["models"] = models
+    return normalized
+
+
+def _v1_permission_rules(value: object) -> list[dict[str, str]]:
+    """Map a V1 ``permission`` object to ordered V2 rules, if it is one."""
+    if not isinstance(value, dict):
+        return []
+    actions = {
+        "edit": "edit",
+        "bash": "shell",
+        "read": "read",
+        "glob": "glob",
+        "grep": "grep",
+        "webfetch": "webfetch",
+        "websearch": "websearch",
+    }
+    rules: list[dict[str, str]] = []
+    for key, effect in value.items():
+        action = actions.get(str(key))
+        if action and isinstance(effect, str) and effect in {"allow", "ask", "deny"}:
+            rules.append({"action": action, "resource": "*", "effect": effect})
+    return rules
+
+
+def _merge_permission_rules(base: list[dict], extra: object) -> list[dict[str, str]]:
+    """Append user rules without duplicating the generated ones."""
+    rules: list[dict[str, str]] = [rule for rule in base if isinstance(rule, dict)]
+    seen = {(rule.get("action"), rule.get("resource"), rule.get("effect")) for rule in rules}
+    if isinstance(extra, list):
+        for rule in extra:
+            if not isinstance(rule, dict):
+                continue
+            key = (rule.get("action"), rule.get("resource"), rule.get("effect"))
+            if key in seen:
+                continue
+            seen.add(key)
+            rules.append(rule)
+    return rules
 
 
 def install_opencode_mcp(
@@ -348,48 +525,89 @@ def install_opencode_mcp(
 ) -> Path:
     target = path or opencode_config_path()
     try:
-        data = json.loads(target.read_text(encoding="utf-8"))
+        raw = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
+        raw = {}
+    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
     # Preserve the user's other settings and providers; add the working local
     # provider, and the MCP server. Cloud providers are only added when the
     # user asks for them, so a local-first install stays local-first.
-    merged = opencode_config(include_cloud=include_cloud, max_context=max_context)
-    providers = merged["provider"]
-    for key, value in (data.get("provider") or {}).items():
+    merged: dict[str, Any] = opencode_config(include_cloud=include_cloud, max_context=max_context)
+    providers: dict[str, Any] = merged["providers"]
+    user_providers: dict[str, Any] = {}
+    for key in ("providers", "provider"):
+        candidate = data.get(key)
+        if isinstance(candidate, dict):
+            user_providers = candidate
+            break
+    for key, value in user_providers.items():
         if not isinstance(value, dict):
             continue
         existing = providers.get(key, {})
+        incoming = _normalise_provider(value)
         merged_models = {**existing.get("models", {})}
-        for model_name, model_config in (value.get("models") or {}).items():
-            if isinstance(model_config, dict):
-                merged_models[model_name] = {
-                    **merged_models.get(model_name, {}),
-                    **model_config,
-                }
+        merged_models.update(incoming.pop("models", {}))
         for retired in ("deepseek-r1:8b", "qwen2.5-coder:7b"):
             merged_models.pop(retired, None)
-        providers[key] = {
-            **existing,
-            **{k: v for k, v in value.items() if k != "models"},
-            "models": merged_models,
-        }
-    merged.update(
-        {
-            key: value
-            for key, value in data.items()
-            if key not in {"provider", "mcp", "model", "small_model"}
-        }
-    )
+        providers[key] = {**existing, **incoming, "models": merged_models}
+    for key, value in data.items():
+        if key in {
+            "provider",
+            "providers",
+            "mcp",
+            "model",
+            "small_model",
+            "plugins",
+            "permission",
+            "permissions",
+            "agents",
+            "commands",
+        }:
+            continue
+        merged[key] = value
+    # Preserve the user's agents, commands and plugins. Their entries win over
+    # the generated ones; plugin order keeps ponytail pinned first.
+    for key in ("agents", "commands"):
+        user_value = data.get(key)
+        if isinstance(user_value, dict):
+            merged[key] = {**merged.get(key, {}), **user_value}
+    user_plugins = data.get("plugins")
+    if isinstance(user_plugins, list):
+        merged["plugins"] = merged.get("plugins", []) + [
+            item for item in user_plugins if item not in merged.get("plugins", [])
+        ]
     # The tier gateway is the default: `auto` for work, the 9B for small
     # background calls so OpenCode does not swap models on every turn.
     merged["model"] = "sovereign/auto"
     merged["small_model"] = "sovereign/balanced"
+    # V1 used `permission`; V2 uses ordered `permissions`. Keep the user's
+    # later rules so their explicit deny/ask choices still win.
+    extra_rules = data.get("permissions")
+    if not isinstance(extra_rules, list):
+        extra_rules = _v1_permission_rules(data.get("permission"))
+    merged["permissions"] = _merge_permission_rules(
+        list(merged.get("permissions") or []), extra_rules
+    )
     # Our server entry must win over a stale command path, while other MCP
-    # servers the user added are preserved.
-    merged["mcp"] = {**(data.get("mcp") or {}), **merged.get("mcp", {})}
+    # servers the user added are preserved. Accept both V1 (server map at the
+    # top level) and V2 (`{"servers": {...}}`).
+    user_mcp: dict[str, Any] = {}
+    candidate_mcp = data.get("mcp")
+    if isinstance(candidate_mcp, dict):
+        user_mcp = candidate_mcp
+    user_servers: dict[str, Any] = user_mcp
+    if isinstance(user_mcp.get("servers"), dict):
+        user_servers = user_mcp["servers"]
+    generated_mcp = merged.get("mcp")
+    generated_servers: dict[str, Any] = {}
+    if isinstance(generated_mcp, dict):
+        generated_servers = generated_mcp.get("servers", {})
+    merged_mcp: dict[str, Any] = {
+        **user_mcp,
+        **(generated_mcp if isinstance(generated_mcp, dict) else {}),
+    }
+    merged_mcp["servers"] = {**user_servers, **generated_servers}
+    merged["mcp"] = merged_mcp
     return _write(target, json.dumps(merged, indent=2) + "\n")
 
 
@@ -642,6 +860,8 @@ def install_mcp_manifest(path: Path) -> Path:
         servers = {}
         data["mcpServers"] = servers
     servers["sovereign"] = _mcp_entry()
+    for name, spec in complementary_mcp_servers().items():
+        servers.setdefault(name, spec)
     return _write(path, json.dumps(data, indent=2) + "\n")
 
 
@@ -1326,6 +1546,71 @@ def unknown_client_models() -> list[str]:
     return sorted({name for name in names if name and name not in known})
 
 
+def install_ponytail() -> str:
+    """Register the DietrichGebert/ponytail plugin with Codex.
+
+    Codex (and its ChatGPT desktop side) load ponytail as a plugin with two
+    tiny Node.js lifecycle hooks. The marketplace and plugin must be added
+    before the hooks can be trusted in the ``/hooks`` view.
+    """
+    if shutil.which("codex") is None:
+        return "codex not installed"
+    try:
+        add = subprocess.run(
+            ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        install = subprocess.run(
+            ["codex", "plugin", "add", "ponytail@ponytail"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return f"codex plugin failed: {exc}"
+    if install.returncode == 0:
+        return "installed (review /hooks, start a new thread)"
+    detail = (install.stderr or install.stdout or add.stderr or add.stdout or "").strip()
+    return f"partial: {detail[:200]}" if add.returncode == 0 else f"failed: {detail[:200]}"
+
+
+def install_ponytail_claude() -> str:
+    """Register ponytail with Claude Code via its plugin marketplace.
+
+    Claude Code's plugin install has to be two separate prompts in an
+    interactive session, so this emits the exact commands; it does not fake a
+    completed install.
+    """
+    if shutil.which("claude") is None:
+        return "claude not installed"
+    return (
+        "run in Claude Code: /plugin marketplace add DietrichGebert/ponytail "
+        "then /plugin install ponytail@ponytail"
+    )
+
+
+def install_ponytail_qwen() -> str:
+    """Register ponytail with Qwen Code as an extension."""
+    if shutil.which("qwen") is None:
+        return "qwen not installed"
+    try:
+        result = subprocess.run(
+            ["qwen", "extensions", "install", "DietrichGebert/ponytail:ponytail"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return f"qwen extension failed: {exc}"
+    return (
+        "installed"
+        if result.returncode == 0
+        else (result.stderr or result.stdout or "failed")[:200]
+    )
+
+
 def install_all() -> list[tuple[str, str]]:
     """Configure every client. Returns (component, result) rows."""
     rows: list[tuple[str, str]] = []
@@ -1343,6 +1628,7 @@ def install_all() -> list[tuple[str, str]]:
         ("Continue config", install_continue_config),
         ("Continue rules", install_continue_rules),
         ("Qwen Code tier provider", install_qwen_router),
+        ("Ponytail ruleset", install_ponytail),
     ):
         try:
             rows.append((label, str(fn())))
@@ -1350,6 +1636,8 @@ def install_all() -> list[tuple[str, str]]:
             rows.append((label, f"failed: {exc}"))
     rows.append(("Claude Code MCP", install_claude_code_mcp()))
     rows.append(("Qwen Code MCP", install_qwen_mcp()))
+    rows.append(("Ponytail Claude Code", install_ponytail_claude()))
+    rows.append(("Ponytail Qwen", install_ponytail_qwen()))
     return rows
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from sovereign_code.memory import (
     add_memory,
     clear_memory,
+    ensure_memory,
     memory_path,
     project_context,
     project_slug,
@@ -38,3 +39,30 @@ def test_project_context_includes_agents_and_memory(monkeypatch, tmp_path: Path)
     assert "AGENTS.md" in context
     assert "use ruff and mypy" in context
     assert "prefer dataclasses" in context
+
+
+def test_project_context_empty_memory_omits_section(monkeypatch, tmp_path: Path) -> None:
+    """A memory file with only its header contributes no context section."""
+    monkeypatch.setattr("sovereign_code.memory.DATA_DIR", tmp_path)
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    ensure_memory(cwd)  # header only, no entries
+    context = project_context(cwd)
+    assert "Project memory" not in context
+
+
+def test_project_context_skips_unreadable_agent_file(monkeypatch, tmp_path: Path) -> None:
+    """A context file that exists but cannot be read is skipped, not fatal."""
+    monkeypatch.setattr("sovereign_code.memory.DATA_DIR", tmp_path)
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    (cwd / "AGENTS.md").write_text("secret", encoding="utf-8")
+    real_read = Path.read_text
+
+    def flaky_read(self, *args, **kwargs):
+        if self.name == "AGENTS.md":
+            raise OSError("permission denied")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read)
+    assert project_context(cwd) == ""

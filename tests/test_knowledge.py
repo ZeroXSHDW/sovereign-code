@@ -21,6 +21,19 @@ def test_init_creates_db_and_schema(tmp_path: Path) -> None:
     kb.close()
 
 
+def test_init_falls_back_to_localhost_when_settings_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A broken Settings load must not prevent the knowledge base opening."""
+    monkeypatch.setattr(
+        "sovereign_code.config.Settings.load",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no config")),
+    )
+    kb = KnowledgeBase(tmp_path / "kb.db", ollama_url=None)
+    assert kb.ollama_url == "http://127.0.0.1:11434"
+    kb.close()
+
+
 def test_context_manager(tmp_path: Path) -> None:
     db = tmp_path / "kb.db"
     with KnowledgeBase(db) as kb:

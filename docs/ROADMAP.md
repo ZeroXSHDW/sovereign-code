@@ -4,47 +4,34 @@ Prioritised work for Sovereign Code. This is the list the agent starts from
 when asked "what next". Every item here must pass `make check` before it is
 considered done.
 
-## Now — v0.4.0: stabilise and release the unreleased pass
+## Now — v0.4.1: hardening the 0.4.0 release
 
-The last release is 0.3.0 (2026-10-22). The `[Unreleased]` changelog already
-describes two landed bodies of work:
+`v0.4.0` is tagged (2026-10-23). A post-release review produced the
+`[0.4.1]` changelog entry. The repairs are complete and covered by
+`tests/test_upgrade_repairs.py`; `make check`, coverage (≈50%, floor 50) and
+`uv build` are green.
 
-- **Hugging Face Hub integration** (`sovereign hf`): standard-token login,
-  model/dataset search with licence/language/format/pipeline filters, repo
-  inspection, file-selective resumable downloads, one-step `hf import` into
-  Ollama, `hf remove`, and five MCP discovery tools.
-- **Live monitor v2**: health verdict with reasons, five-minute RAM/load/VRAM
-  sparklines, model inventory with resident/potential-free memory, aggregate
-  gateway throughput, `p`/`y`/`--json`/`--demo`, and correctly sized skill/prompt
-  cards.
+- [x] Implement the Streamable HTTP MCP transport the launchd service names.
+- [x] Make the tier-gateway disk cache safe on `ThreadingHTTPServer` threads.
+- [x] Fix the model catalog so every alias reports its real tier/model.
+- [x] Fence PDF downloads and make PDF parsing/ordering resilient.
+- [x] Stop session/backup collisions and corrupt-line data loss.
+- [x] Refuse lossy edits of non-UTF-8 files and preserve CRLF.
+- [x] Keep undo, prompt search and the old search index intact on failure.
+- [x] Close browser-policy gaps for legacy numeric hosts, subframes and
+      glued destructive labels.
+- [x] Harden loopback origins, private file permissions and config errors.
+- [x] Add an opt-in 24/7 coding loop (`sovereign loop`) that discovers work,
+      routes skills, runs `opencode run --auto`, verifies, and pauses on
+      repeated failure; it is a separate launchd job, not part of autostart.
+- [x] Bump `pyproject.toml`/`__init__.py` to `v0.4.1` after a live run of
+      `sovereign doctor` (24 pass · 3 warn · 0 fail) and `sovereign mcp --http`
+      (initialize and tools/list over loopback).
+- [ ] Tag `v0.4.1` and publish the release.
 
-Goal for 0.4.0: cut the release.
+## Next — v0.5.0
 
-1. [ ] Run `make check` green (tests, ruff, mypy, format) — the gate for every
-       change, including this roadmap's own examples.
-2. [ ] Review `[Unreleased]` against the code; confirm every item is implemented
-       and documented.
-3. [ ] Bump `pyproject.toml` to `0.4.0`, write the `[0.4.0]` changelog entry,
-       move `[Unreleased]` items into it, and open a fresh `[Unreleased]`.
-4. [ ] Tag `v0.4.0` and release.
-
-## Next — v0.4.1 / v0.5.0: finish the incomplete upgrade pass
-
-The `feature/upgrades` branch is not safe to merge as-is. It removes
-`packs.py`, `knowledge.py`, `warm.py`, `backends.py`, `safefile.py` and
-`uv.lock`, but those modules are still imported by `cli.py` (`sovereign
-backends`, `sovereign knowledge`), `cache.py`, `tier_gateway.py`,
-`backup.py`, `client_setup.py` and `harness.py`. Merging it breaks the build.
-
-Options, in priority order:
-
-- [ ] Complete the removals properly: update every caller, drop the now-dead
-      commands from `cli.py`, regenerate `uv.lock`, and re-run `make check`.
-- [ ] Or close the branch and keep the modules, documenting that the upgrade
-      pass was abandoned.
-
-After that, verify end-to-end the surfaces documented in the README but not yet
-exercised by tests:
+Surfaces documented in the README but not yet exercised end-to-end:
 
 - [ ] Task packs (`sovereign pack list/show/brief/models/install`) — pack
       brief writes into a project's `AGENTS.md`; SCOPE.md gating for pentest.
@@ -53,13 +40,15 @@ exercised by tests:
       `mlx-code`), `sovereign gateway-config --apply`.
 - [ ] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
       confirmation gates, secret refusal, masked audit log; keep integration
-      tests green.
+      tests green. Add session locking so `browse`, MCP and web chat do not
+      fight over one Chromium profile.
+- [ ] Give the HTTP MCP endpoint an explicit authentication story before it is
+      exposed beyond loopback.
 
 ## Later
 
-- Python 3.15 support matrix (pyproject lists 3.11–3.15; CI verifies 3.11 and
-  3.13).
-- Coverage floor above the current 45%.
+- Python 3.15 support matrix (pyproject lists 3.11–3.15; CI verifies all five).
+- Coverage floor above the current 50%.
 - Additional local stacks and model aliases as new hardware arrives.
 
 ## Principles

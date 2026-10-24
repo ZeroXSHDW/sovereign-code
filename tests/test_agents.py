@@ -94,6 +94,14 @@ def test_opencode_cloud_mode_does_not_pin_a_model(target):
     assert "-m" not in plan.argv
 
 
+def test_opencode_auto_uses_the_configured_router(target):
+    """`-m local/auto` would name a model that does not exist; `--auto` is enough."""
+    plan = _plan("opencode", target=target, agent_model="auto", unattended=True)
+    assert plan.argv[:2] == ["opencode", "run"]
+    assert "-m" not in plan.argv
+    assert "--auto" in plan.argv
+
+
 def test_cloud_mode_keeps_the_user_environment(target):
     plan = _plan("codex", mode="cloud", target=target)
     assert "PATH" in plan.env

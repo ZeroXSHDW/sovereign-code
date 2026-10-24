@@ -40,12 +40,15 @@ def _write_json(path: Path, data: dict[str, Any]) -> Path:
 
 
 def set_opencode_model(tag: str, path: Path | None = None) -> Path:
-    """Point OpenCode's default model at ``tag`` via its local provider.
+    """Point OpenCode's default model at ``tag`` via the right provider.
 
-    OpenCode names models as ``provider/model``, so a raw tag maps to
-    ``local/<tag>``. The generated config already ships a ``local`` provider
-    that exposes every installed tag, so only the ``model`` key changes.
+    A real model tag is served by Ollama (`local/<tag>`); a domain key such as
+    ``legal`` is only understood by the tier gateway (`sovereign/<key>`), which
+    routes it to that specialist's model.
     """
+    from .domains import DOMAINS
+
+    provider = "sovereign" if tag in DOMAINS else "local"
     target = path or opencode_model_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -53,7 +56,7 @@ def set_opencode_model(tag: str, path: Path | None = None) -> Path:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data["model"] = f"local/{tag}"
+    data["model"] = f"{provider}/{tag}"
     return _write_json(target, data)
 
 
@@ -165,3 +168,17 @@ def current_models() -> dict[str, str]:
 def is_installed(tag: str) -> bool:
     """Whether Ollama already has the tag (or its :latest form) locally."""
     return tag in installed_models()
+
+
+def resolve_domain(domain_key: str) -> str:
+    """Validate a domain key and return the model id to wire into a client.
+
+    The tier gateway accepts a domain key directly (`legal`, `forensics`, …)
+    and routes it to that specialist's model, so selecting a domain is just
+    writing its key as the client model — no tag resolution needed.
+    """
+    from .domains import DOMAINS
+
+    if domain_key not in DOMAINS:
+        raise ValueError(f"unknown domain: {domain_key}")
+    return domain_key

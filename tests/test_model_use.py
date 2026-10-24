@@ -79,3 +79,22 @@ def test_model_use_cli_allows_list_without_a_model(monkeypatch) -> None:
     args = parser.parse_args(["model-use", "--list"])
     assert args.list is True
     assert args.model is None
+
+
+def test_domain_selects_the_gateway_provider_in_opencode(tmp_path) -> None:
+    """A domain key routes through the gateway, not raw Ollama."""
+    mu.set_opencode_model("legal", tmp_path / "oc.json")
+    data = json.loads((tmp_path / "oc.json").read_text(encoding="utf-8"))
+    assert data["model"] == "sovereign/legal"
+
+
+def test_a_real_tag_still_uses_the_local_provider(tmp_path) -> None:
+    mu.set_opencode_model("qwen3.8:27b", tmp_path / "oc.json")
+    data = json.loads((tmp_path / "oc.json").read_text(encoding="utf-8"))
+    assert data["model"] == "local/qwen3.8:27b"
+
+
+def test_resolve_domain_validates() -> None:
+    assert mu.resolve_domain("legal") == "legal"
+    with pytest.raises(ValueError, match="unknown domain"):
+        mu.resolve_domain("not-a-domain")

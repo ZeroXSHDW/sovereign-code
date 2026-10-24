@@ -551,7 +551,7 @@ def _model_info(settings: Settings, tag: str) -> int:
 
 def _model_use(settings: Settings, args: argparse.Namespace) -> int:
     """Select an installed model for OpenCode, Codex, and Claude Code."""
-    from .model_use import current_models, is_installed, model_use
+    from .model_use import current_models, is_installed, model_use, resolve_domain
 
     if args.list:
         table = Table(title="Current client models", header_style="bold #b794f4")
@@ -563,18 +563,29 @@ def _model_use(settings: Settings, args: argparse.Namespace) -> int:
         console.print("[dim]Set one:[/] sovereign model-use <tag> --client all")
         return 0
 
-    tag = args.model
-    if not tag:
-        console.print("[yellow]Give a model tag, or use --list to see what is set.[/]")
-        console.print(
-            "[dim]Usage:[/] sovereign model-use <tag> [--client opencode|codex|claude|all]"
-        )
-        return 1
-    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
-        console.print(f"[red]Invalid model tag:[/] {tag}")
-        return 1
+    if args.domain:
+        try:
+            tag = resolve_domain(args.domain)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            from .domains import DOMAINS
 
-    if not is_installed(tag):
+            console.print(f"[dim]Domains: {', '.join(sorted(DOMAINS))}[/]")
+            return 1
+    else:
+        tag = args.model
+        if not tag:
+            console.print("[yellow]Give a model tag or --domain, or use --list.[/]")
+            console.print(
+                "[dim]Usage:[/] sovereign model-use <tag> [--client …]  ·  "
+                "sovereign model-use --domain legal[/]"
+            )
+            return 1
+        if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
+            console.print(f"[red]Invalid model tag:[/] {tag}")
+            return 1
+
+    if not args.domain and not is_installed(tag):
         if args.pull:
             if _pull(settings, tag) != 0:
                 return 1
@@ -6600,6 +6611,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     use_model.add_argument("--pull", action="store_true", help="pull the model first if missing")
     use_model.add_argument("--list", action="store_true", help="show each client's current model")
+    use_model.add_argument(
+        "--domain", default=None, help="select a specialist domain (legal, forensics, finance, …)"
+    )
 
     consult = sub.add_parser("consult", help="run one prompt through several models")
     consult.add_argument("prompt")

@@ -10,11 +10,15 @@ if ! "$PYTHON" -c 'import sys; assert sys.version_info >= (3, 11)' 2>/dev/null; 
   exit 1
 fi
 
-if [ ! -d .venv ]; then
-  "$PYTHON" -m venv .venv
+if command -v uv >/dev/null 2>&1; then
+  uv sync --locked --all-extras --dev --python "$PYTHON"
+else
+  if [ ! -d .venv ]; then
+    "$PYTHON" -m venv .venv
+  fi
+  .venv/bin/python -m pip install --quiet --upgrade pip
+  .venv/bin/python -m pip install --quiet -e '.[dev,browser]'
 fi
-.venv/bin/python -m pip install --quiet --upgrade pip
-.venv/bin/python -m pip install --quiet -e '.[dev]'
 
 mkdir -p "$HOME/.local/bin"
 ln -sf "$ROOT/bin/sovereign" "$HOME/.local/bin/sovereign"
@@ -25,7 +29,7 @@ echo "  run:      sovereign"
 echo "  status:   sovereign status"
 echo "  code:     sovereign code [path]"
 echo "  clients:  sovereign install-clients && sovereign clients"
-echo "  tests:    .venv/bin/python -m pytest -q"
+echo "  tests:    make check"
 echo
 "$ROOT/bin/sovereign" install-clients
 echo

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -261,7 +263,7 @@ def test_failed_reindex_keeps_the_previous_index(tmp_path: Path, monkeypatch) ->
         assert check.count() == 1
     finally:
         check.close()
-    assert not path.with_name(path.name + ".tmp").exists()
+    assert not list(path.parent.glob(path.name + ".*.tmp"))
 
 
 def test_mcp_tool_failures_are_tool_errors_not_protocol_errors() -> None:
@@ -294,8 +296,70 @@ def test_mcp_negotiates_the_requested_protocol_version() -> None:
 def test_cli_accepts_the_http_mcp_service_flags() -> None:
     from sovereign_code.cli import build_parser
 
-    args = build_parser().parse_args(["mcp", "--http", "--host", "127.0.0.1", "--port", "8765"])
-    assert (args.http, args.host, args.port) == (True, "127.0.0.1", 8765)
+    args = build_parser().parse_args(
+        ["mcp", "--http", "--host", "127.0.0.1", "--port", "8765", "--token", "secret"]
+    )
+    assert (args.http, args.host, args.port, args.token) == (True, "127.0.0.1", 8765, "secret")
+
+
+def test_mcp_http_bearer_token_check() -> None:
+    from sovereign_code.mcp import _bearer_ok
+
+    assert _bearer_ok(None, "") is True
+    assert _bearer_ok("Bearer secret", "secret") is True
+    assert _bearer_ok("bearer secret", "secret") is False
+    assert _bearer_ok("Bearer wrong", "secret") is False
+    assert _bearer_ok(None, "secret") is False
+
+
+def test_browser_profile_lock_is_exclusive_across_processes(tmp_path: Path) -> None:
+    from sovereign_code.browser.executor import ProfileLock
+
+    first = ProfileLock(tmp_path / "profile")
+    first.acquire()
+    try:
+        code = (
+            "import sys\n"
+            "from sovereign_code.browser.executor import ProfileLock\n"
+            "from sovereign_code.errors import BrowserError\n"
+            "try:\n"
+            "    ProfileLock(sys.argv[1]).acquire()\n"
+            "except BrowserError:\n"
+            "    sys.exit(0)\n"
+            "sys.exit(3)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path / "profile")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        first.release()
+
+
+def test_a_failed_browser_start_releases_the_profile_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pw = pytest.importorskip("playwright.sync_api")
+    from sovereign_code.browser.actions import BrowserPolicy
+    from sovereign_code.browser.executor import BrowserSession, ProfileLock
+
+    def boom() -> None:
+        raise RuntimeError("no browser")
+
+    monkeypatch.setattr(pw, "sync_playwright", boom)
+    session = BrowserSession(
+        profile_dir=tmp_path / "profile", policy=BrowserPolicy(), headless=True
+    )
+    with pytest.raises(RuntimeError, match="no browser"):
+        session.start()
+
+    # The lock must be free again, or every later browse call would fail.
+    lock = ProfileLock(tmp_path / "profile")
+    lock.acquire()
+    lock.release()
 
 
 def test_webchat_rejects_other_loopback_origins() -> None:
@@ -447,3 +511,83 @@ def test_private_bytes_write_is_atomic_and_keeps_mode(tmp_path: Path) -> None:
     write_private_bytes(target, b"\x89PNG\r\n\x1a\ntwo")
     assert target.read_bytes() == b"\x89PNG\r\n\x1a\ntwo"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_a_failed_session_export_keeps_the_previous_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from sovereign_code import sessions
+
+    dest = tmp_path / "export.jsonl"
+    dest.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sessions,
+        "scan_sessions",
+        lambda directory=None: [SimpleNamespace(path=tmp_path / "s.jsonl")],
+    )
+
+    def boom(_path: Path) -> list[dict]:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sessions, "read_session", boom)
+    with pytest.raises(OSError, match="disk full"):
+        sessions.export_sessions(dest)
+    assert dest.read_text(encoding="utf-8") == "old\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_concurrent_index_builds_do_not_share_a_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from sovereign_code import search
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.py").write_text("print(1)\n", encoding="utf-8")
+    barrier = threading.Barrier(2)
+
+    def slow_embed(_url, _model, texts, timeout=300.0):
+        barrier.wait(timeout=10)
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(search, "embed", slow_embed)
+    errors: list[BaseException] = []
+
+    def build() -> None:
+        try:
+            search.build_index(root, "http://127.0.0.1:1")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert errors == []
+    store = search.IndexStore(search.index_path_for(root))
+    try:
+        assert store.count() > 0
+    finally:
+        store.close()
+    assert list(search.index_path_for(root).parent.glob("*.tmp")) == []
+
+
+def test_tui_stylesheet_is_present_next_to_the_module() -> None:
+    from sovereign_code.tui.monitor import MonitorApp
+
+    assert MonitorApp.CSS_PATH.is_file()
+
+
+def test_package_version_matches_pyproject() -> None:
+    import tomllib
+
+    from sovereign_code import __version__
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert data["project"]["version"] == __version__

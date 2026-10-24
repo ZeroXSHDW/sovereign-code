@@ -9,6 +9,7 @@ No test spawns OpenCode or runs a project's checks.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -203,6 +204,21 @@ def test_run_forever_stops_when_disabled(project: Path) -> None:
     config = LoopConfig(directory=project, verify=False, skill_cards=0)
     assert run_forever(config, runner=lambda _prompt: (True, "ok")) == 0
     assert load_state(project).runs == 0
+
+
+def test_run_forever_exits_cleanly_when_another_instance_holds_the_lock(
+    project: Path,
+) -> None:
+    """A lock conflict is benign under launchd; exiting 1 would restart it forever."""
+    set_enabled(project, True)
+    lock = loop.lock_path(project)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        config = LoopConfig(directory=project, verify=False, skill_cards=0)
+        assert run_forever(config) == 0
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def test_loop_service_is_opt_in(project: Path) -> None:

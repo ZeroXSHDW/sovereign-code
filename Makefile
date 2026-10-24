@@ -4,7 +4,7 @@ UV ?= uv
 SOVEREIGN := $(VENV)/bin/sovereign
 PY := $(VENV)/bin/python
 
-.PHONY: help install sync test test-all coverage lint format typecheck check quality bench \
+.PHONY: help install sync test test-all coverage lint format typecheck check quality audit hooks minimum bench \
         run status models doctor clients install-clients code login \
         uninstall-login build clean
 
@@ -17,13 +17,16 @@ help:
 	@echo "make lint            ruff check"
 	@echo "make format          ruff format"
 	@echo "make typecheck       mypy"
-	@echo "make check           lint + format check + typecheck + test"
+	@echo "make check           lint + format check + typecheck + test with coverage"
+	@echo "make quality         check + dependency audit"
+	@echo "make audit           pip-audit against the locked third-party dependencies"
+	@echo "make hooks           install the pre-commit hooks"
+	@echo "make minimum         test against the oldest allowed dependencies"
 	@echo "make build           build the wheel and sdist"
 	@echo "make clean           remove build artefacts and caches"
 
 install:
-	$(UV) venv --python $(PYTHON) $(VENV)
-	$(UV) pip install --python $(PY) -e '.[dev,browser]'
+	$(UV) sync --all-extras --dev --python $(PYTHON)
 	$(SOVEREIGN) install-clients
 
 sync:
@@ -48,12 +51,25 @@ format:
 typecheck:
 	$(VENV)/bin/mypy
 
-check: lint typecheck test
+check: lint typecheck coverage
 	$(VENV)/bin/ruff format --check .
 
-quality: check
+audit:
 	$(UV) export --no-emit-project --no-hashes -o /tmp/sovereign-audit-requirements.txt
 	$(VENV)/bin/pip-audit --strict -r /tmp/sovereign-audit-requirements.txt
+
+hooks:
+	$(VENV)/bin/pre-commit install
+
+minimum:
+	$(UV) pip compile pyproject.toml --extra dev --extra browser --resolution lowest-direct -o /tmp/sovereign-minimum.txt
+	rm -rf /tmp/sovereign-minimum-venv
+	$(UV) venv --python $(PYTHON) /tmp/sovereign-minimum-venv
+	$(UV) pip install --python /tmp/sovereign-minimum-venv/bin/python -r /tmp/sovereign-minimum.txt
+	$(UV) pip install --python /tmp/sovereign-minimum-venv/bin/python -e . --no-deps
+	/tmp/sovereign-minimum-venv/bin/python -m pytest -q
+
+quality: check audit
 
 bench:
 	$(SOVEREIGN) bench

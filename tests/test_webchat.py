@@ -142,3 +142,50 @@ def test_webchat_accepts_its_own_origin(server) -> None:
     status, body = _request(server, "/api/health", headers={"Host": "127.0.0.1"})
     assert status == 200
     assert json.loads(body)["ok"] in (True, False)
+
+
+def test_webchat_rejects_another_loopback_port(server) -> None:
+    """Another local server must not drive /api/browse through a shared hostname."""
+    port = server.server_address[1]
+    previous = webchat.Handler.port
+    webchat.Handler.port = port
+    try:
+        status, _ = _request(
+            server,
+            "/api/chat",
+            method="POST",
+            headers={
+                "Host": "127.0.0.1",
+                "Origin": f"http://127.0.0.1:{port + 1}",
+                "Content-Length": "0",
+            },
+        )
+        assert status == 403
+    finally:
+        webchat.Handler.port = previous
+
+
+def test_webchat_rejects_a_malformed_content_length(server) -> None:
+    status, _ = _request(
+        server,
+        "/api/chat",
+        method="POST",
+        headers={"Host": "127.0.0.1", "Content-Length": "not-a-number"},
+    )
+    assert status == 400
+
+
+def test_webchat_sends_security_headers(server) -> None:
+    port = server.server_address[1]
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", "/", headers={"Host": "127.0.0.1"})
+        response = conn.getresponse()
+        headers = {key.lower(): value for key, value in response.getheaders()}
+        response.read()
+    finally:
+        conn.close()
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["x-frame-options"] == "DENY"
+    assert headers["referrer-policy"] == "no-referrer"
+    assert "default-src 'self'" in headers["content-security-policy"]

@@ -12,7 +12,7 @@ def test_skills_list_read_and_render(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("sovereign_code.skills.REPO_SKILLS_DIR", tmp_path / "repo")
     # Isolate the curated-profile overlay: this test exercises the filesystem
     # read path, whose headings the real profile would otherwise replace.
-    monkeypatch.setattr("sovereign_code.skills._profile_descriptions", lambda: {})
+    monkeypatch.setattr("sovereign_code.skills._profile_descriptions", dict)
     # The shared SQLite index may already know a real "code-review" skill;
     # force the filesystem path the test is actually checking.
     monkeypatch.setattr("sovereign_code.skills._index_usable", lambda _conn: False)

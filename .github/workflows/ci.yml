@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly: catch dependency drift and flaky tests without a push.
+    - cron: "0 6 * * 1"
 
 # The default token is enough for checkout and artifact upload. Nothing here
 # needs write access to the repository.
@@ -108,6 +111,26 @@ jobs:
       - name: pip-audit
         run: uv run pip-audit --strict -r /tmp/sovereign-audit-requirements.txt
 
+  minimum:
+    name: minimum dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Resolve the oldest allowed direct dependencies
+        run: uv pip compile pyproject.toml --extra dev --extra browser --resolution lowest-direct -o /tmp/requirements-min.txt
+      - name: Install
+        run: |
+          uv venv --python 3.11
+          uv pip install -r /tmp/requirements-min.txt
+          uv pip install -e . --no-deps
+      - name: Test
+        run: .venv/bin/python -m pytest -q
+
   build:
     name: build
     runs-on: ubuntu-latest
@@ -122,6 +145,10 @@ jobs:
       - name: Check the wheel installs and the console script runs
         run: |
           uv run --isolated --with dist/*.whl sovereign --help
+      - name: Check the wheel ships the TUI stylesheet
+        run: |
+          unzip -l dist/*.whl | grep -q 'sovereign_code/tui/app.tcss'
+          unzip -l dist/*.whl | grep -q 'sovereign_code/py.typed'
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

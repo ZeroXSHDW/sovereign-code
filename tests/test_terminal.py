@@ -63,3 +63,14 @@ def test_tmux_session_without_tmux() -> None:
         return
     result = terminal.tmux_session("sovereign-test")
     assert result["ok"] is False
+
+
+def test_run_background_prunes_old_logs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(terminal, "DATA_DIR", tmp_path)
+    folder = tmp_path / "terminals"
+    folder.mkdir()
+    for index in range(60):
+        (folder / f"bg-{index:04d}.log").write_text("x", encoding="utf-8")
+    result = terminal.run_background("echo bg-prune")
+    assert result["ok"] is True
+    assert len(list(folder.glob("bg-*.log"))) <= 51

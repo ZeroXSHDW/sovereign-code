@@ -18,3 +18,12 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      hooks:
+        patterns: ["*"]

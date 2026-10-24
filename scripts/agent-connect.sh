@@ -32,12 +32,17 @@ warn() { printf '[sovereign] \033[33m!\033[0m %s\n' "$*" >&2; }
 # ------------------------------------------------------------------ install
 
 install_sovereign() {
-  if [ ! -d "$VENVDIR" ]; then
-    log "creating venv at $VENVDIR"
-    "$PYTHON" -m venv "$VENVDIR"
+  if command -v uv >/dev/null 2>&1; then
+    log "syncing with uv"
+    (cd "$ROOT" && UV_PROJECT_ENVIRONMENT="$VENVDIR" uv sync --locked --all-extras --dev --python "$PYTHON")
+  else
+    if [ ! -d "$VENVDIR" ]; then
+      log "creating venv at $VENVDIR"
+      "$PYTHON" -m venv "$VENVDIR"
+    fi
+    "$VENVDIR/bin/python" -m pip install --quiet --upgrade pip
+    "$VENVDIR/bin/python" -m pip install --quiet -e '.[dev,browser]'
   fi
-  "$VENVDIR/bin/python" -m pip install --quiet --upgrade pip
-  "$VENVDIR/bin/python" -m pip install --quiet -e '.[dev]'
 
   mkdir -p "$HOME/.local/bin"
   ln -sf "$ROOT/bin/sovereign" "$HOME/.local/bin/sovereign"

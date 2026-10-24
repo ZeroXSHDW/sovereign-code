@@ -1,3 +1,7 @@
+<!-- zerodevllc-theme -->
+[![ZeroDevLLC](https://img.shields.io/badge/ZeroDevLLC-cyber--deck-00ff88?style=for-the-badge&labelColor=050a08)](https://ZeroDevLLC.com)
+[![Theme](https://img.shields.io/badge/theme-3D%20cyber-00f0ff?style=flat-square&labelColor=050a08)](https://ZeroDevLLC.com)
+
 # Sovereign Code
 
 **A terminal-first, local-first AI coding console for Apple Silicon.**
@@ -1227,3 +1231,7 @@ drops the Swift/SDK coupling and menu-bar-only workflow.
 ---
 
 Part of the [ZeroDevLLC](https://ZeroDevLLC.com) ecosystem.
+
+---
+
+<p align="center"><sub><code>ZeroDevLLC · cyber-deck · local-first · no cloud · no telemetry</code></sub></p>

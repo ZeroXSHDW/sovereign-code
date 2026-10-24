@@ -12,16 +12,19 @@
 [![Docs](https://img.shields.io/badge/docs-sovereign.zerodevllc.eu-00f0ff?style=flat-square&labelColor=050a08)](https://sovereign.zerodevllc.eu)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue) ![License MIT](https://img.shields.io/badge/license-MIT-green) ![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-silver) ![Local first](https://img.shields.io/badge/network-local--first-purple)
 
-Sovereign Code replaces the Swift menu-bar approach of the earlier Local Bar
-projects with a portable Python/Textual system. At login, Terminal opens a live,
-read-only monitor: the total skill bank and prompt bank, which project is using
-a model now, which models are resident, and what the stack is doing. It never
-sends a prompt or keeps a model loaded just to watch the machine. From the
-monitor you can still jump straight into Qwen Code in the current repository.
+Sovereign Code is a portable Python/Textual replacement for the Swift menu-bar
+approach of the earlier Local Bar projects: one terminal-first console that
+routes every coding request to the right local model, and lets Codex, Claude
+Code, OpenCode, Qwen Code and Continue work as real agents on this Mac. A
+live read-only monitor shows the skill bank, which project is using a model,
+which models are resident, and what the stack is doing — it never sends a
+prompt or holds a model just to watch.
 
-Chat is an explicit opt-in (`sovereign chat`), because every chat turn keeps a
-model resident for its `keep_alive` window and that is RAM the monitor exists to
-protect.
+Chat is an explicit opt-in (`sovereign chat`), because every turn keeps a model
+resident for its `keep_alive` window and that is RAM the monitor exists to
+protect. Specialised models — legal, forensics, finance, security — are pulled
+when you need them (`sovereign pull`, `sovereign hf import`) and selected for
+the clients in one command (`sovereign model-use`).
 
 Nothing leaves the Mac by default. Ollama and every gateway bind to
 `127.0.0.1`, and every local alias stays local. Frontier models served by
@@ -63,30 +66,31 @@ to set as the repository's social preview.)
 - **24/7 coding loop** — opt-in, gated by the project's own checks, and paused
   by a dirty tree or repeated failure instead of spinning.
 
-## New in 0.5.0
+## New in 0.6.0
 
-- **`sovereign verify --clients`** sends one real turn through Codex, Claude
-  Code, and OpenCode in each client's own non-interactive mode, so
-  "configured" is no longer confused with "working".
-- **`sovereign doctor` checks completions**, not just the port. A gateway that
-  answers `/health` and drops every completion is now reported.
-- **Native OpenCode V2 config**: ordered permissions, read-only `reviewer` and
-  `planner` subagents, `/check` `/review` `/plan` commands, todo tracking, and
-  background compaction.
-- **`make browser-check`** runs the Playwright suite against a real Chromium in
-  CI instead of skipping it.
-- **Safer client wiring**: unverified `codex`/`claude` versions surface as a
-  warning instead of silently misfiring, full computer control is pinned with
-  `SOVEREIGN_MCP_COMPUTER=1`, and client-config backups are bounded to five
-  copies.
+- **`sovereign model-use`** selects an installed model for OpenCode, Codex and
+  Claude Code in one command — pull a specialist model (`sovereign pull` or
+  `sovereign hf import`) and `model-use` wires it into all three clients.
+- **Specialist task packs and domains**: red/blue/purple team, SOC, threat
+  intel, malware, cloud and app security alongside legal, forensics and
+  finance; `run_pack` and `domain=` route a task to the right skill and model.
+- **MLX live-verified on Apple Silicon**: `sovereign mlx start` serves a
+  supervised model with a 0.6B speculative draft and 8-bit KV cache
+  (~0.45 s warm reply, 2.8 s full answer); `sovereign run` now routes MLX tags
+  to the mlx-lm server.
+- **Browser and full computer control verified end-to-end**, with the policy
+  guard, secret refusal, confirmation gates, and the destructive-command
+  deny-list.
+- **Coverage floor 53%, 1000+ tests**, `pip-audit` clean, every dependency at
+  its latest release.
 
-See the [changelog](CHANGELOG.md) for the full 0.5.0 list.
+See the [changelog](CHANGELOG.md) for the full list.
 
 <details>
 <summary><strong>Contents</strong></summary>
 
 - [Screenshots](#screenshots)
-- [New in 0.5.0](#new-in-050)
+- [New in 0.6.0](#new-in-060)
 - [Quick start](#quick-start)
 - [Task packs](#task-packs-pentest-vulnerability-risk-vendor-legal-compliance-forensics-finance)
 - [Skills](#skills-find-check-install)
@@ -1103,6 +1107,8 @@ sovereign sessions --search "term"   # search chat history
 sovereign pull <model1> <model2>   # pull one or more Ollama models by tag
 sovereign run <model> "…"          # download (if needed) and run any model on a prompt
 sovereign model-info <tag>         # inspect size/context/family before pulling
+sovereign model-use <tag>          # select a model for OpenCode, Codex, and Claude
+sovereign model-use --list         # show each client's current model
 sovereign pull-stack <name>        # pull an offline stack (lean/balanced/capable/max)
 sovereign setup-stack <name>       # pull stack + verify gateway aliases
 sovereign gateway-aliases          # show which aliases route to installed models
@@ -1477,7 +1483,8 @@ registers the four launchd services.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — prioritised work and current status.
 - [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) — the design decisions behind the build.
 - [docs/BEST_SKILL_BANKS.md](docs/BEST_SKILL_BANKS.md) — how the skill library is ranked.
-- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.5.0 client-compatibility pass.
+- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.6.0 model-selection
+  and verified-hardware pass.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, checks, and review expectations.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — how contributors are expected to behave.
 - [SECURITY.md](SECURITY.md) — reporting a vulnerability.

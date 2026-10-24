@@ -2,6 +2,24 @@
 
 All notable changes to Sovereign Code.
 
+## [Unreleased]
+
+### Fixed
+- **Codex 0.164 is verified and pinned**: the CLI was upgraded from 0.163,
+  `codex --strict-config doctor` reports no notes against the local profile,
+  the model catalog is regenerated, and `codex exec` answers through the tier
+  gateway. `SUPPORTED_CLIENT_VERSIONS` now lists both 0.163 and 0.164.
+- **The client-version guard compares the version, not the line**: the codex
+  `--version` output is `codex-cli 0.164.0`, so `startswith("0.164")` never
+  matched and doctor warned about a supported client. The numeric `x.y.z` is
+  extracted first (`released_version`).
+- **Probes and restarts report the truth**: the doctor completion probe names
+  no model (the gateway routes a short prompt itself), `router --stop` says so
+  when a process ignores SIGTERM instead of claiming success and dropping its
+  pid file, and `install-clients` points at `sovereign verify --clients`.
+- **`make typecheck` checks the Linux view too** (`mypy --platform linux`), so
+  a macOS-only pass can no longer hide the narrowing error that failed CI.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added

@@ -135,6 +135,42 @@ def test_supported_client_versions_are_not_reported(monkeypatch) -> None:
     assert client_setup.unsupported_clients() == {}
 
 
+def test_client_cli_version_returns_the_first_line(monkeypatch) -> None:
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        client_setup.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 0, "0.163.4\nsecond line\n", ""),
+    )
+    assert client_setup.client_cli_version("codex") == "0.163.4"
+
+
+def test_client_cli_version_is_empty_for_a_missing_cli(monkeypatch) -> None:
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: None)
+    assert client_setup.client_cli_version("codex") == ""
+
+
+def test_install_qwen_mcp_registers_complementary_servers(monkeypatch) -> None:
+    """Qwen gets the reference servers and the explicit computer-control env."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/qwen")
+
+    def fake_run(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        cmd = list(args[0]) if args and isinstance(args[0], list) else []
+        calls.append(cmd)
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(client_setup.subprocess, "run", fake_run)
+    assert (
+        client_setup.install_qwen_mcp()
+        == "added (filesystem:added, memory:added, playwright:added, git:added, fetch:added)"
+    )
+    sovereign_add = next(c for c in calls if "sovereign" in c and "--env" in c)
+    assert "SOVEREIGN_MCP_COMPUTER=1" in sovereign_add
+    # The five reference servers each get their own add.
+    assert sum(1 for c in calls if "sovereign" not in c and "mcp" in c) == 5
+
+
 def test_opencode_cloud_provider_is_opt_in() -> None:
     """A local-first install must not put a remote provider in the config.
 
@@ -478,3 +514,25 @@ def test_backup_skips_an_identical_copy(tmp_path) -> None:
     before = set(tmp_path.glob("settings.json.bak-*"))
     client_setup._backup(path)
     assert set(tmp_path.glob("settings.json.bak-*")) == before
+
+
+def test_released_version_reads_the_number_out_of_a_version_line() -> None:
+    assert client_setup.released_version("codex-cli 0.164.0") == "0.164.0"
+    assert client_setup.released_version("2.1.304 (Claude Code)") == "2.1.304"
+    assert client_setup.released_version("no digits here") == ""
+
+
+def test_unsupported_clients_compares_the_numeric_version(monkeypatch) -> None:
+    """`codex-cli 0.164.0` is version 0.164, not a line that starts with it."""
+    versions = {"codex": "codex-cli 0.164.0", "claude": "2.1.304 (Claude Code)"}
+    monkeypatch.setattr(client_setup, "client_cli_version", versions.get)
+    assert client_setup.unsupported_clients() == {}
+
+
+def test_unsupported_clients_reports_an_unverified_major(monkeypatch) -> None:
+    monkeypatch.setattr(
+        client_setup,
+        "client_cli_version",
+        lambda name: "codex-cli 0.170.0" if name == "codex" else "",
+    )
+    assert client_setup.unsupported_clients() == {"codex": "codex-cli 0.170.0"}

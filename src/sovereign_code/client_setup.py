@@ -9,6 +9,7 @@ models and the curated prompt skills.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -50,11 +51,17 @@ def client_cli_version(name: str) -> str:
     return output.splitlines()[0] if output else ""
 
 
+def released_version(line: str) -> str:
+    """The x.y[.z] inside a `--version` line ("codex-cli 0.164.0" -> "0.164.0")."""
+    match = re.search(r"\d+\.\d+(?:\.\d+)?", line)
+    return match.group(0) if match else ""
+
+
 # The client major versions this module's subcommands were written against.
 # A CI release job updates these when it verifies a new client major; the
 # guard below only warns, it never blocks, so an unknown version still works.
 SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
-    "codex": ("0.163",),
+    "codex": ("0.163", "0.164"),
     "claude": ("2.",),
 }
 
@@ -62,7 +69,7 @@ SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
 def unsupported_clients() -> dict[str, str]:
     """Clients whose installed major differs from the versions we exercise.
 
-    Returns ``{name: version}`` for any installed client whose version line
+    Returns ``{name: version}`` for any installed client whose numeric version
     does not start with one of the supported prefixes. This is a warning path
     for ``doctor``; it never blocks an install.
     """
@@ -71,7 +78,8 @@ def unsupported_clients() -> dict[str, str]:
         version = client_cli_version(name)
         if not version:
             continue
-        if not any(version.startswith(prefix) for prefix in prefixes):
+        numeric = released_version(version) or version
+        if not any(numeric.startswith(prefix) for prefix in prefixes):
             unsupported[name] = version
     return unsupported
 

@@ -5971,6 +5971,39 @@ def _orchestrate(settings: Settings, args: argparse.Namespace) -> int:
     )
 
 
+def _do(settings: Settings, args: argparse.Namespace) -> int:
+    """One-shot coding: route a task to the pipeline with sensible defaults.
+
+    `--quick` pins direct mode (one request writes whole files); `--big` pins
+    the agent loop; the default leaves `auto`, which tries direct then falls
+    back to the agent. This is the "just do it" entry point for a solo session.
+    """
+    mode = "agent" if args.big else ("direct" if args.quick else "auto")
+    snap = _snapshot(settings)
+    pick = choose(
+        Task.AGENT,
+        snap.views,
+        snap.potential_free_gb,
+        max_context=settings.max_context,
+    )
+    agent = pick.model.tag if pick.model else "qwen3-coder:30b"
+    review = "gemma4:12b"
+    return _pipeline(
+        settings,
+        args.prompt,
+        args.dir,
+        plan_model="glm-4.7-flash",
+        agent=agent,
+        review_model=review,
+        yes=args.yes,
+        no_review=False,
+        tokens=700,
+        no_verify=args.no_verify,
+        dry_run=args.dry_run,
+        mode=mode,
+    )
+
+
 def _install_clients() -> int:
     from .client_setup import install_all
     from .clients import write_codex_profile
@@ -6585,6 +6618,16 @@ def build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument(
         "--agent-timeout", type=float, default=900.0, help="timeout for one agent run"
     )
+
+    do = sub.add_parser("do", help="hand a coding task to the local pipeline with sane defaults")
+    do.add_argument("prompt")
+    do.add_argument("--dir", default=".")
+    do.add_argument("--quick", action="store_true", help="prefer direct (one-request) mode")
+    do.add_argument("--big", action="store_true", help="prefer the agent loop for a larger change")
+    do.add_argument("--yes", action="store_true", help="yolo-approve agent tool calls")
+    do.add_argument("--no-verify", action="store_true", help="skip project checks")
+    do.add_argument("--dry-run", action="store_true", help="show resolved models and checks only")
+
     sub.add_parser("gateway-aliases", help="show which gateway aliases route to installed models")
 
     rm = sub.add_parser("rm", help="remove an installed model")
@@ -7953,6 +7996,8 @@ def main(argv: list[str] | None = None) -> int:
         return _harness(settings)
     if command == "orchestrate":
         return _orchestrate(settings, args)
+    if command == "do":
+        return _do(settings, args)
     if command == "gateway-aliases":
         return _gateway_aliases(_snapshot(settings))
     if command == "rm":

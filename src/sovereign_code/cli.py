@@ -333,6 +333,49 @@ def _models_remote(snap: Snapshot, query: str | None = None) -> int:
     return 0
 
 
+def _mlx_complete(
+    tag: str, prompt: str, system: str | None, max_tokens: int, temperature: float
+) -> str | None:
+    """One non-streaming completion through the running mlx-lm server.
+
+    Returns the reply text, or ``None`` after printing the error. The MLX
+    server speaks the OpenAI chat API, so this mirrors the provider path.
+    """
+    import httpx
+
+    from . import mlx as _mlx
+
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload = {
+        "model": _mlx.forward_model(tag),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+    }
+    try:
+        response = httpx.post(
+            f"{_mlx.mlx_url()}/v1/chat/completions",
+            json=payload,
+            timeout=httpx.Timeout(300, connect=5),
+        )
+    except httpx.HTTPError as exc:
+        console.print(f"[red]MLX server unreachable: {exc}[/]")
+        return None
+    if response.status_code != 200:
+        console.print(f"[red]MLX server returned HTTP {response.status_code}.[/]")
+        return None
+    try:
+        content = response.json()["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        console.print("[red]MLX server returned a malformed reply.[/]")
+        return None
+    return (content or "").strip()
+
+
 def _run(
     settings: Settings,
     model: str,
@@ -351,6 +394,25 @@ def _run(
     if not prompt:
         console.print("[red]Give a prompt:[/] sovereign run <model> 'question'")
         return 1
+    # An MLX tag or alias runs on the mlx-lm server (Metal), not Ollama. The
+    # server exposes the same OpenAI API, so `run` streams it directly.
+    from . import mlx as _mlx
+
+    mlx_resolved = _mlx.resolve_model(model)
+    if mlx_resolved is not None:
+        if not _mlx.online():
+            console.print(
+                f"[red]The MLX server is offline.[/] Start it first: "
+                f"sovereign mlx start --model {mlx_resolved[0]}"
+            )
+            return 1
+        tag, _task = mlx_resolved
+        text = _mlx_complete(tag, prompt, system, max(512, min(context, 8192)), temperature)
+        if text is None:
+            return 1
+        console.print(Text(text))
+        console.print()
+        return 0
     client = OllamaClient(settings.ollama_url)
 
     async def installed() -> bool:

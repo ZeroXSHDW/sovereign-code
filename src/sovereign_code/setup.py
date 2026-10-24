@@ -162,7 +162,7 @@ def ensure_layout(*, dry_run: bool = False) -> Step:
     return Step("layout", True, f"{config.LOCAL_AI_ROOT}")
 
 
-def check_ollama(settings, *, dry_run: bool = False) -> Step:
+def check_ollama(settings: config.Settings, *, dry_run: bool = False) -> Step:
     if _http_ok(settings.ollama_url):
         return Step("ollama", True, f"serving at {settings.ollama_url}")
     binary = shutil.which("ollama")
@@ -230,7 +230,7 @@ def ensure_gateway(*, dry_run: bool = False) -> Step:
 # ------------------------------------------------------------------- models
 
 
-def _installed_tags(settings) -> set[str]:
+def _installed_tags(settings: config.Settings) -> set[str]:
 
     try:
         response = shared_client().get(settings.ollama_url.rstrip("/") + "/api/tags", timeout=3.0)
@@ -240,14 +240,14 @@ def _installed_tags(settings) -> set[str]:
     return {str(item.get("name") or "") for item in data.get("models", [])}
 
 
-def missing_models(settings, stack: tuple[str, ...] | None = None) -> list[str]:
+def missing_models(settings: config.Settings, stack: tuple[str, ...] | None = None) -> list[str]:
     installed = {item.removesuffix(":latest") for item in _installed_tags(settings)}
     wanted = stack or DEFAULT_STACK
     return [tag for tag in wanted if tag.removesuffix(":latest") not in installed]
 
 
 def pull_models(
-    settings,
+    settings: config.Settings,
     stack: tuple[str, ...] | None = None,
     *,
     yes: bool = False,
@@ -294,7 +294,7 @@ def install_clients(*, dry_run: bool = False) -> Step:
     return Step("clients", True, "client configs and wrappers written")
 
 
-def install_services(settings, *, dry_run: bool = False) -> Step:
+def install_services(settings: config.Settings, *, dry_run: bool = False) -> Step:
     if dry_run:
         return Step("services", True, "would install the gateway, tier gateway and bridge")
     try:
@@ -330,7 +330,7 @@ def install_login(*, dry_run: bool = False) -> Step:
 
 
 def run_setup(
-    settings,
+    settings: config.Settings,
     *,
     models: str = "recommended",
     yes: bool = False,

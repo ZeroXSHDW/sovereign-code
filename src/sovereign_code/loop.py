@@ -43,6 +43,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .checks import detect_checks, run_checks
 from .config import DATA_DIR
@@ -725,7 +726,7 @@ def check_guard(root: Path, config: LoopConfig) -> str:
     return ""
 
 
-def make_runner(config: LoopConfig, settings=None) -> Callable[[str], tuple[bool, str]]:
+def make_runner(config: LoopConfig, settings: Any = None) -> Callable[[str], tuple[bool, str]]:
     """A headless OpenCode (or other client) run, bound to the project."""
     from .agents import build_headless, run_headless
     from .config import Settings
@@ -790,7 +791,7 @@ def run_once(
     state: LoopState | None = None,
     runner: Callable[[str], tuple[bool, str]] | None = None,
     verifier: Callable[[], tuple[bool, str]] | None = None,
-    settings=None,
+    settings: Any = None,
     log: Callable[[str], None] | None = None,
 ) -> LoopRun:
     """Run one task to completion and persist the result.
@@ -996,7 +997,7 @@ def _with_directory(config: LoopConfig, target: Path) -> LoopConfig:
     return replace(config, directory=target)
 
 
-def _recorder(prompt: str, target: Path):
+def _recorder(prompt: str, target: Path) -> Any:
     try:
         from .harness import RunRecorder
 
@@ -1010,7 +1011,7 @@ def _recorder(prompt: str, target: Path):
 def run_forever(
     config: LoopConfig,
     *,
-    settings=None,
+    settings: Any = None,
     state: LoopState | None = None,
     runner: Callable[[str], tuple[bool, str]] | None = None,
     verifier: Callable[[], tuple[bool, str]] | None = None,
@@ -1058,8 +1059,11 @@ def run_forever(
                     say(f"sleeping {config.interval:.0f}s before the next task")
                     sleep(config.interval)
     except LoopLocked as exc:
+        # Another instance is already doing the work. This is not a failure:
+        # the launchd job restarts only on a non-zero exit, so returning 1
+        # here would make it retry every ThrottleInterval forever.
         say(str(exc))
-        return 1
+        return 0
     except KeyboardInterrupt:
         say("loop stopped")
         return 0

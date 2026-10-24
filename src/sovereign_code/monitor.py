@@ -774,7 +774,7 @@ def assess(report: LiveReport) -> Health:
 # -------------------------------------------------------------------- system
 
 
-def _service_lines(settings) -> list[ServiceLine]:
+def _service_lines(settings: Any) -> list[ServiceLine]:
     from .config import DEFAULT_GATEWAY, DEFAULT_OLLAMA, DEFAULT_ROUTER
 
     def port_of(url: str, fallback: int) -> int:
@@ -806,7 +806,7 @@ def _loaded(views: dict[str, ModelView] | None) -> list[tuple[str, float, int | 
     return sorted(loaded, key=lambda item: item[1], reverse=True)
 
 
-def collect_live(settings, snapshot: Any | None = None) -> LiveReport:
+def collect_live(settings: Any, snapshot: Any | None = None) -> LiveReport:
     """Collect everything the monitor shows. Safe to call from a worker thread."""
     report = LiveReport()
     try:

@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .browser.actions import BrowserPolicy, PolicyError, check_url
-from .errors import SourceError
+from .errors import SourceError as SourceError
 from .http import shared_client
 
 MAX_CHARS = 32000

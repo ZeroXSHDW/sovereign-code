@@ -10,8 +10,10 @@ index in the project's ``AGENTS.md`` / ``CLAUDE.md`` / ``QWEN.md``.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import LOCAL_AI_ROOT, PROJECT_ROOT
 from .skills import resolve_skill_path
@@ -115,14 +117,14 @@ PROFILES: dict[str, tuple[str, ...]] = {
 
 DEFAULT_PROFILE = "core"
 
-TARGETS = {
+TARGETS: dict[str, Callable[[], Path]] = {
     "claude": lambda: Path.home() / ".claude" / "skills",
     "codex": lambda: Path.home() / ".codex" / "skills",
     "qwen": lambda: Path.home() / ".qwen" / "skills",
     "opencode": lambda: Path.home() / ".config" / "opencode" / "skills",
 }
 
-CONTINUE_PROMPTS = lambda: Path.home() / ".continue" / "prompts"  # noqa: E731
+CONTINUE_PROMPTS: Callable[[], Path] = lambda: Path.home() / ".continue" / "prompts"  # noqa: E731
 
 
 @dataclass(frozen=True)
@@ -370,7 +372,9 @@ def brief_skills(source: Path | None = None) -> list[Skill]:
     return [pool[name] for name in BRIEF_SKILLS if name in pool]
 
 
-def profile_signature(profile: str = DEFAULT_PROFILE, source: Path | None = None) -> tuple:
+def profile_signature(
+    profile: str = DEFAULT_PROFILE, source: Path | None = None
+) -> tuple[Any, ...]:
     """Identity of the profile files, for caches that embed their descriptions."""
     paths = curated_paths(source, profile)
     parts = []

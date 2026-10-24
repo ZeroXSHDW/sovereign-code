@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx
 
 from .config import DATA_DIR
-from .errors import EmbedError
+from .errors import EmbedError as EmbedError
 from .http import shared_client
 
 DEFAULT_EMBED = "nomic-embed-text"
@@ -103,7 +103,7 @@ def embed(
     if response.status_code != 200:
         raise EmbedError(f"embed HTTP {response.status_code}")
     try:
-        vectors = response.json()["embeddings"]
+        vectors: list[list[float]] = response.json()["embeddings"]
     except (ValueError, KeyError, TypeError) as exc:
         raise EmbedError("malformed embedding response") from exc
     if len(vectors) != len(texts):
@@ -290,11 +290,9 @@ def build_index(
     previous counts. Build into a sibling file and swap it in only on success.
     """
     final_path = index_path_for(root)
-    temp_path = final_path.with_name(final_path.name + ".tmp")
-    try:
-        temp_path.unlink(missing_ok=True)
-    except OSError:
-        pass
+    # A unique temp file per build: two indexes for the same root must not
+    # share one `.tmp` and corrupt each other. The last successful build wins.
+    temp_path = final_path.with_name(f"{final_path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
     store = IndexStore(temp_path)
     files = 0
     chunks = 0

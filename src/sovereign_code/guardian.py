@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import Settings
 
@@ -68,7 +69,7 @@ class ServiceState:
     def ok(self) -> bool:
         return self.up
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "port": self.port,

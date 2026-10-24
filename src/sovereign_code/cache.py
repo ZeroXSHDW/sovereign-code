@@ -32,7 +32,7 @@ import time
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .config import DATA_DIR
 from .safefile import ensure_private_dir, harden
@@ -216,7 +216,7 @@ class DiskCache:
             self._conn.execute("UPDATE cache SET hit_count = hit_count + 1 WHERE key = ?", (key,))
             self._conn.commit()
             self.hits += 1
-            return json.loads(bytes(row["value"]))
+            return cast(dict[str, Any], json.loads(bytes(row["value"])))
 
     def put(self, key: str, value: dict[str, Any], model: str = "", tier: str = "") -> None:
         with self._lock:
@@ -299,7 +299,7 @@ def __getattr__(name: str) -> Any:
 
 def disk_cache() -> DiskCache:
     """Return the shared disk cache, creating it on first use."""
-    return __getattr__("DISK")
+    return cast(DiskCache, __getattr__("DISK"))
 
 
 def cache_key_chat(
@@ -344,7 +344,7 @@ def cached_chat(
     if hit is not None:
         memory.put(key, hit)
         return hit
-    value = fetch()
+    value: dict[str, Any] | None = fetch()
     if value is not None:
         store_chat(key, value, memory=memory, disk=disk)
     return value

@@ -253,7 +253,7 @@ def set_provider_key(provider_key_name: str, value: str, path: Path | None = Non
     output: list[str] = []
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith(f"{wanted}=") or stripped.startswith(f"export {wanted}="):
+        if stripped.startswith((f"{wanted}=", f"export {wanted}=")):
             output.append(f'{wanted}="{secret}"')
             replaced = True
         else:

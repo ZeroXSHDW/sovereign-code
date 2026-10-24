@@ -574,7 +574,7 @@ def is_cloud_tag(tag: str) -> bool:
     ollama.com, and quietly break the local-only guarantee.
     """
     name = tag.strip().lower()
-    return name.endswith(":cloud") or name.endswith("-cloud")
+    return name.endswith((":cloud", "-cloud"))
 
 
 # What the eight requested model names map to. Kept here (not only in the CLI)

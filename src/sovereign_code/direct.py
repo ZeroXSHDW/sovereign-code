@@ -225,7 +225,7 @@ def undo_writes(root: Path) -> list[str]:
 def relevant_files(root: Path, prompt: str, limit_bytes: int = 30_000) -> dict[str, str]:
     """Source files worth showing the model, biased towards the prompt."""
     root = root.resolve()
-    mentioned = {token for token in re.findall(r"[\w.-]+\.\w{1,5}", prompt)}
+    mentioned = set(re.findall(r"[\w.-]+\.\w{1,5}", prompt))
     candidates: list[Path] = []
     for path in root.rglob("*"):
         # Only skip ignored directories *inside* the project. Checking the

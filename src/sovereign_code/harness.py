@@ -32,7 +32,7 @@ from typing import Any
 
 from .config import DATA_DIR
 from .models import ModelView
-from .router import Task, choose
+from .router import Selection, Task, choose
 from .safefile import ensure_private_dir, open_private
 
 ORCHESTRATIONS_LOG = "orchestrations.jsonl"
@@ -91,7 +91,7 @@ def _pick(
     free_gb: float | None,
     max_context: int,
     preferred: str | None = None,
-):
+) -> Selection:
     return choose(task, views, free_gb, preferred=preferred, max_context=max_context)
 
 
@@ -100,7 +100,7 @@ def _role(
     label: str,
     tier: str,
     task: Task,
-    selection,
+    selection: Any,
 ) -> RolePlan:
     model = selection.model
     return RolePlan(

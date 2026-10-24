@@ -13,6 +13,7 @@ Nothing is written to stdout except protocol messages.
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import os
 import re
@@ -996,13 +997,13 @@ _BROWSER: Any = None
 _BROWSER_MODE: Any = None
 
 
-def _browser_policy(allow_local: bool, allowed_domains: list[str] | None = None):
+def _browser_policy(allow_local: bool, allowed_domains: list[str] | None = None) -> Any:
     from .browser.actions import BrowserPolicy
 
     return BrowserPolicy(allow_local=allow_local, allowed_domains=tuple(allowed_domains or ()))
 
 
-def _start_browser(policy, headless: bool, target: str, mode) -> None:
+def _start_browser(policy: Any, headless: bool, target: str, mode: Any) -> None:
     """Start a browser session and cache it only once it is usable."""
     global _BROWSER, _BROWSER_MODE
     from .browser.executor import BrowserSession
@@ -1028,7 +1029,7 @@ def _browser_open(
     allow_local: bool = False,
     headless: bool = False,
     allowed_domains: list[str] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     global _BROWSER, _BROWSER_MODE
     from .browser.actions import check_url
 
@@ -1058,7 +1059,7 @@ def _browser_open(
         return _browser_observation(_BROWSER.observe())
 
 
-def _browser_observation(observation: dict) -> dict:
+def _browser_observation(observation: dict[str, Any]) -> dict[str, Any]:
     return {
         "url": observation.get("url"),
         "title": observation.get("title"),
@@ -1069,7 +1070,7 @@ def _browser_observation(observation: dict) -> dict:
     }
 
 
-def _browser_observe() -> dict:
+def _browser_observe() -> dict[str, Any]:
     global _BROWSER
     with _BROWSER_LOCK:
         if _BROWSER is None:
@@ -1077,7 +1078,7 @@ def _browser_observe() -> dict:
         return _browser_observation(_BROWSER.observe())
 
 
-def _browser_act(arguments: dict[str, Any]) -> dict:
+def _browser_act(arguments: dict[str, Any]) -> dict[str, Any]:
     global _BROWSER
     from .browser.actions import parse_action
 
@@ -1151,7 +1152,7 @@ def _browser_task(
     max_steps: int = 50,
     confirm_destructive: bool = False,
     model: str = "local-agent",
-) -> dict:
+) -> dict[str, Any]:
     global _BROWSER, _BROWSER_MODE
     from .browser.actions import BrowserPolicy, PolicyError, check_url
     from .browser.agent import BrowserAgent, ModelPlanner
@@ -1230,7 +1231,7 @@ def _browser_task(
         }
 
 
-def _browser_close() -> dict:
+def _browser_close() -> dict[str, Any]:
     global _BROWSER, _BROWSER_MODE
     with _BROWSER_LOCK:
         if _BROWSER is not None:
@@ -1240,7 +1241,7 @@ def _browser_close() -> dict:
         return {"ok": True}
 
 
-def _browser_back() -> dict:
+def _browser_back() -> dict[str, Any]:
     global _BROWSER
     with _BROWSER_LOCK:
         if _BROWSER is None:
@@ -1252,7 +1253,7 @@ def _browser_back() -> dict:
         }
 
 
-def _browser_forward() -> dict:
+def _browser_forward() -> dict[str, Any]:
     global _BROWSER
     with _BROWSER_LOCK:
         if _BROWSER is None:
@@ -1264,7 +1265,7 @@ def _browser_forward() -> dict:
         }
 
 
-def _browser_reload() -> dict:
+def _browser_reload() -> dict[str, Any]:
     global _BROWSER
     with _BROWSER_LOCK:
         if _BROWSER is None:
@@ -1276,7 +1277,7 @@ def _browser_reload() -> dict:
         }
 
 
-def _browser_wait(seconds: float = 2) -> dict:
+def _browser_wait(seconds: float = 2) -> dict[str, Any]:
     global _BROWSER
     import time as _time
 
@@ -1290,7 +1291,7 @@ def _browser_wait(seconds: float = 2) -> dict:
         }
 
 
-def _browser_search(query: str, engine: str = "duckduckgo") -> dict:
+def _browser_search(query: str, engine: str = "duckduckgo") -> dict[str, Any]:
     global _BROWSER
     from urllib.parse import quote_plus
 
@@ -1885,7 +1886,14 @@ def _warm_stack() -> None:
         pass
 
 
-def serve_http(host: str = "127.0.0.1", port: int = 8765) -> None:
+def _bearer_ok(header: str | None, token: str) -> bool:
+    """Constant-time check of an ``Authorization: Bearer`` header."""
+    if not token:
+        return True
+    return hmac.compare_digest((header or "").strip(), f"Bearer {token}")
+
+
+def serve_http(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> None:
     """Serve the same JSON-RPC handler over Streamable HTTP.
 
     The launchd service has always advertised this endpoint, but the CLI had
@@ -1894,8 +1902,17 @@ def serve_http(host: str = "127.0.0.1", port: int = 8765) -> None:
     single JSON-RPC message or a batch and answers with JSON; GET returns 405,
     which the Streamable HTTP spec permits for servers that do not offer a
     server-initiated SSE stream.
+
+    A bearer token (``--token`` or ``SOVEREIGN_MCP_TOKEN``) is required to bind
+    beyond loopback. With a token set, the loopback ``Host`` restriction is
+    lifted and every request must carry ``Authorization: Bearer <token>``;
+    without one the server stays loopback-only.
     """
     from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer
+
+    token = (token or os.environ.get("SOVEREIGN_MCP_TOKEN", "")).strip()
+    if not token and host not in {"127.0.0.1", "localhost", "::1"}:
+        raise SystemExit("refusing to bind beyond loopback without --token or SOVEREIGN_MCP_TOKEN")
 
     allowed_origins = frozenset(
         {
@@ -1911,6 +1928,19 @@ def serve_http(host: str = "127.0.0.1", port: int = 8765) -> None:
 
         def log_message(self, *_args: object) -> None:
             return
+
+        def parse_request(self) -> bool:
+            if not token:
+                return super().parse_request()
+            # A token is the security boundary for remote use; Host is not.
+            from http.server import BaseHTTPRequestHandler
+
+            if not BaseHTTPRequestHandler.parse_request(self):
+                return False
+            if not _bearer_ok(self.headers.get("Authorization"), token):
+                self.send_error(401, "missing or invalid bearer token")
+                return False
+            return True
 
         def _send_json(self, code: int, payload: Any) -> None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")

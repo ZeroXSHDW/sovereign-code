@@ -30,7 +30,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import LOCAL_AI_ROOT
-from .errors import HFError
+from .errors import HFError as HFError
 from .safefile import write_private
 from .stats import human_size
 

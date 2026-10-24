@@ -819,7 +819,7 @@ class SkillDB:
         # Look for a `tags:` front-matter-ish line.
         for line in text.splitlines()[:40]:
             low = line.lower()
-            if low.startswith("tags:") or low.startswith("tags :"):
+            if low.startswith(("tags:", "tags :")):
                 raw = line.split(":", 1)[1]
                 for part in raw.replace("|", ",").split(","):
                     part = part.strip().strip('"').strip("'")

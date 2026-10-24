@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Iterable
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -559,7 +559,7 @@ def completion(
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:400]
         raise RuntimeError(f"gateway HTTP {response.status_code}: {detail}")
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def iter_completion(

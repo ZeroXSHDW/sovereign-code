@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from collections.abc import Callable
@@ -232,6 +233,22 @@ class ClientResult:
     detail: str
 
 
+def _probe_detail(line: str) -> str:
+    """A readable one-liner: OpenCode prints JSON, the others print text."""
+    if line.startswith("{"):
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            return line[:160]
+        if isinstance(payload, dict):
+            part = payload.get("part")
+            text = str(part.get("text") or "") if isinstance(part, dict) else ""
+            text = text or str(payload.get("text") or "")
+            if text.strip():
+                return text.strip()[:160]
+    return line[:160]
+
+
 def client_probe_argv(client: str, target: Path) -> list[str]:
     """The one-shot command each client runs for a single turn."""
     if client == "codex":
@@ -295,7 +312,7 @@ def probe_clients(
             (text.strip() for text in reversed(output.splitlines()) if text.strip()), ""
         )
         ok = bool(marker)
-        detail = line[:160] if line else f"exit {process.returncode}"
+        detail = _probe_detail(line) if line else f"exit {process.returncode}"
         if not ok and process.returncode:
             detail = f"exit {process.returncode}: {detail}"
         results.append(ClientResult(client, ok, elapsed, detail))

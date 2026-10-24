@@ -5993,7 +5993,9 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
     verify.add_argument("--embedding", action="store_true", help="also check the embedding model")
-    verify.add_argument("--timeout", type=float, default=300.0, help="per-alias timeout in seconds")
+    verify.add_argument(
+        "--timeout", type=float, default=300.0, help="per-alias/per-client timeout in seconds"
+    )
     verify.add_argument(
         "--clients",
         action="store_true",
@@ -7267,9 +7269,9 @@ def _cache(args: argparse.Namespace) -> int:
         table.add_row(
             "disk",
             str(disk["entries"]),
-            str(disk.get("disk_hits", 0)),
-            str(disk.get("memory_misses", 0)),
-            f"{disk.get('hit_rate', 0)}%",
+            str(disk["hits"]),
+            str(disk["misses"]),
+            f"{disk['hit_rate']}%",
         )
         console.print(table)
         return 0

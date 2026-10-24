@@ -167,3 +167,10 @@ def test_stop_reports_a_gateway_that_stays_up(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(tier_gateway, "port_open", lambda **_kwargs: True)
     assert tier_gateway.stop(port=59999) is False
     assert pid_file.exists()
+
+
+def test_probe_detail_unwraps_opencode_json() -> None:
+    line = json.dumps({"type": "text", "part": {"text": "LOCAL_OK"}})
+    assert verify._probe_detail(line) == "LOCAL_OK"
+    assert verify._probe_detail("LOCAL_OK") == "LOCAL_OK"
+    assert verify._probe_detail("{not json") == "{not json"

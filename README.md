@@ -1223,3 +1223,7 @@ Built from the ideas in `~/Downloads/local-bar-main` and
 `~/Downloads/local-bar-dev-main`: one resident coder, memory-aware context,
 local-only clients, and a readiness check. This project keeps those ideas and
 drops the Swift/SDK coupling and menu-bar-only workflow.
+
+---
+
+Part of the [ZeroDevLLC](https://ZeroDevLLC.com) ecosystem.

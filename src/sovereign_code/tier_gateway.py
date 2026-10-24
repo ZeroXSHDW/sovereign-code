@@ -1809,7 +1809,63 @@ class _Handler(GuardedHandler):
             return
         self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
 
-    def _stream_local(self, request: dict[str, Any], route: Route) -> None:
+    def _replay_cached_stream(self, cached: dict[str, Any], route: Route) -> None:
+        """Emit a cached completion as SSE, with no model round-trip.
+
+        The stored value is a full ``chat.completion`` (from :func:`_completion`),
+        so a repeat streaming request replayed here costs milliseconds instead of
+        a generation.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("x-sovereign-tier", route.tier)
+        self.send_header("x-sovereign-model", route.model)
+        self.send_header("x-sovereign-reason", route.reason)
+        self.send_header("x-sovereign-cached", "1")
+        self._cors()
+        self.close_connection = True
+        self.end_headers()
+        cid = cached.get("id") or f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        model = cached.get("model") or route.model
+        message = (cached.get("choices") or [{}])[0].get("message") or {}
+        usage = cached.get("usage") or {}
+        finish = (cached.get("choices") or [{}])[0].get("finish_reason") or "stop"
+        try:
+            self.wfile.write(b": sovereign\n\n")
+            self.wfile.write(_chunk(model, {"role": "assistant", "content": ""}, cid=cid))
+            if message.get("reasoning_content"):
+                self.wfile.write(
+                    _chunk(model, {"reasoning_content": message["reasoning_content"]}, cid=cid)
+                )
+            if message.get("content"):
+                self.wfile.write(_chunk(model, {"content": message["content"]}, cid=cid))
+            for call in message.get("tool_calls") or []:
+                self.wfile.write(
+                    _chunk(
+                        model,
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": call.get("index", 0),
+                                    "id": call.get("id"),
+                                    "type": "function",
+                                    "function": call.get("function"),
+                                }
+                            ]
+                        },
+                        cid=cid,
+                    )
+                )
+            self.wfile.write(_chunk(model, {}, finish, cid=cid))
+            self.wfile.write(_usage_chunk(model, usage, cid=cid))
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _stream_local(self, request: dict[str, Any], route: Route, cache_key: str = "") -> None:
         _SCHEDULER.enter(route.model)
         try:
             ensure_model_room(route.model, self.ollama, route.context)
@@ -1924,6 +1980,21 @@ class _Handler(GuardedHandler):
                 pass
         finally:
             _SCHEDULER.exit(route.model)
+            if cache_key and content and not calls:
+                # Cache a clean, tool-free streamed answer so a repeat request
+                # replays in milliseconds instead of paying a full generation.
+                CACHE.put(
+                    cache_key,
+                    _completion(
+                        route.model,
+                        "".join(content),
+                        "".join(thinking),
+                        [],
+                        usage,
+                    ),
+                    model=route.model,
+                    tier=route.tier,
+                )
             log_metric(
                 {
                     "ts": time.time(),
@@ -1941,7 +2012,7 @@ class _Handler(GuardedHandler):
 
     def _local(self, request: dict[str, Any], route: Route, cache_key: str = "") -> None:
         if request.get("stream"):
-            self._stream_local(request, route)
+            self._stream_local(request, route, cache_key)
             return
         original = route.model
         candidates = [route.model]
@@ -2233,10 +2304,9 @@ class _Handler(GuardedHandler):
             self._proxy(request, route)
             return
 
-        # Cache only simple, deterministic, tool-free calls.
+        # Cache only simple, deterministic, tool-free calls (streamed or not).
         cacheable = (
-            not request.get("stream")
-            and not request.get("tools")
+            not request.get("tools")
             and float(request.get("temperature") or 0.2) <= 0.3
             and int(request.get("max_tokens") or 0) <= 2048
             and self.headers.get("x-sovereign-cache", "").lower() != "off"
@@ -2264,10 +2334,13 @@ class _Handler(GuardedHandler):
                         "model": route.model,
                         "ms": 0,
                         "cached": True,
-                        "stream": False,
+                        "stream": bool(request.get("stream")),
                         "tools": False,
                     }
                 )
+                if request.get("stream"):
+                    self._replay_cached_stream(cached, route)
+                    return
                 self._json(
                     200,
                     cached,
@@ -2279,8 +2352,6 @@ class _Handler(GuardedHandler):
                     },
                 )
                 return
-        # _local writes the response itself; capture it for the cache via a
-        # second call is not worth it, so cache only on the non-stream path.
         self._local(request, route, key if cacheable else "")
 
 

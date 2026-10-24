@@ -127,6 +127,52 @@ def test_stream_chunk_has_tool_calls_and_stable_id() -> None:
     assert "tool_calls" in chunk
 
 
+class _FakeWfile:
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self.chunks.append(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+
+def test_replay_cached_stream_emits_sse_without_a_model_call() -> None:
+    """A cached streaming hit replays the completion as SSE, no Ollama call."""
+    cached = tg._completion(
+        "qwen3.5:4b", "hello from cache", "", [], {"prompt_tokens": 1, "completion_tokens": 3}
+    )
+    handler = tg._Handler.__new__(tg._Handler)
+    handler.wfile = _FakeWfile()  # type: ignore[attr-defined]
+    handler.close_connection = False
+
+    def send_response(code: int) -> None:
+        handler._code = code  # type: ignore[attr-defined]
+
+    def send_header(key: str, value: str) -> None:
+        pass
+
+    def end_headers() -> None:
+        pass
+
+    def cors() -> None:
+        pass
+
+    handler.send_response = send_response  # type: ignore[assignment]
+    handler.send_header = send_header  # type: ignore[assignment]
+    handler.end_headers = end_headers  # type: ignore[assignment]
+    handler._cors = cors  # type: ignore[assignment]
+
+    route = tg.Route("local", "qwen3.5:4b", tg.FAST, 4096, False, "cached test")
+    handler._replay_cached_stream(cached, route)  # type: ignore[attr-defined]
+
+    stream = b"".join(handler.wfile.chunks).decode()  # type: ignore[union-attr]
+    assert "hello from cache" in stream
+    assert "data: [DONE]" in stream
+
+
 def test_response_cache_expires(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(tg.time, "monotonic", lambda: 0.0)
     cache = tg.ResponseCache(max_entries=2, ttl=10)

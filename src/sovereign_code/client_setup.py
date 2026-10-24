@@ -63,6 +63,8 @@ def released_version(line: str) -> str:
 SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
     "codex": ("0.163", "0.164"),
     "claude": ("2.",),
+    "opencode": ("2.",),
+    "qwen": ("0.25",),
 }
 
 

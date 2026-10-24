@@ -777,13 +777,21 @@ def _verify(
     return 0 if failed == 0 else 1
 
 
-def _verify_clients(snap: Snapshot, timeout: float = 180.0) -> int:
+def _verify_clients(snap: Snapshot, timeout: float = 180.0, as_json: bool = False) -> int:
     """One real turn through each agent client, in its own non-interactive mode."""
+    from dataclasses import asdict
+
     from .verify import probe_clients
 
     target = Path.cwd()
-    console.print(f"[dim]One real turn per client in {target} (timeout {timeout:.0f}s each)...[/]")
+    if not as_json:
+        console.print(
+            f"[dim]One real turn per client in {target} (timeout {timeout:.0f}s each)...[/]"
+        )
     results = probe_clients(target, snap.settings, timeout=timeout)
+    if as_json:
+        print(json.dumps([asdict(result) for result in results], indent=2))
+        return 0 if all(result.ok for result in results) else 1
     table = Table(box=None, padding=(0, 1))
     table.add_column("Client", style="bold")
     table.add_column("Result")
@@ -6001,6 +6009,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run one real turn through Codex, Claude Code and OpenCode",
     )
+    verify.add_argument("--json", action="store_true", help="machine-readable client results")
     gateway = sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     gateway.add_argument(
         "--restart", action="store_true", help="restart the supervisor and wait for health"
@@ -7611,7 +7620,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "verify":
         snap = _snapshot(settings)
         if args.clients:
-            return _verify_clients(snap, timeout=args.timeout)
+            return _verify_clients(snap, timeout=args.timeout, as_json=args.json)
         return _verify(
             snap,
             all_aliases=args.all,

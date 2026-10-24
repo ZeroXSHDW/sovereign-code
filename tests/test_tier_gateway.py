@@ -54,6 +54,20 @@ def test_large_tool_task_is_deep() -> None:
     assert tier == tg.DEEP
 
 
+def test_domain_keys_route_to_a_local_specialist() -> None:
+    installed = {"qwen3.8:27b"}
+    for key in ("legal", "forensics", "security", "vision"):
+        route = tg.resolve_route({"model": key, "messages": []}, installed=installed)
+        assert route.kind == "local", key
+    legal = tg.resolve_route({"model": "legal", "messages": []}, installed=installed)
+    assert legal.model == "qwen3.8:27b"
+
+
+def test_catalog_lists_the_domain_routes() -> None:
+    ids = {entry["id"] for entry in tg.catalog_models(set())}
+    assert {"legal", "forensics", "security"} <= ids
+
+
 def test_resolve_route_aliases() -> None:
     auto = tg.resolve_route({"model": "auto", "messages": [{"role": "user", "content": "hi"}]})
     assert auto.kind == "local"

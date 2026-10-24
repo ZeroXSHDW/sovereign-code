@@ -23,6 +23,8 @@ CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
 CLIENT_PROBES = ("codex", "claude", "opencode")
 PROBE_PROMPT = "Reply with exactly: LOCAL_OK"
 PROBE_MARKER = "LOCAL_OK"
+# A timeout is usually a cold load or a model swap, not a broken client.
+PROBE_ATTEMPTS = 2
 
 
 def configured_aliases(config_path: Path) -> tuple[str, ...]:
@@ -271,39 +273,52 @@ def probe_clients(
     run = runner or subprocess.run
     results: list[ClientResult] = []
     for client in CLIENT_PROBES:
-        started = time.monotonic()
         try:
             plan = plan_launch(client, target, settings, agent_model)
         except ValueError as exc:
             results.append(ClientResult(client, False, 0.0, str(exc)))
             continue
-        try:
-            process = run(
-                client_probe_argv(client, target),
-                cwd=str(target),
-                env=plan.env,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except FileNotFoundError:
-            results.append(ClientResult(client, False, 0.0, f"{client} is not installed"))
-            continue
-        except subprocess.TimeoutExpired:
-            # A cold 30B load can take minutes here; the client is not broken,
-            # the ceiling was just too low for the first run.
+        process = None
+        elapsed = 0.0
+        retried = False
+        for _attempt in range(PROBE_ATTEMPTS):
+            started = time.monotonic()
+            try:
+                process = run(
+                    client_probe_argv(client, target),
+                    cwd=str(target),
+                    env=plan.env,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+                elapsed = time.monotonic() - started
+            except FileNotFoundError:
+                results.append(ClientResult(client, False, 0.0, f"{client} is not installed"))
+                break
+            except subprocess.TimeoutExpired:
+                # A cold 30B load, or a model swap under memory pressure, can
+                # take minutes; the second run is warm, so retry once instead
+                # of reporting a client that is actually fine.
+                elapsed = time.monotonic() - started
+                retried = True
+                continue
+            break
+        else:
             results.append(
                 ClientResult(
                     client,
                     False,
-                    time.monotonic() - started,
-                    f"timed out after {timeout:.0f}s (cold model load? re-run)",
+                    elapsed,
+                    f"timed out after {timeout:.0f}s x{PROBE_ATTEMPTS} "
+                    "(cold model load or busy gateway)",
                 )
             )
             continue
-        elapsed = time.monotonic() - started
+        if process is None:
+            continue
         output = (process.stdout or "") + (process.stderr or "")
         marker = next(
             (line.strip() for line in output.splitlines() if PROBE_MARKER in line.upper()), ""
@@ -311,9 +326,11 @@ def probe_clients(
         line = marker or next(
             (text.strip() for text in reversed(output.splitlines()) if text.strip()), ""
         )
-        ok = bool(marker)
+        ok = bool(marker) and process.returncode == 0
         detail = _probe_detail(line) if line else f"exit {process.returncode}"
         if not ok and process.returncode:
             detail = f"exit {process.returncode}: {detail}"
+        elif ok and retried:
+            detail += " (passed on retry)"
         results.append(ClientResult(client, ok, elapsed, detail))
     return results

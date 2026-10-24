@@ -52,7 +52,7 @@ to set as the repository's social preview.)
   on Apple Silicon.
 - **Local coding agents** — Codex, Claude Code, OpenCode, Qwen Code, Continue,
   and the Codex side of ChatGPT desktop run on-Mac; `--cloud` is the explicit
-  escape hatch.
+  escape hatch. `sovereign verify --clients` proves a real turn through each.
 - **22k skills** — route, lint, verify, and install skill packs into
   every client, with project-level `AGENTS.md` / `CLAUDE.md` / `QWEN.md` indexes.
 - **Task packs** — pentest, vulnerability, risk, vendor, legal, compliance,
@@ -62,10 +62,30 @@ to set as the repository's social preview.)
 - **24/7 coding loop** — opt-in, gated by the project's own checks, and paused
   by a dirty tree or repeated failure instead of spinning.
 
+## New in 0.5.0
+
+- **`sovereign verify --clients`** sends one real turn through Codex, Claude
+  Code, and OpenCode in each client's own non-interactive mode, so
+  "configured" is no longer confused with "working".
+- **`sovereign doctor` checks completions**, not just the port. A gateway that
+  answers `/health` and drops every completion is now reported.
+- **Native OpenCode V2 config**: ordered permissions, read-only `reviewer` and
+  `planner` subagents, `/check` `/review` `/plan` commands, todo tracking, and
+  background compaction.
+- **`make browser-check`** runs the Playwright suite against a real Chromium in
+  CI instead of skipping it.
+- **Safer client wiring**: unverified `codex`/`claude` versions surface as a
+  warning instead of silently misfiring, full computer control is pinned with
+  `SOVEREIGN_MCP_COMPUTER=1`, and client-config backups are bounded to five
+  copies.
+
+See the [changelog](CHANGELOG.md) for the full 0.5.0 list.
+
 <details>
 <summary><strong>Contents</strong></summary>
 
 - [Screenshots](#screenshots)
+- [New in 0.5.0](#new-in-050)
 - [Quick start](#quick-start)
 - [Task packs](#task-packs-pentest-vulnerability-risk-vendor-legal-compliance-forensics-finance)
 - [Skills](#skills-find-check-install)
@@ -551,7 +571,7 @@ of LiteLLM (4000) and Ollama. It classifies each request and sends it to a tier:
 | `balanced` | `qwen3.5:9b` | 65k | tool use, multi-turn work, medium prompts |
 | `deep` | `qwen3-coder:30b` (code) · `glm-4.7-flash` (reasoning) | 32k | code, analysis, long/complex prompts |
 | `ultra` | `qwen3.8:27b` | 16k | hardest reasoning, only when explicitly requested |
-| `best` | quality-first alias | 32k | 30B coder for code, GLM for reasoning |
+| `best` / `auto` | quality-first / latency-first aliases | 32k | 30B coder for code, GLM for reasoning |
 
 Benchmarked on this Mac with the same coding prompt: `qwen3-coder:30b` **12.7 s**,
 `glm-4.7-flash` **13.4 s**, `qwen3.8:27b` **45.1 s**. That is why `deep` routes
@@ -873,6 +893,8 @@ It exposes:
 - `skills_for_task(task)` — rank skills for a task (compact cards).
 - `project_context(path)` — project memory and file index.
 - `ask(prompt, model)` — a completion through the loopback gateway (`best` by default).
+  `model=legal` routes to the reasoning specialist with the legal playbooks;
+  `model=forensics` does the same for digital forensics and incident response.
 - `run_checks(path)` — detect and run the project's own tests.
 - `local_status()` — whether this machine is running the local stack only.
 - `delegate(prompt, path, write=false)` — run a real local Codex/Claude agent on a
@@ -1062,6 +1084,7 @@ sovereign cloud            # Ollama Cloud status, mapping, aliases (--enable/--p
 sovereign doctor           # checks and concrete fixes
 sovereign doctor --fix     # apply the safe fixes automatically
 sovereign verify           # tiny completion per core alias (--all for nine)
+sovereign verify --clients # real turn through Codex, Claude Code, and OpenCode
 sovereign bench            # tokens/sec for chosen aliases (--models a,b)
 sovereign backup           # tarball of configs + chat data
 sovereign summarize FILE   # or --url URL, via the local model

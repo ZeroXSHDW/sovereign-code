@@ -415,7 +415,9 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "ask",
-        "Run a prompt through the local gateway using a model alias (local or cloud).",
+        "Run a prompt through the local gateway using a model alias. Use model=legal "
+        "for legal/compliance work and model=forensics for digital forensics and "
+        "incident response; fast/deep/best work for general and code tasks.",
         {
             "prompt": {"type": "string"},
             "model": {"type": "string", "default": "best"},
@@ -1805,11 +1807,16 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "Sovereign Code exposes this Mac's local models, skills, project "
                     "memory, and checks. Use list_models for availability, ask with "
                     "model=fast for quick work or model=deep for code/reasoning, "
+                    "model=legal for legal/compliance work, model=forensics for "
+                    "digital forensics and incident response, "
                     "list_skills/get_skill/load_skills for workflows, run_checks to "
                     "verify, and delegate to run a real local Codex/Claude agent on "
                     "a project (read-only unless write=true; it never skips the "
-                    "human's approvals). Navigate code with repo_map/repo_search/"
-                    "repo_read and edit with repo_write/repo_edit/repo_patch. "
+                    "human's approvals). For any legal, compliance, forensics or "
+                    "incident-response task call skills_for_task first to load the "
+                    "specialist playbook, then ask with the matching model. Navigate "
+                    "code with repo_map/repo_search/repo_read and edit with "
+                    "repo_write/repo_edit/repo_patch. "
                     "Task packs (pentest, legal, forensics, ...) via list_packs/"
                     "pack_profile. Browser control via browser_open/observe/act/"
                     "screenshot/back/forward/reload/wait/search/close. Hugging Face: "

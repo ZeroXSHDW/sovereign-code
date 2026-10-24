@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -106,7 +107,7 @@ def test_probe_clients_uses_the_launch_environment(monkeypatch, tmp_path) -> Non
 
     def runner(argv, **kwargs):  # type: ignore[no-untyped-def]
         seen["marker"] = kwargs["env"].get("ANTHROPIC_BASE_URL", "")
-        return __import__("subprocess").CompletedProcess(argv, 0, verify.PROBE_MARKER, "")
+        return subprocess.CompletedProcess(argv, 0, verify.PROBE_MARKER, "")
 
     plan_env = {**os.environ, "ANTHROPIC_BASE_URL": "http://127.0.0.1:4001"}
     monkeypatch.setattr(
@@ -174,3 +175,61 @@ def test_probe_detail_unwraps_opencode_json() -> None:
     assert verify._probe_detail(line) == "LOCAL_OK"
     assert verify._probe_detail("LOCAL_OK") == "LOCAL_OK"
     assert verify._probe_detail("{not json") == "{not json"
+
+
+def test_probe_clients_rejects_a_nonzero_exit_with_the_marker(monkeypatch, tmp_path) -> None:
+    """A client that answers and then crashes is not a working client."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in verify.CLIENT_PROBES:
+        body = (
+            f"echo {verify.PROBE_MARKER}; exit 2"
+            if name == "opencode"
+            else f"echo {verify.PROBE_MARKER}"
+        )
+        _fake_cli(bin_dir, name, body)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(
+        clients,
+        "plan_launch",
+        lambda *_args, **_kwargs: clients.LaunchPlan([], tmp_path, os.environ.copy(), "test"),
+    )
+    results = {result.client: result for result in verify.probe_clients(tmp_path, Settings())}
+    assert results["codex"].ok
+    assert not results["opencode"].ok
+    assert results["opencode"].detail.startswith("exit 2")
+
+
+def test_probe_clients_retries_a_timeout(monkeypatch, tmp_path) -> None:
+    """A cold load that overruns the first ceiling passes on the warm retry."""
+    timed_out: set[str] = set()
+
+    def runner(argv, **_kwargs):  # type: ignore[no-untyped-def]
+        if argv[0] == "claude" and "claude" not in timed_out:
+            timed_out.add("claude")
+            raise subprocess.TimeoutExpired(argv[0], 1)
+        return subprocess.CompletedProcess(argv, 0, verify.PROBE_MARKER, "")
+
+    monkeypatch.setattr(
+        clients,
+        "plan_launch",
+        lambda *_args, **_kwargs: clients.LaunchPlan([], tmp_path, os.environ.copy(), "test"),
+    )
+    results = verify.probe_clients(tmp_path, Settings(), runner=runner)
+    claude = next(result for result in results if result.client == "claude")
+    assert claude.ok
+    assert "passed on retry" in claude.detail
+
+
+def test_probe_clients_reports_two_timeouts(monkeypatch, tmp_path) -> None:
+    def runner(argv, **_kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(argv[0], 1)
+
+    monkeypatch.setattr(
+        clients,
+        "plan_launch",
+        lambda *_args, **_kwargs: clients.LaunchPlan([], tmp_path, os.environ.copy(), "test"),
+    )
+    results = verify.probe_clients(tmp_path, Settings(), runner=runner, timeout=1)
+    assert all(not result.ok for result in results)
+    assert all("x2" in result.detail for result in results)

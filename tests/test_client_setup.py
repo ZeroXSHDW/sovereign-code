@@ -127,11 +127,8 @@ def test_unsupported_clients_reports_unknown_majors(monkeypatch) -> None:
 
 def test_supported_client_versions_are_not_reported(monkeypatch) -> None:
     monkeypatch.setattr(client_setup.shutil, "which", lambda _name: f"/usr/bin/{_name}")
-    monkeypatch.setattr(
-        client_setup,
-        "client_cli_version",
-        lambda name: "0.163.0" if name == "codex" else "2.1.0",
-    )
+    versions = {"codex": "0.163.0", "claude": "2.1.0", "opencode": "2.1.0", "qwen": "0.25.3"}
+    monkeypatch.setattr(client_setup, "client_cli_version", versions.get)
     assert client_setup.unsupported_clients() == {}
 
 
@@ -536,3 +533,8 @@ def test_unsupported_clients_reports_an_unverified_major(monkeypatch) -> None:
         lambda name: "codex-cli 0.170.0" if name == "codex" else "",
     )
     assert client_setup.unsupported_clients() == {"codex": "codex-cli 0.170.0"}
+
+
+def test_the_version_guard_covers_every_scripted_client() -> None:
+    """The clients this project shells out to are the ones that need a pin."""
+    assert {"codex", "claude", "opencode", "qwen"} <= set(client_setup.SUPPORTED_CLIENT_VERSIONS)

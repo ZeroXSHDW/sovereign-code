@@ -88,15 +88,15 @@
 <section class="features" id="features">
   <h2>Why it stands out</h2>
   <div class="grid">
-    <div class="card"><h3>Tiered local gateway</h3><p>An OpenAI-compatible endpoint plus an Anthropic bridge route each request to <code>fast</code>, <code>balanced</code>, <code>deep</code>, or <code>ultra</code> — with real streamed tool calls.</p></div>
-    <div class="card"><h3>Agents on your Mac</h3><p>Codex, Claude Code, OpenCode, Qwen Code, and Continue edit files and run commands against local models. <code>--cloud</code> is the explicit escape hatch.</p></div>
+    <div class="card"><h3>Tiered local gateway</h3><p>An OpenAI-compatible endpoint plus an Anthropic bridge route each request to <code>fast</code>, <code>balanced</code>, <code>deep</code>, or <code>ultra</code> — with real streamed tool calls. An optional MLX server joins the same gateway.</p></div>
+    <div class="card"><h3>Agents on your Mac</h3><p>Codex, Claude Code, OpenCode, Qwen Code, and Continue edit files and run commands against local models. <code>--cloud</code> is the explicit escape hatch, and <code>sovereign verify --clients</code> proves a real turn through each.</p></div>
     <div class="card"><h3>22k-skill library</h3><p>Route, lint, verify, and install curated skills into every client — plus project-level <code>AGENTS.md</code>, <code>CLAUDE.md</code>, and <code>QWEN.md</code> indexes.</p></div>
     <div class="card"><h3>Task packs</h3><p>Pentest, vulnerability, risk, vendor, legal, compliance, forensics, and finance — each with guardrails, steps, matching skills, and deliverables.</p></div>
     <div class="card"><h3>Compliant browser operator</h3><p>Playwright drives a visible Chromium. No CAPTCHA solving, secret fields are refused, destructive actions ask first, and every run is audited.</p></div>
     <div class="card"><h3>PDF, OCR, and vision</h3><p>Read born-digital PDFs fast, OCR scanned pages locally, render figures, and ask a local vision model — <code>sovereign pdf report.pdf</code>.</p></div>
     <div class="card"><h3>Hugging Face, built in</h3><p>Search models and datasets, download only the files you need, and import a GGUF straight into Ollama. Shared token and cache with the standard Hub tools.</p></div>
     <div class="card"><h3>Search and memory</h3><p>Embed a repo and ask “where is X handled?”; project memory and agent briefs are injected into chat, code, and pipeline runs automatically.</p></div>
-    <div class="card"><h3>Offline model stacks</h3><p><code>lean</code>, <code>balanced</code>, <code>capable</code>, and <code>max</code> presets pull exactly what fits your Mac. Any Ollama tag also works.</p></div>
+    <div class="card"><h3>Offline model stacks</h3><p><code>lean</code>, <code>balanced</code>, <code>capable</code>, and <code>max</code> presets pull exactly what fits your Mac. Any Ollama tag or MLX model also works.</p></div>
   </div>
 </section>
 
@@ -268,6 +268,8 @@ sovereign status         # one-shot stack status</code></pre>
   <div class="entry"><span class="date">v0.5.0</span><div><h3>Client compatibility</h3><p>Codex, Claude Code and OpenCode each answer a real turn (<code>sovereign verify --clients</code>), doctor proves the gateway completes a request instead of only opening a port, the generated OpenCode config validates against the 2.x schema, and a stale gateway can finally be restarted.</p></div></div>
   <div class="entry"><span class="date">v0.5.0</span><div><h3>Native OpenCode V2 configuration</h3><p>Generated configs now use V2 providers, ordered permissions, read-only reviewer and planner subagents, <code>/check</code> <code>/review</code> <code>/plan</code> commands, todo tracking, and background compaction.</p></div></div>
   <div class="entry"><span class="date">v0.5.0</span><div><h3>Opt-in 24/7 coding loop</h3><p>One iteration preflights the project's checks, picks the next roadmap item, routes it through the skill bank, and hands a bounded local-only prompt to OpenCode. A dirty tree or repeated failure pauses it instead of spinning.</p></div></div>
+  <div class="entry"><span class="date">v0.5.0</span><div><h3>Live browser CI</h3><p><code>make browser-check</code> and the CI job run the Playwright suite against a real Chromium instead of skipping it, so browser regressions are caught before release.</p></div></div>
+  <div class="entry"><span class="date">v0.5.0</span><div><h3>Safer client wiring</h3><p>Unverified Codex and Claude versions surface as a warning instead of silently misfiring, full computer control is pinned explicitly, and client-config backups are bounded to five copies.</p></div></div>
   <div class="entry"><span class="date">v0.4.1</span><div><h3>Hardening pass</h3><p>Streamable HTTP MCP now works, the tier gateway cache is thread-safe, PDF downloads and page rendering are fenced, edits cannot corrupt files, undo restores binaries, and browser policy covers legacy numeric hosts. Plus task packs, PDF tables/figures, browser hover, and MCP authentication.</p></div></div>
   <div class="entry"><span class="date">v0.1.0</span><div><h3>Local-first console</h3><p>Terminal dashboard, 32k context, multi-model pipeline, semantic search, skills bank, compliant browser, and offline model stacks.</p></div></div>
   <p class="fine"><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Full changelog →</a></p>

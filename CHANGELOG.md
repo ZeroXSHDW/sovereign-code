@@ -2,23 +2,36 @@
 
 All notable changes to Sovereign Code.
 
-## [Unreleased]
+## [0.5.1] - 2026-10-24
 
-### Fixed
+### Added
+- **`sovereign verify --clients --json`**: the client results as JSON, so a
+  script or CI job can gate on them.
+
+### Changed
 - **Codex 0.164 is verified and pinned**: the CLI was upgraded from 0.163,
   `codex --strict-config doctor` reports no notes against the local profile,
   the model catalog is regenerated, and `codex exec` answers through the tier
-  gateway. `SUPPORTED_CLIENT_VERSIONS` now lists both 0.163 and 0.164.
+  gateway. `SUPPORTED_CLIENT_VERSIONS` lists 0.163 and 0.164.
+- **The version guard covers OpenCode (2.x) and Qwen (0.25)** as well as Codex
+  and Claude Code.
+- **`make typecheck` checks the Linux view too** (`mypy --platform linux`), so
+  a macOS-only pass can no longer hide the narrowing error that failed CI.
+
+### Fixed
 - **The client-version guard compares the version, not the line**: the codex
   `--version` output is `codex-cli 0.164.0`, so `startswith("0.164")` never
   matched and doctor warned about a supported client. The numeric `x.y.z` is
   extracted first (`released_version`).
+- **A client that answers and then crashes is not a PASS**: the probe requires
+  exit 0 as well as the reply, and reports `exit N` when it does not.
+- **A timed-out probe retries once**: a cold 30B load or a model swap under
+  memory pressure can overrun the first ceiling; the warm second run decides,
+  and the row says `(passed on retry)`.
 - **Probes and restarts report the truth**: the doctor completion probe names
   no model (the gateway routes a short prompt itself), `router --stop` says so
   when a process ignores SIGTERM instead of claiming success and dropping its
   pid file, and `install-clients` points at `sovereign verify --clients`.
-- **`make typecheck` checks the Linux view too** (`mypy --platform linux`), so
-  a macOS-only pass can no longer hide the narrowing error that failed CI.
 
 ## [0.5.0] - 2026-10-24
 

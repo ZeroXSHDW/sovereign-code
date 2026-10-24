@@ -1,10 +1,16 @@
 ## Summary
+<!-- What does this PR do? -->
 
-What this change does and why.
+## Changes
+- 
 
-## Checks
+## Testing
+- [ ] Builds locally
+- [ ] Tests pass
 
-- [ ] `python -m pytest -q` passes
-- [ ] `ruff check .` and `ruff format --check .` pass
-- [ ] README/docs updated if behaviour changed
-- [ ] No network calls, telemetry, or security bypasses introduced
+## Checklist
+- [ ] No secrets committed
+- [ ] README updated if needed
+
+---
+ZeroDevLLC · cyber-deck · local-first · no cloud · no telemetry

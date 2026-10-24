@@ -35,6 +35,60 @@ class Pack:
     guardrails: tuple[str, ...]
     steps: tuple[str, ...]
     deliverables: tuple[str, ...]
+    related: tuple[str, ...] = ()  # other pack keys worth referencing next
+
+    def aliases(self) -> tuple[str, ...]:
+        """Every extra name that resolves to this pack."""
+        return tuple(alias for alias, target in PACK_ALIASES.items() if target == self.key)
+
+
+# Short or common names a caller may use instead of the canonical key.
+# Keys are normalised (lowercase, alphanumerics only) before lookup.
+PACK_ALIASES: dict[str, str] = {
+    "adversary": "redteam",
+    "adversaryemulation": "redteam",
+    "red": "redteam",
+    "blue": "blueteam",
+    "detection": "blueteam",
+    "detectionengineering": "blueteam",
+    "hunting": "soc",
+    "threathunting": "soc",
+    "triage": "soc",
+    "cti": "threatintel",
+    "ioc": "threatintel",
+    "iocs": "threatintel",
+    "threatintelligence": "threatintel",
+    "dfir": "forensics",
+    "incident": "forensics",
+    "incidentresponse": "forensics",
+    "ir": "forensics",
+    "riskassessment": "risk",
+    "grc": "compliance",
+    "vuln": "vulnerability",
+    "vulnmgmt": "vulnerability",
+    "vulnerabilitymanagement": "vulnerability",
+    "contract": "legal",
+    "contracts": "legal",
+    "threatmodel": "threatmodel",
+    "threatmodelling": "threatmodel",
+    "stride": "threatmodel",
+    "linddun": "threatmodel",
+    "purple": "purpleteam",
+    "malwareanalysis": "malware",
+    "cloud": "cloudsec",
+    "cloudsecurity": "cloudsec",
+    "appsec": "appsec",
+    "securecode": "appsec",
+    "securecoding": "appsec",
+}
+
+
+def normalize_key(value: str | None) -> str:
+    """Canonical pack key for a user-supplied name: red-team, RED_TEAM, dfir -> key."""
+    cleaned = re.sub(r"[^a-z0-9]+", "", (value or "").strip().lower())
+    if not cleaned:
+        return ""
+    return PACK_ALIASES.get(cleaned, cleaned)
 
 
 _AUTHORISED = (
@@ -67,6 +121,7 @@ PACKS: dict[str, Pack] = {
             "Write findings with severity, affected path, reproduction and fix.",
         ),
         deliverables=("FINDINGS.md", "EVIDENCE.md"),
+        related=("redteam", "vulnerability", "blueteam"),
     ),
     "vulnerability": Pack(
         key="vulnerability",
@@ -89,14 +144,15 @@ PACKS: dict[str, Pack] = {
             "Rank findings by exploitability and exposure, then write VULNERABILITIES.md.",
         ),
         deliverables=("VULNERABILITIES.md",),
+        related=("appsec", "pentest", "risk"),
     ),
     "risk": Pack(
         key="risk",
         label="Risk analysis",
-        summary="Risk registers with likelihood, impact, and treatment for a project.",
-        domain="finance",
+        summary="Risk register with likelihood, impact, treatment and owners for a project.",
+        domain="security",
         task=Task.REASON,
-        skill_queries=("risk", "threat", "decision"),
+        skill_queries=("risk analysis", "threat model", "risk register"),
         model_queries=("instruct reasoning gguf", "risk analysis gguf"),
         guardrails=(
             "State every assumption and the source of each likelihood and impact score.",
@@ -109,6 +165,7 @@ PACKS: dict[str, Pack] = {
             "Propose a treatment (avoid, reduce, transfer, accept) and an owner for each.",
         ),
         deliverables=("RISK_REGISTER.md",),
+        related=("threatmodel", "blueteam", "compliance"),
     ),
     "vendor": Pack(
         key="vendor",
@@ -116,7 +173,7 @@ PACKS: dict[str, Pack] = {
         summary="Third-party assessment: security posture, data handling, certifications.",
         domain="research",
         task=Task.REASON,
-        skill_queries=("vendor", "supplier", "third-party"),
+        skill_queries=("vendor due diligence", "supplier", "third-party"),
         model_queries=("instruct gguf", "reasoning instruct gguf"),
         guardrails=(
             "Mark every claim as evidenced (with source) or unverified.",
@@ -129,6 +186,7 @@ PACKS: dict[str, Pack] = {
             "Write VENDOR_ASSESSMENT.md with a go, conditional, or no-go recommendation.",
         ),
         deliverables=("VENDOR_ASSESSMENT.md",),
+        related=("compliance", "risk"),
     ),
     "legal": Pack(
         key="legal",
@@ -150,6 +208,7 @@ PACKS: dict[str, Pack] = {
             "Write LEGAL_REVIEW.md with each issue, the clause and a suggested change.",
         ),
         deliverables=("LEGAL_REVIEW.md",),
+        related=("compliance", "risk", "vendor"),
     ),
     "compliance": Pack(
         key="compliance",
@@ -170,6 +229,7 @@ PACKS: dict[str, Pack] = {
             "Write COMPLIANCE_GAPS.md ordered by audit risk.",
         ),
         deliverables=("COMPLIANCE_GAPS.md",),
+        related=("legal", "risk", "vendor"),
     ),
     "forensics": Pack(
         key="forensics",
@@ -190,6 +250,223 @@ PACKS: dict[str, Pack] = {
             "Write FORENSIC_REPORT.md with the timeline and open questions.",
         ),
         deliverables=("FORENSIC_REPORT.md", "TIMELINE.csv"),
+        related=("soc", "legal", "malware"),
+    ),
+    "redteam": Pack(
+        key="redteam",
+        label="Red team / adversary emulation",
+        summary="Authorised adversary emulation mapped to MITRE ATT&CK, with detections "
+        "handed to the blue team.",
+        domain="security",
+        task=Task.CODE,
+        skill_queries=("adversary emulation", "attack patterns", "purple team"),
+        model_queries=("cybersecurity gguf", "red team gguf"),
+        guardrails=(
+            _AUTHORISED,
+            "Map every action to a MITRE ATT&CK technique and record the technique ID.",
+            "No destructive payloads, persistence on production hosts, or "
+            "exfiltration beyond the agreed scope.",
+            "Hand every successful technique to the blue team as a detection test case.",
+        ),
+        steps=(
+            "Read SCOPE.md and confirm targets, dates, allowed techniques and stop conditions.",
+            "Define the objectives and the threat actor being emulated.",
+            "Map the planned TTPs to MITRE ATT&CK technique IDs.",
+            "Execute each technique minimally and reversibly, recording evidence.",
+            "Write REDTEAM_REPORT.md, ATTACK_MATRIX.csv and DETECTIONS.md.",
+        ),
+        deliverables=("REDTEAM_REPORT.md", "ATTACK_MATRIX.csv", "DETECTIONS.md"),
+        related=("blueteam", "threatintel", "purpleteam"),
+    ),
+    "blueteam": Pack(
+        key="blueteam",
+        label="Blue team / detection engineering",
+        summary="Telemetry, detection rules, triage and hardening for SOC defence.",
+        domain="security",
+        task=Task.REASON,
+        skill_queries=("blue team", "detection engineering", "incident runbook"),
+        model_queries=("cybersecurity gguf", "incident response gguf"),
+        guardrails=(
+            "Cite the log source and field behind every detection.",
+            "Ship each detection with a test case and its known false-positive profile.",
+            "Do not block, isolate or delete in production without explicit approval.",
+        ),
+        steps=(
+            "Inventory the telemetry sources and the fields they actually provide.",
+            "Map ATT&CK coverage and name the blind spots.",
+            "Write detections with severity, logic, test case and false-positive notes.",
+            "Define triage and escalation for each detection.",
+            "Write DETECTIONS.md and BLUE_TEAM_PLAYBOOK.md.",
+        ),
+        deliverables=("DETECTIONS.md", "BLUE_TEAM_PLAYBOOK.md"),
+        related=("soc", "redteam", "purpleteam"),
+    ),
+    "soc": Pack(
+        key="soc",
+        label="SOC triage and threat hunting",
+        summary="Alert triage, IOC enrichment, hunting hypotheses and escalation.",
+        domain="forensics",
+        task=Task.REASON,
+        skill_queries=("soc analyst", "ioc", "threat hunting"),
+        model_queries=("incident response gguf", "cybersecurity gguf"),
+        guardrails=(
+            "Every IOC carries its source, first-seen date, confidence and TLP.",
+            "Never invent a timestamp: write `unknown` when the prompt supplies none.",
+            "Separate observed telemetry from inference; say what is still unverified.",
+            "Never block or isolate without approval; propose the action and its blast radius.",
+        ),
+        steps=(
+            "Parse the alerts and list the observable facts.",
+            "Enrich each indicator and discard expired or unsourced ones.",
+            "Test hunting hypotheses against the available telemetry.",
+            "Rank alerts as true positive, benign or needs-more-data.",
+            "Write SOC_TRIAGE.md, IOCS.csv and HUNT_QUERIES.md.",
+        ),
+        deliverables=("SOC_TRIAGE.md", "IOCS.csv", "HUNT_QUERIES.md"),
+        related=("forensics", "threatintel", "blueteam"),
+    ),
+    "threatintel": Pack(
+        key="threatintel",
+        label="Threat intelligence",
+        summary="IOC collection, enrichment, ATT&CK mapping and sharing-ready output.",
+        domain="security",
+        task=Task.REASON,
+        skill_queries=("threat intelligence", "attack patterns", "malware analysis"),
+        model_queries=("cybersecurity gguf", "threat intelligence gguf"),
+        guardrails=(
+            "Date every IOC and state its source and confidence; expired indicators are not intel.",
+            "Never invent a timestamp: write `unknown` when the source supplies none.",
+            "Map activity to ATT&CK techniques and name an adversary only when evidenced.",
+            "Sanitise and mark sharing limits (TLP) before distribution.",
+        ),
+        steps=(
+            "Collect indicators from named sources and record the collection date.",
+            "Normalise, deduplicate and enrich each indicator.",
+            "Map the activity to ATT&CK techniques and campaigns.",
+            "Write THREAT_INTEL.md and IOCS.csv with confidence and TLP.",
+        ),
+        deliverables=("THREAT_INTEL.md", "IOCS.csv"),
+        related=("soc", "forensics", "malware"),
+    ),
+    "threatmodel": Pack(
+        key="threatmodel",
+        label="Threat modeling",
+        summary="STRIDE or LINDDUN model over explicit data flows, trust boundaries and "
+        "mitigations.",
+        domain="security",
+        task=Task.REASON,
+        skill_queries=("threat modeling", "stride", "linddun"),
+        model_queries=("instruct reasoning gguf", "risk analysis gguf"),
+        guardrails=(
+            "Name the framework (STRIDE or LINDDUN) and use it consistently.",
+            "Every threat names its asset, actor, vector, trust boundary, mitigation and owner.",
+            "No threat without a testable mitigation or an explicit accepted risk.",
+        ),
+        steps=(
+            "Define the system, its assets, actors and trust boundaries.",
+            "Draw the data flows and mark where data crosses a boundary.",
+            "Enumerate threats per element with the chosen framework.",
+            "Score likelihood and impact, then assign a mitigation and owner.",
+            "Write THREAT_MODEL.md and DATA_FLOWS.md.",
+        ),
+        deliverables=("THREAT_MODEL.md", "DATA_FLOWS.md"),
+        related=("appsec", "risk", "blueteam"),
+    ),
+    "purpleteam": Pack(
+        key="purpleteam",
+        label="Purple team",
+        summary="Pair red-team actions with blue-team telemetry and turn misses into detections.",
+        domain="security",
+        task=Task.REASON,
+        skill_queries=("purple team", "adversary emulation", "detection engineering"),
+        model_queries=("cybersecurity gguf", "incident response gguf"),
+        guardrails=(
+            _AUTHORISED,
+            "Every red action has a detection candidate and a named owner.",
+            "Measure detection coverage, not just the number of findings.",
+            "Do not tune production detections without approval.",
+        ),
+        steps=(
+            "Agree the ATT&CK techniques and success criteria with both teams.",
+            "Pair each technique with the telemetry that should detect it.",
+            "Emulate the technique and record detected, missed or noisy.",
+            "File each miss as a detection backlog item with a test case.",
+            "Write PURPLE_TEAM_REPORT.md and DETECTION_BACKLOG.md.",
+        ),
+        deliverables=("PURPLE_TEAM_REPORT.md", "DETECTION_BACKLOG.md"),
+        related=("redteam", "blueteam", "threatintel"),
+    ),
+    "malware": Pack(
+        key="malware",
+        label="Malware analysis",
+        summary="Static and dynamic triage: hashes, behaviour, config, C2 and indicators.",
+        domain="forensics",
+        task=Task.REASON,
+        skill_queries=("malware analysis", "reverse engineering", "ioc"),
+        model_queries=("malware analysis gguf", "cybersecurity gguf"),
+        guardrails=(
+            "Hash every sample before touching it and analyse copies only.",
+            "Never execute a sample outside an isolated VM with no network path to production.",
+            "Record the tool and version behind each observation.",
+            "No attribution without evidence; mark inferences as inferences.",
+        ),
+        steps=(
+            "Inventory the sample: names, hashes, size, first seen.",
+            "Static triage: strings, imports, sections, packer and signature checks.",
+            "Dynamic triage in an isolated VM; capture process, file and network behaviour.",
+            "Extract config, C2 and IOCs with source and confidence.",
+            "Write MALWARE_REPORT.md and IOCS.csv.",
+        ),
+        deliverables=("MALWARE_REPORT.md", "IOCS.csv"),
+        related=("forensics", "soc", "threatintel"),
+    ),
+    "cloudsec": Pack(
+        key="cloudsec",
+        label="Cloud and container security",
+        summary="Identity, network, storage, logging and workload posture against provider "
+        "baselines.",
+        domain="security",
+        task=Task.REASON,
+        skill_queries=("cloud security", "kubernetes security", "iam"),
+        model_queries=("instruct reasoning gguf", "cybersecurity gguf"),
+        guardrails=(
+            "Least privilege is the default recommendation; name the exact role or policy.",
+            "Never export credentials, keys or customer data into the report.",
+            "Cite the provider control or CIS benchmark behind each finding.",
+            "Separate a config fact from an inference; state what was not inspected.",
+        ),
+        steps=(
+            "Inventory accounts, clusters, identities and exposed entry points.",
+            "Review IAM, network exposure, storage, logging, secrets and workload limits.",
+            "Map findings to CIS or provider benchmarks and rank by exposure.",
+            "Propose the lowest-cost fix and its blast radius.",
+            "Write CLOUD_SECURITY_REVIEW.md and IAM_FINDINGS.csv.",
+        ),
+        deliverables=("CLOUD_SECURITY_REVIEW.md", "IAM_FINDINGS.csv"),
+        related=("appsec", "vulnerability", "risk"),
+    ),
+    "appsec": Pack(
+        key="appsec",
+        label="Application security review",
+        summary="Secure-code and attack-surface review with CWE-backed findings and fixes.",
+        domain="security",
+        task=Task.CODE,
+        skill_queries=("secure coding", "application security", "owasp"),
+        model_queries=("code security gguf", "vulnerability detection gguf"),
+        guardrails=(
+            "Give a CWE ID for every finding and say when it is unverified.",
+            "Reproduce without touching real user data or production credentials.",
+            "Report the lowest-cost fix first and never copy secrets into the report.",
+        ),
+        steps=(
+            "Map the attack surface from routes, configs and dependencies.",
+            "Review authentication, authorization, input handling, secrets, "
+            "deserialisation and SSRF.",
+            "Confirm each finding with a minimal, reversible reproduction.",
+            "Rank by exploitability and exposure, then write SECURITY_REVIEW.md and FIXES.md.",
+        ),
+        deliverables=("SECURITY_REVIEW.md", "FIXES.md"),
+        related=("vulnerability", "threatmodel", "cloudsec"),
     ),
     "finance": Pack(
         key="finance",
@@ -211,6 +488,7 @@ PACKS: dict[str, Pack] = {
             "Write FINANCIAL_ANALYSIS.md with the conclusion and its limits.",
         ),
         deliverables=("FINANCIAL_ANALYSIS.md", "model.py"),
+        related=("risk",),
     ),
 }
 
@@ -218,20 +496,43 @@ PACKS: dict[str, Pack] = {
 def get_pack(key: str | None) -> Pack | None:
     if not key:
         return None
-    return PACKS.get(key.strip().lower())
+    return PACKS.get(normalize_key(key))
 
 
 def pack_skills(pack: Pack, limit: int = 12) -> list[tuple[str, str]]:
-    """Library skills matching the pack, best matches first, without repeats."""
+    """Library skills matching the pack, best matches first, without repeats.
+
+    Uses ``skillrouter.route`` so ranking already weighs the pack's task text,
+    then drops legal skills for a non-legal pack: a shared word such as
+    "disclosure" must not drag a legal skill into a pentest pack. Route order is
+    preserved so the most specific match stays first.
+    """
+    from .skillrouter import route
+
+    legal_domain = pack.domain in {"legal", "compliance"}
+    seen: dict[str, str] = {}
+    for query in (*pack.skill_queries, pack.label):
+        cards, _note = route(query, limit=limit, scan_risk=False)
+        for card in cards:
+            if not legal_domain and card.name.startswith(("legal--", "hr-legal-compliance--")):
+                continue
+            seen.setdefault(card.name, card.description)
+        if len(seen) >= limit:
+            break
+    if seen:
+        # The first query is the pack's most specific one, so its order wins;
+        # later queries only fill the remaining slots.
+        return list(seen.items())[:limit]
+    # No coherent match: fall back so a pack still suggests something.
     from .skills import search_skills
 
-    seen: dict[str, str] = {}
+    fallback: dict[str, str] = {}
     for query in pack.skill_queries:
         for name, description in search_skills(query, limit=limit):
-            seen.setdefault(name, description)
-            if len(seen) >= limit:
-                return list(seen.items())
-    return list(seen.items())
+            fallback.setdefault(name, description)
+        if len(fallback) >= limit:
+            break
+    return list(fallback.items())[:limit]
 
 
 def hf_candidates(
@@ -298,6 +599,14 @@ def brief_block(pack: Pack, skills: Iterable[tuple[str, str]]) -> str:
         "### Deliverables",
         *[f"- {name}" for name in pack.deliverables],
         "",
+    ]
+    if pack.related:
+        lines += [
+            "### Related packs",
+            *[f"- `{key}`" for key in pack.related],
+            "",
+        ]
+    lines += [
         "### Skills to load",
         *[f"- **{name}** — {_first(description)}" for name, description in skills],
         "",

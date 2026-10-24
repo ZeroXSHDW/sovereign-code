@@ -2436,33 +2436,6 @@ def stop(port: int = DEFAULT_PORT) -> bool:
     return True
 
 
-def warm_fast(ollama: str) -> None:
-    """Load the 4B tier once so the first small request is not a cold start."""
-    model, context, _think = TIER_MODELS[FAST]
-    if not _model_available(model, _installed(ollama)):
-        return
-    _SCHEDULER.enter(model)
-    try:
-        ensure_model_room(model, ollama, context)
-        shared_client().post(
-            f"{ollama.rstrip('/')}/api/generate",
-            json={
-                "model": model,
-                "prompt": "",
-                "stream": False,
-                "keep_alive": "1h",
-                "options": {"num_ctx": context},
-            },
-            timeout=httpx.Timeout(120, connect=5),
-        )
-    except httpx.HTTPError:
-        pass
-    except Exception:  # a failed warm-up must never take the gateway down
-        pass
-    finally:
-        _SCHEDULER.exit(model)
-
-
 def serve(host: str, port: int, ollama: str, upstream: str) -> None:
     if port_open(port=port):
         # Another instance owns the port. Exiting cleanly keeps launchd from
@@ -2478,15 +2451,10 @@ def serve(host: str, port: int, ollama: str, upstream: str) -> None:
         return
     pid_path().parent.mkdir(parents=True, exist_ok=True)
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
-    # Listen first, warm second: a restart used to refuse connections for as
-    # long as the 4B model took to load. Requests that arrive during the warm-up
-    # wait on the model lock; they are not rejected by a closed port.
-    threading.Thread(
-        target=warm_fast,
-        args=(ollama,),
-        name="sovereign-warm-fast",
-        daemon=True,
-    ).start()
+    # Do not preload a model here. The gateway starts at login and on every
+    # restart; loading the fast tier held ~3 GB of RAM for traffic that might
+    # never arrive, and with one model per Ollama that evicted the model the
+    # user actually asked for. The first request loads what it needs.
     try:
         server.serve_forever()
     except KeyboardInterrupt:

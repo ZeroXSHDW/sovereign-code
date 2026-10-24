@@ -55,8 +55,9 @@ to set as the repository's social preview.)
   escape hatch. `sovereign verify --clients` proves a real turn through each.
 - **22k skills** — route, lint, verify, and install skill packs into
   every client, with project-level `AGENTS.md` / `CLAUDE.md` / `QWEN.md` indexes.
-- **Task packs** — pentest, vulnerability, risk, vendor, legal, compliance,
-  forensics, and finance, each with guardrails, steps, and deliverables.
+- **Task packs** — pentest, redteam, blueteam, soc, threatintel, vulnerability,
+  risk, vendor, legal, compliance, forensics, and finance, each with guardrails,
+  steps, and deliverables.
 - **Browser, PDF, and Hugging Face** — a policy-checked Chromium operator,
   local OCR/vision for documents, and Hub search/import for models and datasets.
 - **24/7 coding loop** — opt-in, gated by the project's own checks, and paused
@@ -155,7 +156,7 @@ The repo carries its own agent brief. Open the folder in OpenCode or ChatGPT
   `best_model`, `run_checks`, …), the instructions file, and edit/bash permission.
 - `docs/ROADMAP.md`: prioritised work. Ask the agent "what next" to start there.
 
-### Task packs: pentest, vulnerability, risk, vendor, legal, compliance, forensics, finance
+### Task packs: pentest, redteam, blueteam, soc, threatintel, vulnerability, risk, vendor, legal, compliance, forensics, finance
 
 A pack is everything an agent needs to work a whole project in one category:
 skills to load, Hugging Face search queries, guardrails, steps, and deliverables.
@@ -590,7 +591,8 @@ OpenAI tool calls directly from Ollama (LiteLLM's streamed Ollama translation
 returns them as text), so OpenCode, Continue, and Qwen can execute tools through
 the tier gateway. It also:
 
-- warms the 4B tier at startup so the first small request is not a cold load;
+- loads no model at startup: RAM is spent only on a request that needs it
+  (`sovereign warm` still preloads deliberately);
 - keeps **one model resident** at a time, evicting the other before a tier
   switch (two 18 GB models panic the Metal allocator on a 24 GB Mac);
 - re-loads a model if its resident context is smaller than the tier requires;
@@ -905,7 +907,10 @@ It exposes:
   atomic, fenced file edits (work with `SOVEREIGN_MCP_COMPUTER=0`).
 - `run_command(command, cwd, timeout)` — run a shell command (requires
   `SOVEREIGN_MCP_COMPUTER=1`).
-- `list_packs()` / `pack_profile(key)` — task packs (pentest, legal, forensics, …).
+- `list_packs()` / `pack_profile(key)` / `run_pack(key, prompt)` — task packs
+  (pentest, redteam, blueteam, soc, threatintel, vulnerability, risk, legal,
+  compliance, forensics, …). `run_pack` loads the pack's guardrails, steps,
+  deliverables and skill bodies before the local model answers.
 - `browser_open(url)` / `browser_observe()` / `browser_act(...)` /
   `browser_screenshot()` / `browser_close()` — drive the visible local Chromium
   browser: navigate, click, hover, fill, select, press, scroll, wait, extract,

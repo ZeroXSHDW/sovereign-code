@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from typing import ClassVar
 
 import httpx
@@ -561,14 +560,13 @@ def test_iter_chat_stream_parses_chunks_and_surfaces_errors() -> None:
         raise AssertionError("a stream error must not look like a reply")
 
 
-def test_gateway_binds_before_it_warms_the_model(tmp_path, monkeypatch) -> None:
+def test_gateway_starts_without_loading_a_model(tmp_path, monkeypatch) -> None:
     order: list[str] = []
-    warmed = threading.Event()
+    loaded: list[str] = []
 
     class FakeServer:
         def serve_forever(self) -> None:
             order.append("serving")
-            warmed.wait(timeout=2.0)
 
         def server_close(self) -> None:
             return
@@ -577,18 +575,13 @@ def test_gateway_binds_before_it_warms_the_model(tmp_path, monkeypatch) -> None:
         order.append("bound")
         return FakeServer()
 
-    def fake_warm(ollama: str) -> None:
-        order.append("warming")
-        warmed.set()
-
     monkeypatch.setattr(tg, "pid_path", lambda: tmp_path / "tier.pid")
     monkeypatch.setattr(tg, "make_server", fake_make_server)
-    monkeypatch.setattr(tg, "warm_fast", fake_warm)
+    monkeypatch.setattr(tg._SCHEDULER, "enter", loaded.append)
     tg.serve("127.0.0.1", 0, "http://127.0.0.1:11434", "http://127.0.0.1:4000")
-    # The listening socket exists before the warm-up can take the model lock.
-    assert order[0] == "bound"
-    assert "warming" in order
-    assert "serving" in order
+    # Starting the gateway must not occupy RAM: only a real request loads a model.
+    assert order == ["bound", "serving"]
+    assert loaded == []
 
 
 def test_model_timeouts_are_configurable(monkeypatch) -> None:

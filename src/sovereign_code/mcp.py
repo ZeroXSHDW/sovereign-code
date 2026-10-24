@@ -319,8 +319,9 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "list_packs",
-        "List task packs (pentest, vulnerability, risk, vendor, legal, compliance, "
-        "forensics, finance) with their key, label, domain and summary.",
+        "List task packs (pentest, redteam, blueteam, soc, threatintel, "
+        "vulnerability, risk, vendor, legal, compliance, forensics, finance) with "
+        "their key, label, domain and summary.",
         {},
     ),
     _tool(
@@ -329,6 +330,20 @@ TOOLS: list[dict[str, Any]] = [
         "model queries, and suggested skills.",
         {"key": {"type": "string"}},
         ["key"],
+    ),
+    _tool(
+        "run_pack",
+        "Run a task with a pack's full playbook. Loads the pack's guardrails, steps, "
+        "deliverables and the bodies of its best-matching skills, then answers with "
+        "the domain's specialist model. Keys include pentest, redteam, blueteam, soc, "
+        "threatintel, vulnerability, risk, legal, compliance, forensics, vendor, finance.",
+        {
+            "key": {"type": "string"},
+            "prompt": {"type": "string"},
+            "model": {"type": "string", "default": ""},
+            "max_tokens": {"type": "integer", "default": 1500},
+        },
+        ["key", "prompt"],
     ),
     _tool(
         "hf_status",
@@ -716,6 +731,45 @@ def _pack_profile_payload(key: str) -> dict[str, Any]:
     }
 
 
+def _run_pack(key: str, prompt: str, model: str, max_tokens: int) -> str:
+    from .config import Settings
+    from .packs import brief_block, get_pack, pack_skills
+    from .skills import read_skill
+    from .summarize import complete
+
+    pack = get_pack(key)
+    if pack is None:
+        raise ValueError(f"unknown pack: {key}")
+    if not prompt.strip():
+        raise ValueError("prompt is empty")
+    domain = DOMAINS[pack.domain]
+    skills = pack_skills(pack, limit=8)
+    # A pack produces a work product, so it gets the domain's specialist prompt
+    # but not the short VERDICT protocol.
+    parts = [domain.system, brief_block(pack, skills)]
+    # The model cannot call tools inside one completion, so the matching skill
+    # bodies have to travel with the prompt. Cap the total so the pack cannot
+    # swallow the context window.
+    budget = 12_000
+    for name, _description in skills[:4]:
+        body = read_skill(name)
+        if not body:
+            continue
+        chunk = body.replace("{{prompt}}", prompt)[: min(4_000, budget)]
+        if not chunk.strip():
+            continue
+        parts.append(f"### Skill: {name}\n{chunk}")
+        budget -= len(chunk)
+        if budget <= 0:
+            break
+    messages = [
+        {"role": "system", "content": "\n\n".join(parts)},
+        {"role": "user", "content": prompt},
+    ]
+    settings = Settings.load()
+    return complete(settings.router_url, model or domain.alias, messages, max_tokens=max_tokens)
+
+
 def _repo_map(path: str, max_files: int, max_tokens: int) -> str:
     from .repomap import repo_map
 
@@ -1007,17 +1061,26 @@ def _ask(prompt: str, model: str, max_tokens: int, domain_key: str = "") -> str:
         messages = [{"role": "system", "content": system}, *messages]
     answer = complete(settings.router_url, model, messages, max_tokens=max_tokens)
     if domain is not None and verdict(answer) is None:
-        # One retry gets the mandatory verdict without paying for a full re-analysis.
-        answer = complete(
-            settings.router_url,
-            model,
-            [
-                *messages,
-                {"role": "assistant", "content": answer},
-                {"role": "user", "content": FORCE_VERDICT},
-            ],
-            max_tokens=max(max_tokens, 200),
-        )
+        if len(answer) >= max_tokens * 3:
+            # It almost certainly hit the output cap, not ignored the protocol:
+            # retry with room to finish instead of discarding the analysis.
+            answer = complete(
+                settings.router_url,
+                model,
+                messages,
+                max_tokens=max(max_tokens * 2, 800),
+            )
+        else:
+            answer = complete(
+                settings.router_url,
+                model,
+                [
+                    *messages,
+                    {"role": "assistant", "content": answer},
+                    {"role": "user", "content": FORCE_VERDICT},
+                ],
+                max_tokens=max(max_tokens, 200),
+            )
     return answer
 
 
@@ -1526,6 +1589,15 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(_list_packs_payload())
     if name == "pack_profile":
         return _text(_pack_profile_payload(str(args.get("key") or "")))
+    if name == "run_pack":
+        return _text(
+            _run_pack(
+                str(args.get("key") or ""),
+                str(args.get("prompt") or ""),
+                str(args.get("model") or ""),
+                int(args.get("max_tokens") or 1500),
+            )
+        )
     if name == "repo_map":
         return _text(
             _repo_map(
@@ -1842,13 +1914,18 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "list_skills/get_skill/load_skills for workflows, run_checks to "
                     "verify, and delegate to run a real local Codex/Claude agent on "
                     "a project (read-only unless write=true; it never skips the "
-                    "human's approvals). For any legal, compliance, forensics or "
-                    "incident-response task call skills_for_task first to load the "
-                    "specialist playbook, then ask with the matching model. Navigate "
+                    "human's approvals). For legal, compliance, forensics, incident "
+                    "response, pentest, red team, blue team, SOC, threat intelligence "
+                    "or risk work, call run_pack with the matching key; it loads the "
+                    "guardrails, steps, deliverables and skills before the model "
+                    "answers. Navigate "
                     "code with repo_map/repo_search/repo_read and edit with "
                     "repo_write/repo_edit/repo_patch. "
-                    "Task packs (pentest, legal, forensics, ...) via list_packs/"
-                    "pack_profile. Browser control via browser_open/observe/act/"
+                    "Task packs (pentest, redteam, blueteam, soc, threatintel, "
+                    "vulnerability, risk, legal, compliance, forensics, ...) via "
+                    "list_packs/pack_profile; run one with run_pack to load its "
+                    "guardrails, steps, deliverables and skills before answering. "
+                    "Browser control via browser_open/observe/act/"
                     "screenshot/back/forward/reload/wait/search/close. Hugging Face: "
                     "hf_status, search_hf_models/"
                     "hf_model_info, search_hf_datasets/hf_dataset_info, "

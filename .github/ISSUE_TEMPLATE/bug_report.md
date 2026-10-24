@@ -1,20 +1,22 @@
 ---
 name: Bug report
-about: Report a bug or unexpected behaviour
-title: "[bug] "
+about: Report a defect in this ZeroDevLLC project
+title: "bug: "
 labels: bug
 ---
 
-**Describe the bug**
-A clear description of what went wrong.
+## Description
+<!-- A clear description of the bug. -->
 
-**To reproduce**
-Steps and the command that triggered it.
+## Reproduction
+1. ...
+2. ...
 
-**Environment**
-- macOS version and chip (e.g. M3, 24 GB)
-- `sovereign --version`
-- Relevant `sovereign doctor` output
+## Expected behavior
 
-**Expected vs actual**
-What you expected, and what happened instead.
+## Environment
+- OS:
+- Version:
+
+## Theme
+ZeroDevLLC cyber-deck · local-first · no cloud · no telemetry

@@ -487,6 +487,52 @@ def _model_info(settings: Settings, tag: str) -> int:
     return 0
 
 
+def _model_use(settings: Settings, args: argparse.Namespace) -> int:
+    """Select an installed model for OpenCode, Codex, and Claude Code."""
+    from .model_use import current_models, is_installed, model_use
+
+    if args.list:
+        table = Table(title="Current client models", header_style="bold #b794f4")
+        table.add_column("Client", style="bold")
+        table.add_column("Model")
+        for client, model in current_models().items():
+            table.add_row(client, model or "[dim](default: auto)[/]")
+        console.print(table)
+        console.print("[dim]Set one:[/] sovereign model-use <tag> --client all")
+        return 0
+
+    tag = args.model
+    if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
+        console.print(f"[red]Invalid model tag:[/] {tag}")
+        return 1
+
+    if not is_installed(tag):
+        if args.pull:
+            if _pull(settings, tag) != 0:
+                return 1
+        else:
+            console.print(f"[yellow]{tag} is not installed.[/]")
+            console.print(f"[dim]Pull it first:[/] sovereign pull {tag}")
+            console.print(
+                f"[dim]Or pull and select in one step:[/] sovereign model-use {tag} --pull"
+            )
+            return 1
+
+    try:
+        done = model_use(tag, args.client, settings)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+
+    for client, path in done.items():
+        console.print(f"[green]{client}[/] → [bold]{tag}[/] · {path}")
+    console.print(
+        "[dim]Launch: sovereign launch opencode|codex|claude [path] — the gateway "
+        "serves every installed model by name, so the client now uses this one.[/]"
+    )
+    return 0
+
+
 def _parse_gateway_aliases(path: Path) -> list[tuple[str, str]]:
     """Return [(alias, ollama_tag)] from the gateway config.yaml model_list."""
     aliases: list[tuple[str, str]] = []
@@ -6472,6 +6518,16 @@ def build_parser() -> argparse.ArgumentParser:
     model_info = sub.add_parser("model-info", help="inspect a model before pulling it")
     model_info.add_argument("model")
 
+    use_model = sub.add_parser(
+        "model-use", help="select an installed model for OpenCode, Codex, and Claude"
+    )
+    use_model.add_argument("model", help="Ollama tag (e.g. qwen3.8:27b, or a pulled GGUF name)")
+    use_model.add_argument(
+        "--client", default="all", choices=("opencode", "codex", "claude", "all")
+    )
+    use_model.add_argument("--pull", action="store_true", help="pull the model first if missing")
+    use_model.add_argument("--list", action="store_true", help="show each client's current model")
+
     consult = sub.add_parser("consult", help="run one prompt through several models")
     consult.add_argument("prompt")
     consult.add_argument("--models", default=None, help="comma-separated aliases")
@@ -7809,6 +7865,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if command == "model-info":
         return _model_info(settings, args.model)
+    if command == "model-use":
+        return _model_use(settings, args)
     if command == "consult":
         models = (
             [name.strip() for name in args.models.split(",") if name.strip()] if args.models else []

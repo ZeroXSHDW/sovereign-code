@@ -62,6 +62,21 @@ def test_disk_cache(tmp_path):
     disk2.close()
 
 
+def test_disk_cache_stats_labels_one_layer(tmp_path) -> None:
+    """DiskCache.stats() reports this layer's hits/misses, not 'memory' keys.
+
+    The tier gateway exposes memory and disk as separate objects; the disk
+    layer must not name its own counters `memory_*`, or a consumer (cli.py
+    cache --stats) reads a field that is always absent.
+    """
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+    assert "memory_hits" not in disk.stats()
+    assert "memory_misses" not in disk.stats()
+    assert "hits" in disk.stats() and "misses" in disk.stats()
+    disk.close()
+
+
 def test_disk_cache_ttl_expiry(tmp_path, monkeypatch):
     """A row whose deadline has passed is dropped, not served.
 

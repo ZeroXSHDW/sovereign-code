@@ -246,13 +246,14 @@ class DiskCache:
             row = self._conn.execute(
                 "SELECT COUNT(*) AS n, SUM(hit_count) AS hits FROM cache"
             ).fetchone()
-            total_requests = (self.hits + self.misses) or 1
+            total = (self.hits + self.misses) or 1
             return {
                 "entries": int(row["n"] or 0),
-                "disk_hits": int(row["hits"] or 0),
-                "memory_hits": self.hits,
-                "memory_misses": self.misses,
-                "hit_rate": round(100.0 * self.hits / total_requests, 1),
+                # `self.hits`/`self.misses` are this layer's own counters; the
+                # SUM above counts persisted hits that predate this process.
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": round(100.0 * self.hits / total, 1),
             }
 
     def clear(self, older_than: float | None = None) -> int:
@@ -271,8 +272,9 @@ class DiskCache:
                 deadline = time.time() - max(0.0, older_than)
                 result = self._conn.execute("DELETE FROM cache WHERE created_at < ?", (deadline,))
             self._conn.commit()
-            self._conn.execute("VACUUM")
-            self._conn.commit()
+            # No VACUUM here: it rewrites the whole database under the single
+            # request lock, stalling every cached answer while it runs. WAL
+            # reclaims the space lazily, so the delete alone is enough.
             return result.rowcount or 0
 
 

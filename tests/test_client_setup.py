@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 
 from sovereign_code import client_setup
@@ -65,6 +66,73 @@ def test_ponytail_installers_are_graceful_without_clis(monkeypatch) -> None:
     assert client_setup.install_ponytail() == "codex not installed"
     assert client_setup.install_ponytail_claude() == "claude not installed"
     assert client_setup.install_ponytail_qwen() == "qwen not installed"
+
+
+def test_codex_mcp_block_carries_the_computer_env(tmp_path) -> None:
+    """Full computer control is pinned, not left to the server's default."""
+    path = tmp_path / "config.toml"
+    client_setup.install_codex_mcp(path)
+    text = path.read_text(encoding="utf-8")
+    assert 'env = ["SOVEREIGN_MCP_COMPUTER=1"]' in text
+
+
+def test_claude_desktop_sovereign_entry_carries_computer_env(tmp_path) -> None:
+    path = tmp_path / "claude_desktop_config.json"
+    client_setup.install_claude_desktop_mcp(path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["mcpServers"]["sovereign"]["env"]["SOVEREIGN_MCP_COMPUTER"] == "1"
+
+
+def test_claude_code_mcp_registers_complementary_servers(monkeypatch) -> None:
+    """Claude Code gets the reference servers and the computer-control env."""
+    calls: list[list[str]] = []
+    results = iter(
+        [
+            subprocess.CompletedProcess([], 0, "", ""),  # remove
+            subprocess.CompletedProcess([], 0, "", ""),  # add sovereign
+        ]
+    )
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/claude")
+
+    def fake_run(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        cmd = list(args[0]) if args and isinstance(args[0], list) else []
+        calls.append(cmd)
+        if "-e" in cmd:  # the sovereign add with env
+            return next(results)
+        if "sovereign" in cmd and "--" in cmd:  # the sovereign add
+            return next(results)
+        return subprocess.CompletedProcess([], 0, "", "")  # complementary adds
+
+    monkeypatch.setattr(client_setup.subprocess, "run", fake_run)
+    assert (
+        client_setup.install_claude_code_mcp()
+        == "added (filesystem:added, memory:added, playwright:added, git:added, fetch:added)"
+    )
+    # The sovereign entry carries the explicit computer-control env.
+    sovereign_add = next(c for c in calls if "sovereign" in c and "-e" in c)
+    assert "SOVEREIGN_MCP_COMPUTER=1" in sovereign_add
+
+
+def test_unsupported_clients_reports_unknown_majors(monkeypatch) -> None:
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: f"/usr/bin/{_name}")
+    monkeypatch.setattr(
+        client_setup,
+        "client_cli_version",
+        lambda name: "0.999.0" if name == "codex" else "3.0.0",
+    )
+    unsupported = client_setup.unsupported_clients()
+    assert unsupported["codex"] == "0.999.0"
+    assert unsupported["claude"] == "3.0.0"
+
+
+def test_supported_client_versions_are_not_reported(monkeypatch) -> None:
+    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: f"/usr/bin/{_name}")
+    monkeypatch.setattr(
+        client_setup,
+        "client_cli_version",
+        lambda name: "0.163.0" if name == "codex" else "2.1.0",
+    )
+    assert client_setup.unsupported_clients() == {}
 
 
 def test_opencode_cloud_provider_is_opt_in() -> None:

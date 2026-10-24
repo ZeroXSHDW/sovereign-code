@@ -4,7 +4,27 @@ Prioritised work for Sovereign Code. This is the list the agent starts from
 when asked "what next". Every item here must pass `make check` before it is
 considered done.
 
-## Now — v0.4.1: hardening the 0.4.0 release
+## Now — v0.5.0: client compatibility
+
+`v0.5.0` (2026-10-24) is the release where the three agent clients are verified
+rather than assumed: Codex, Claude Code and OpenCode each answer a real turn
+(`sovereign verify --clients`), the gateway is proved to complete a request
+instead of only opening a port, and the generated configs validate against the
+clients' current schemas.
+
+- [x] Tag `v0.5.0` and publish; 0.4.1 ships in this release, not separately.
+- [x] `sovereign verify --clients`: one real turn per client, PASS/FAIL table.
+- [x] Doctor probe for gateway completions, so a wedged gateway cannot pass.
+- [x] Recover a stale tier gateway via `router --stop/--restart`; a losing bind
+      exits cleanly instead of crash-looping launchd.
+- [x] OpenCode 2.x schema-valid config (no `enabled`, no `small_model`, V1
+      `mcp` map migrated into `mcp.servers`).
+- [x] Honest OpenCode launch note (2.x ignores `OPENCODE_CONFIG_CONTENT`).
+- [x] Claude Code 2.1 Fable slot and current model ids; drop the removed
+      `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` knob.
+- [x] Bound client-config backups at five per file.
+
+### 0.4.1 hardening (released with v0.5.0)
 
 `v0.4.0` is tagged (2026-10-23). A post-release review produced the
 `[0.4.1]` changelog entry. The repairs are complete and covered by
@@ -27,9 +47,8 @@ considered done.
 - [x] Bump `pyproject.toml`/`__init__.py` to `v0.4.1` after a live run of
       `sovereign doctor` (24 pass · 3 warn · 0 fail) and `sovereign mcp --http`
       (initialize and tools/list over loopback).
-- [ ] Tag `v0.4.1` and publish the release.
 
-## Next — v0.5.0
+## Next — v0.6.0
 
 Surfaces documented in the README but not yet exercised end-to-end:
 
@@ -38,9 +57,12 @@ Surfaces documented in the README but not yet exercised end-to-end:
 - [ ] MLX server integration (`sovereign mlx pull/start/status/stop`) —
       speculative decoding, 8-bit KV cache, tier aliases (`mlx-fast`,
       `mlx-code`), `sovereign gateway-config --apply`.
-- [ ] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
+- [x] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
       confirmation gates, secret refusal, masked audit log; keep integration
       tests green.
+- [x] Live Chromium end-to-end tests (`tests/test_browser_live.py`,
+      `make browser-check`, CI job) cover the operator, the profile lock and
+      the MCP browser tools against a real headless browser.
 - [x] Cross-process browser session locking so `browse`, MCP and web chat cannot
       open the same Chromium profile at once (`ProfileLock`).
 - [x] Give the HTTP MCP endpoint an explicit authentication story: a bearer

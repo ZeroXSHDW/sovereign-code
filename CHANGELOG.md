@@ -2,9 +2,20 @@
 
 All notable changes to Sovereign Code.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-24
 
 ### Added
+- **`sovereign verify --clients`**: one real turn through Codex, Claude Code and
+  OpenCode in each client's own non-interactive mode (`codex exec`,
+  `claude -p`, `opencode run`), with the same environment its launcher writes.
+  This is the check that distinguishes "configured" from "working"; a config
+  test cannot catch a dropped connection or a stale model alias.
+- **Doctor checks completions, not just the port**: `Gateway completions` sends
+  a one-token request through the tier gateway. The old `Generation liveness`
+  probe called Ollama directly, so a gateway that answered `/health` and dropped
+  every completion reported a clean 26/26 doctor.
+- **Live browser CI job** and `make browser-check` run the Playwright tests
+  against a real Chromium instead of skipping them.
 - **Native OpenCode V2 configuration**: the generated `opencode.json` now uses
   `providers`, `mcp.servers`, and ordered `permissions` instead of the
   deprecated V1 shapes. It adds read-only `reviewer` and `planner` subagents,
@@ -22,6 +33,29 @@ All notable changes to Sovereign Code.
   disable` unloads it, and a dirty git tree or repeated failure pauses the loop
   instead of spinning. OpenCode's `auto` model now uses `sovereign/auto`
   instead of a non-existent `local/auto` pin.
+
+### Fixed
+- **A stale gateway can be restarted again**: `sovereign router --stop` and
+  `--restart` fall back to the PID that owns port 4010 (found with `lsof`, and
+  verified to be a `sovereign_code router` process before any signal), because
+  a gateway started before its pid file existed was unstoppable. A launchd
+  retry that loses the bind race now exits cleanly instead of crashing every
+  ten seconds with `EADDRINUSE` while the stale process kept the port.
+- **OpenCode 2.x config validates**: MCP servers no longer carry an `enabled`
+  key (2.x uses `disabled`), the deprecated `small_model` alias is not written,
+  and a V1 top-level `mcp` server map is migrated into `mcp.servers` instead of
+  being duplicated next to it.
+- **`plan_launch` no longer claims an OpenCode model pin that 2.x ignores**:
+  `OPENCODE_CONFIG_CONTENT` is not read by OpenCode 2.x, so the interactive
+  launch says the model comes from the user's config and points at
+  `opencode run --model` for a per-run pin.
+- **Claude Code 2.1 slots**: `ANTHROPIC_DEFAULT_FABLE_MODEL` is mapped to the
+  ultra route, the current `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`
+  and `claude-haiku-5-5` ids are routed, and the removed
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` knob is gone.
+- **Client config backups are bounded**: at most five timestamped copies per
+  file, and an identical config is not copied again. The 187 stale backups
+  accumulated on this machine were pruned.
 
 ## [0.4.1] - 2026-10-24
 
@@ -98,6 +132,11 @@ All notable changes to Sovereign Code.
 - **`pdf_figures` results are bounded**: the MCP tool returns at most
   `max_pages` (default 8) with base64 dropped once a payload budget is spent,
   instead of dumping every rendered page into one tool result.
+- **The stale `_pin_opencode_model` tests were removed**: the function went
+  away when OpenCode 2.x stopped honoring `OPENCODE_CONFIG_CONTENT`, so the
+  suite failed at collection before any test ran.
+- **`services.stop_detached` imports each service's `stop` under its own name**,
+  so the strict type-checker no longer confuses the three signatures.
 - **The TUI stylesheet ships in the wheel**: `sovereign_code/tui/app.tcss` is now
   declared as package data, so a wheel install no longer starts the dashboard
   without its CSS. The build job checks both `app.tcss` and `py.typed`.
@@ -129,6 +168,12 @@ All notable changes to Sovereign Code.
   with `/pdf` and `/browse` command templates; MCP exposes `pdf_auto` and `browser_*`.
 - **MCP HTTP authentication**: `--token` (or `SOVEREIGN_MCP_TOKEN`) requires
   `Authorization: Bearer <token>`; a non-loopback bind is refused without one.
+- **Live Chromium end-to-end suite** (`tests/test_browser_live.py`): a real
+  headless browser covers observe, fill, click, destructive confirmation,
+  hover, secret refusal, extract, screenshot, navigation, the profile lock and
+  the MCP browser tools; `make browser-check` and a CI job run it.
+- **`about:blank` is allowed by the browser policy**, so Back from the first
+  page no longer raises a policy error.
 - **Cross-process browser lock**: `ProfileLock` stops `browse`, MCP and web chat
   from opening the same Chromium profile at once; the second caller gets a clear
   error instead of a corrupted profile.

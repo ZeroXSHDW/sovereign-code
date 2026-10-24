@@ -4,7 +4,7 @@ UV ?= uv
 SOVEREIGN := $(VENV)/bin/sovereign
 PY := $(VENV)/bin/python
 
-.PHONY: help install sync test test-all coverage lint format typecheck check quality audit hooks minimum bench \
+.PHONY: help install sync test test-all coverage lint format typecheck check quality audit hooks minimum browser-check bench \
         run status models doctor clients install-clients code login \
         uninstall-login build clean
 
@@ -22,6 +22,7 @@ help:
 	@echo "make audit           pip-audit against the locked third-party dependencies"
 	@echo "make hooks           install the pre-commit hooks"
 	@echo "make minimum         test against the oldest allowed dependencies"
+	@echo "make browser-check   live Chromium end-to-end tests (Playwright)"
 	@echo "make build           build the wheel and sdist"
 	@echo "make clean           remove build artefacts and caches"
 
@@ -68,6 +69,9 @@ minimum:
 	$(UV) pip install --python /tmp/sovereign-minimum-venv/bin/python -r /tmp/sovereign-minimum.txt
 	$(UV) pip install --python /tmp/sovereign-minimum-venv/bin/python -e . --no-deps
 	/tmp/sovereign-minimum-venv/bin/python -m pytest -q
+
+browser-check:
+	$(PY) -m pytest -q -m integration tests/test_browser_live.py
 
 quality: check audit
 

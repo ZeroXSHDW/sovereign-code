@@ -28,6 +28,56 @@ from .tier_gateway import CLAUDE_MODEL_ROUTES, CLAUDE_SLOT_MODELS
 CLOUD_BACKUP_SUFFIX = ".sovereign-cloud"
 
 
+def client_cli_version(name: str) -> str:
+    """The first line of a client CLI's ``--version`` output, or ''.
+
+    The subcommands this module shells out to (``codex plugin``,
+    ``claude mcp``, ``qwen mcp``/``extensions``) are not stable across
+    major releases, so a client that reports a version we have not exercised
+    is surfaced instead of silently misfiring. Returns the empty string when
+    the CLI is missing or versioning fails, so '' always means "unknown".
+    """
+    command = shutil.which(name)
+    if not command:
+        return ""
+    try:
+        result = subprocess.run(
+            [command, "--version"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    output = (result.stdout or result.stderr or "").strip()
+    return output.splitlines()[0] if output else ""
+
+
+# The client major versions this module's subcommands were written against.
+# A CI release job updates these when it verifies a new client major; the
+# guard below only warns, it never blocks, so an unknown version still works.
+SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
+    "codex": ("0.163",),
+    "claude": ("2.",),
+}
+
+COMPUTER_ENV = "SOVEREIGN_MCP_COMPUTER=1"
+
+
+def unsupported_clients() -> dict[str, str]:
+    """Clients whose installed major differs from the versions we exercise.
+
+    Returns ``{name: version}`` for any installed client whose version line
+    does not start with one of the supported prefixes. This is a warning path
+    for ``doctor``; it never blocks an install.
+    """
+    unsupported: dict[str, str] = {}
+    for name, prefixes in SUPPORTED_CLIENT_VERSIONS.items():
+        version = client_cli_version(name)
+        if not version:
+            continue
+        if not any(version.startswith(prefix) for prefix in prefixes):
+            unsupported[name] = version
+    return unsupported
+
+
 def sovereign_argv() -> list[str]:
     """Absolute command for the MCP server, safe for desktop app launchers.
 
@@ -142,6 +192,20 @@ def complementary_mcp_servers() -> dict[str, dict[str, Any]]:
     }
 
 
+def codex_mcp_env() -> dict[str, str]:
+    """The environment block for a Codex/Claude MCP server entry.
+
+    ``env`` is a string array in Codex's MCP TOML, so the computer-control
+    flag is written explicitly rather than left to the server's permissive
+    default.
+    """
+    return {"SOVEREIGN_MCP_COMPUTER": "1"}
+
+
+def _codex_mcp_env_lines() -> str:
+    return 'env = ["SOVEREIGN_MCP_COMPUTER=1"]'
+
+
 def install_codex_mcp(path: Path | None = None) -> Path:
     target = path or codex_config_path()
     try:
@@ -153,6 +217,7 @@ def install_codex_mcp(path: Path | None = None) -> Path:
         "[mcp_servers.sovereign]\n"
         f'command = "{command}"\n'
         f"args = [{', '.join(json.dumps(arg) for arg in args)}]\n"
+        'env = ["SOVEREIGN_MCP_COMPUTER=1"]\n'
         "startup_timeout_sec = 30"
     ]
     for name, spec in complementary_mcp_servers().items():
@@ -194,7 +259,7 @@ def install_claude_desktop_mcp(path: Path | None = None) -> Path:
         servers = {}
         data["mcpServers"] = servers
     command, *args = sovereign_argv()
-    servers["sovereign"] = {"command": command, "args": args}
+    servers["sovereign"] = {"command": command, "args": args, "env": dict(codex_mcp_env())}
     for name, spec in complementary_mcp_servers().items():
         servers.setdefault(name, spec)
     return _write(target, json.dumps(data, indent=2) + "\n")
@@ -204,22 +269,57 @@ def install_claude_code_mcp() -> str:
     if shutil.which("claude") is None:
         return "claude not installed"
     command = sovereign_argv()
+    server_name = "sovereign"
     try:
         subprocess.run(
-            ["claude", "mcp", "remove", "sovereign", "-s", "user"],
+            ["claude", "mcp", "remove", server_name, "-s", "user"],
             capture_output=True,
             text=True,
             check=False,
         )
         result = subprocess.run(
-            ["claude", "mcp", "add", "-s", "user", "sovereign", "--", *command],
+            [
+                "claude",
+                "mcp",
+                "add",
+                server_name,
+                "-s",
+                "user",
+                "-e",
+                *[f"{key}={value}" for key, value in codex_mcp_env().items()],
+                "--",
+                *command,
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
     except OSError as exc:
         return f"claude mcp failed: {exc}"
-    return "added" if result.returncode == 0 else (result.stderr or result.stdout or "failed")[:200]
+    if result.returncode != 0:
+        return (result.stderr or result.stdout or "failed")[:200]
+    # The complementary reference servers ride alongside Sovereign for Claude
+    # Code, same as the desktop clients.
+    extras: list[str] = []
+    for name, spec in complementary_mcp_servers().items():
+        r = subprocess.run(
+            [
+                "claude",
+                "mcp",
+                "add",
+                name,
+                "-s",
+                "user",
+                "--",
+                str(spec["command"]),
+                *[str(arg) for arg in spec["args"]],
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        extras.append(f"{name}:{'added' if r.returncode == 0 else 'failed'}")
+    return "added" + (f" ({', '.join(extras)})" if extras else "")
 
 
 def install_qwen_mcp() -> str:
@@ -231,14 +331,33 @@ def install_qwen_mcp() -> str:
             ["qwen", "mcp", "remove", "sovereign"], capture_output=True, text=True, check=False
         )
         result = subprocess.run(
-            ["qwen", "mcp", "add", "sovereign", *command],
+            [
+                "qwen",
+                "mcp",
+                "add",
+                "sovereign",
+                "--env",
+                *[f"{k}={v}" for k, v in codex_mcp_env().items()],
+                *command,
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
     except OSError as exc:
         return f"qwen mcp failed: {exc}"
-    return "added" if result.returncode == 0 else (result.stderr or result.stdout or "failed")[:200]
+    if result.returncode != 0:
+        return (result.stderr or result.stdout or "failed")[:200]
+    extras: list[str] = []
+    for name, spec in complementary_mcp_servers().items():
+        r = subprocess.run(
+            ["qwen", "mcp", "add", name, str(spec["command"]), *[str(arg) for arg in spec["args"]]],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        extras.append(f"{name}:{'added' if r.returncode == 0 else 'failed'}")
+    return "added" + (f" ({', '.join(extras)})" if extras else "")
 
 
 OPENCODE_MODELS = {
@@ -881,7 +1000,11 @@ def install_qwen_router(path: Path | None = None) -> Path:
 
 def _mcp_entry() -> dict[str, Any]:
     command, *args = sovereign_argv()
-    return {"command": command, "args": args, "env": {"SOVEREIGN_MCP_COMPUTER": "1"}}
+    return {
+        "command": command,
+        "args": args,
+        "env": dict(codex_mcp_env()),
+    }
 
 
 def install_mcp_manifest(path: Path) -> Path:
@@ -1616,14 +1739,14 @@ def install_ponytail_claude() -> str:
     """Register ponytail with Claude Code via its plugin marketplace.
 
     Claude Code's plugin install has to be two separate prompts in an
-    interactive session, so this emits the exact commands; it does not fake a
-    completed install.
+    interactive session. This reports an explicit manual status instead of
+    pretending the install completed, so `install_all` output is honest.
     """
     if shutil.which("claude") is None:
         return "claude not installed"
     return (
-        "run in Claude Code: /plugin marketplace add DietrichGebert/ponytail "
-        "then /plugin install ponytail@ponytail"
+        "manual: run in Claude Code `/plugin marketplace add DietrichGebert/ponytail` "
+        "then `/plugin install ponytail@ponytail`"
     )
 
 
@@ -1640,11 +1763,11 @@ def install_ponytail_qwen() -> str:
         )
     except OSError as exc:
         return f"qwen extension failed: {exc}"
-    return (
-        "installed"
-        if result.returncode == 0
-        else (result.stderr or result.stdout or "failed")[:200]
-    )
+    # Distinguish a real install from a half-completed one, like the Codex path.
+    if result.returncode == 0:
+        return "installed (reload Qwen Code)"
+    detail = (result.stderr or result.stdout or "").strip()
+    return f"failed: {detail[:200]}"
 
 
 def install_all() -> list[tuple[str, str]]:
@@ -1674,6 +1797,14 @@ def install_all() -> list[tuple[str, str]]:
     rows.append(("Qwen Code MCP", install_qwen_mcp()))
     rows.append(("Ponytail Claude Code", install_ponytail_claude()))
     rows.append(("Ponytail Qwen", install_ponytail_qwen()))
+    unsupported = unsupported_clients()
+    if unsupported:
+        rows.append(
+            (
+                "Client version",
+                "unverified " + ", ".join(f"{name} {ver}" for name, ver in unsupported.items()),
+            )
+        )
     return rows
 
 

@@ -363,10 +363,13 @@ sovereign monitor --demo            # deterministic UI for screenshots/tests
 | `qwen3.5:4b` | fast tier | 4.0 GB; 8k |
 | `nomic-embed-text` | embeddings | 0.3 GB |
 
-`glm4`, `qwen2.5-coder:7b`, and `deepseek-r1:8b` were removed in this pass — superseded by the
-27B and no longer referenced by any alias. Run one model at a time: `OLLAMA_MAX_LOADED_MODELS=1`
-is set in the launch agent, because keeping a second 18–20 GB model resident only produced
-half-spilled runners (13%/87% CPU/GPU) and a reload on every task switch.
+`glm4`, `qwen2.5-coder:7b`, and `deepseek-r1:8b` are no longer in the daily
+alias set — the 27B superseded them for general work — but they remain in the
+catalog, and the two smaller models also appear in the `lean`/`balanced`/`max`
+presets. Run one model at a time:
+`OLLAMA_MAX_LOADED_MODELS=1` is set in the launch agent, because keeping a
+second 18–20 GB model resident only produced half-spilled runners
+(13%/87% CPU/GPU) and a reload on every task switch.
 
 ### Downloadable (any tag works with `sovereign pull` / `sovereign run`)
 
@@ -1444,7 +1447,7 @@ registers the four launchd services.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — prioritised work and current status.
 - [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) — the design decisions behind the build.
 - [docs/BEST_SKILL_BANKS.md](docs/BEST_SKILL_BANKS.md) — how the skill library is ranked.
-- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.4.1 hardening pass.
+- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.5.0 client-compatibility pass.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, checks, and review expectations.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — how contributors are expected to behave.
 - [SECURITY.md](SECURITY.md) — reporting a vulnerability.
@@ -1537,9 +1540,7 @@ archives them.
 ## Development
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q
+./scripts/bootstrap.sh
 ./bin/sovereign status
 ```
 
@@ -1552,11 +1553,14 @@ in the checkout.
 Before reporting a task done, run the project's gates:
 
 ```sh
-make check      # ruff, mypy, pytest + coverage floor, format check
-make quality    # make check plus the pip-audit dependency audit
-make test       # the test suite alone
-make lint       # ruff only
-make typecheck  # mypy only
+make check          # ruff, strict mypy, pytest + coverage floor, format check
+make quality        # make check plus the pip-audit dependency audit
+make test           # the test suite alone
+make browser-check  # live Chromium end-to-end (run playwright install chromium first)
+make minimum        # run the suite on the oldest allowed dependencies
+make hooks          # install the pre-commit hooks
+make lint           # ruff only
+make typecheck      # mypy only
 ```
 
 ## Security

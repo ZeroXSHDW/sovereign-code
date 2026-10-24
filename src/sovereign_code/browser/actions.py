@@ -265,6 +265,9 @@ def check_url(url: str, policy: BrowserPolicy, base: str | None = None) -> str:
     if base and not urlparse(raw).scheme:
         raw = urljoin(base, raw)
     parsed = urlparse(raw)
+    if parsed.scheme == "about" and parsed.path == "blank":
+        # A fresh tab starts here; Back from the first page lands here.
+        return "about:blank"
     if parsed.scheme not in {"http", "https"}:
         raise PolicyError("only http(s) URLs are allowed")
     if parsed.username or parsed.password:

@@ -6,7 +6,7 @@
 <title>Sovereign Code — local-first AI coding console for Apple Silicon</title>
 <meta name="description" content="A terminal-first, local-first AI coding console for Apple Silicon. A tiered local gateway, on-Mac Codex, Claude Code, OpenCode and Qwen agents, 22k skill files, task packs, PDF/OCR, a policy-checked browser, and offline model stacks — nothing leaves your Mac by default.">
 <meta property="og:title" content="Sovereign Code — local-first AI coding console">
-<meta property="og:description" content="Your models, your machine, your code. A terminal dashboard and tiered local gateway for Apple Silicon, with no cloud, no telemetry, and no account.">
+<meta property="og:description" content="Your models, your machine, your code. A terminal dashboard and tiered local gateway for Apple Silicon — local-first by default, no telemetry, no account, and cloud only when you opt in.">
 <meta property="og:image" content="https://sovereign.zerodevllc.eu/assets/social-preview.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Sovereign Code">
@@ -15,7 +15,7 @@
 <meta property="og:image:height" content="1260">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Sovereign Code — local-first AI coding console">
-<meta name="twitter:description" content="Your models, your machine, your code. Local coding agents on Apple Silicon with no cloud, no telemetry, and no account.">
+<meta name="twitter:description" content="Your models, your machine, your code. Local coding agents on Apple Silicon — local-first by default, no telemetry, no account, and cloud only when you opt in.">
 <meta name="twitter:image" content="https://sovereign.zerodevllc.eu/assets/social-preview.png">
 <meta name="theme-color" content="#0b0714">
 <meta name="author" content="ZeroDevLLC">
@@ -259,14 +259,15 @@ sovereign status         # one-shot stack status</code></pre>
     <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ARCHITECTURE.md">Architecture</a></h3><p>Modules, data flow, the tier router, and how the loopback services fit together.</p></div></div>
     <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ROADMAP.md">Roadmap</a></h3><p>What is next, what shipped, and where an agent or contributor can start.</p></div></div>
     <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code#troubleshooting">Troubleshooting</a></h3><p>Gateway offline, empty client replies, missing MCP tools, busy ports, and memory pressure.</p></div></div>
-    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Changelog</a></h3><p>Release notes, including the 0.4.1 hardening pass and the unreleased coding loop.</p></div></div>
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Changelog</a></h3><p>Release notes, including the 0.5.0 client-compatibility pass and the coding loop.</p></div></div>
   </div>
 </section>
 
 <section class="changelog">
   <h2>What's new</h2>
-  <div class="entry"><span class="date">unreleased</span><div><h3>Native OpenCode V2 configuration</h3><p>Generated configs now use V2 providers, ordered permissions, read-only reviewer and planner subagents, <code>/check</code> <code>/review</code> <code>/plan</code> commands, todo tracking, and background compaction.</p></div></div>
-  <div class="entry"><span class="date">unreleased</span><div><h3>Opt-in 24/7 coding loop</h3><p>One iteration preflights the project's checks, picks the next roadmap item, routes it through the skill bank, and hands a bounded local-only prompt to OpenCode. A dirty tree or repeated failure pauses it instead of spinning.</p></div></div>
+  <div class="entry"><span class="date">v0.5.0</span><div><h3>Client compatibility</h3><p>Codex, Claude Code and OpenCode each answer a real turn (<code>sovereign verify --clients</code>), doctor proves the gateway completes a request instead of only opening a port, the generated OpenCode config validates against the 2.x schema, and a stale gateway can finally be restarted.</p></div></div>
+  <div class="entry"><span class="date">v0.5.0</span><div><h3>Native OpenCode V2 configuration</h3><p>Generated configs now use V2 providers, ordered permissions, read-only reviewer and planner subagents, <code>/check</code> <code>/review</code> <code>/plan</code> commands, todo tracking, and background compaction.</p></div></div>
+  <div class="entry"><span class="date">v0.5.0</span><div><h3>Opt-in 24/7 coding loop</h3><p>One iteration preflights the project's checks, picks the next roadmap item, routes it through the skill bank, and hands a bounded local-only prompt to OpenCode. A dirty tree or repeated failure pauses it instead of spinning.</p></div></div>
   <div class="entry"><span class="date">v0.4.1</span><div><h3>Hardening pass</h3><p>Streamable HTTP MCP now works, the tier gateway cache is thread-safe, PDF downloads and page rendering are fenced, edits cannot corrupt files, undo restores binaries, and browser policy covers legacy numeric hosts. Plus task packs, PDF tables/figures, browser hover, and MCP authentication.</p></div></div>
   <div class="entry"><span class="date">v0.1.0</span><div><h3>Local-first console</h3><p>Terminal dashboard, 32k context, multi-model pipeline, semantic search, skills bank, compliant browser, and offline model stacks.</p></div></div>
   <p class="fine"><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Full changelog →</a></p>

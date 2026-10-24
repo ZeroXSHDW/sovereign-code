@@ -243,7 +243,7 @@ def probe_clients(
     target: Path,
     settings: Settings,
     agent_model: str = "auto",
-    timeout: float = 180.0,
+    timeout: float = 300.0,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> list[ClientResult]:
     """One real turn per client, through the env its launcher would use."""
@@ -273,16 +273,26 @@ def probe_clients(
             results.append(ClientResult(client, False, 0.0, f"{client} is not installed"))
             continue
         except subprocess.TimeoutExpired:
+            # A cold 30B load can take minutes here; the client is not broken,
+            # the ceiling was just too low for the first run.
             results.append(
                 ClientResult(
-                    client, False, time.monotonic() - started, f"timed out after {timeout:.0f}s"
+                    client,
+                    False,
+                    time.monotonic() - started,
+                    f"timed out after {timeout:.0f}s (cold model load? re-run)",
                 )
             )
             continue
         elapsed = time.monotonic() - started
         output = (process.stdout or "") + (process.stderr or "")
-        ok = PROBE_MARKER in output.upper()
-        line = next((text.strip() for text in reversed(output.splitlines()) if text.strip()), "")
+        marker = next(
+            (line.strip() for line in output.splitlines() if PROBE_MARKER in line.upper()), ""
+        )
+        line = marker or next(
+            (text.strip() for text in reversed(output.splitlines()) if text.strip()), ""
+        )
+        ok = bool(marker)
         detail = line[:160] if line else f"exit {process.returncode}"
         if not ok and process.returncode:
             detail = f"exit {process.returncode}: {detail}"

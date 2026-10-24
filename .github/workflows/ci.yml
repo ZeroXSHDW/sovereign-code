@@ -73,6 +73,22 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+  browser:
+    name: live browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked --all-extras --dev
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Live browser tests
+        run: uv run pytest -q -m integration tests/test_browser_live.py
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

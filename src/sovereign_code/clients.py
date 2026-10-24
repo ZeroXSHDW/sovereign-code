@@ -13,8 +13,8 @@ from .config import LOCAL_AI_ROOT, PROJECT_ROOT, Settings
 from .router import Task, choose
 from .system import command_exists
 
-AGENT_MODEL = "qwen2.5-coder:14b"
-CODE_MODEL = "qwen2.5-coder:14b"
+AGENT_MODEL = "qwen3-coder:30b"
+CODE_MODEL = "qwen3-coder:30b"
 CLAUDE_ALIAS = "local-claude"
 CODEX_ALIAS = "local-code"
 

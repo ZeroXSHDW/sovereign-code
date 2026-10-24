@@ -204,6 +204,10 @@ def test_legacy_numeric_hosts_are_treated_as_loopback() -> None:
     assert actions.is_private_url("http://2130706433/") is True
 
 
+def test_about_blank_is_allowed_by_policy() -> None:
+    assert actions.check_url("about:blank", actions.BrowserPolicy()) == "about:blank"
+
+
 def test_camel_case_destructive_labels_need_confirmation() -> None:
     assert actions.is_destructive("DeleteAccount") is True
     assert actions.is_destructive("SendMessage") is True

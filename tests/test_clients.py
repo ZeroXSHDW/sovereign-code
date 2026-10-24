@@ -95,6 +95,44 @@ def test_plan_launch_rejects_a_missing_directory(tmp_path):
         plan_launch("codex", tmp_path / "nope", Settings(), "qwen3-coder:30b")
 
 
+def test_plan_launch_qwen_sets_home_and_approval_mode(project):
+    plan = plan_launch("qwen", project, Settings(), "qwen3.5:9b", yolo=True)
+    assert plan.argv[0] == "qwen"
+    assert plan.argv[1:3] == ["--model", "qwen3.5:9b"]
+    assert plan.argv[-1] == "yolo"
+    assert plan.env["QWEN_HOME"].endswith("qwen")
+
+
+def test_plan_launch_qwen_defaults_to_normal_approval(project):
+    plan = plan_launch("qwen", project, Settings(), "qwen3.5:9b")
+    assert "--approval-mode" in plan.argv
+    assert plan.argv[-1] == "default"
+
+
+def test_plan_launch_codex_cloud_uses_the_account_login(project):
+    plan = plan_launch("codex", project, Settings(), "auto", cloud=True)
+    assert plan.argv == ["codex", "-C", str(project)]
+    assert "CODEX_HOME" not in plan.env
+    assert plan.model == "ChatGPT (cloud)"
+
+
+def test_plan_launch_claude_cloud_has_no_local_overrides(project):
+    plan = plan_launch("claude", project, Settings(), "auto", cloud=True)
+    assert plan.argv == ["claude"]
+    assert plan.model == "Claude (cloud)"
+
+
+def test_plan_launch_codium_points_at_the_project(project):
+    plan = plan_launch("codium", project, Settings(), "auto")
+    assert plan.argv[0] == "codium"
+    assert plan.argv[1] == str(project)
+
+
+def test_plan_launch_rejects_an_unknown_client(project):
+    with pytest.raises(ValueError, match="unsupported client"):
+        plan_launch("not-a-client", project, Settings(), "auto")
+
+
 def test_the_codex_catalog_describes_the_local_routes() -> None:
     catalog = clients.codex_model_catalog()
     slugs = {model["slug"] for model in catalog["models"]}

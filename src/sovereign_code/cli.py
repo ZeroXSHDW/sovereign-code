@@ -564,6 +564,12 @@ def _model_use(settings: Settings, args: argparse.Namespace) -> int:
         return 0
 
     tag = args.model
+    if not tag:
+        console.print("[yellow]Give a model tag, or use --list to see what is set.[/]")
+        console.print(
+            "[dim]Usage:[/] sovereign model-use <tag> [--client opencode|codex|claude|all]"
+        )
+        return 1
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
         console.print(f"[red]Invalid model tag:[/] {tag}")
         return 1
@@ -6583,7 +6589,12 @@ def build_parser() -> argparse.ArgumentParser:
     use_model = sub.add_parser(
         "model-use", help="select an installed model for OpenCode, Codex, and Claude"
     )
-    use_model.add_argument("model", help="Ollama tag (e.g. qwen3.8:27b, or a pulled GGUF name)")
+    use_model.add_argument(
+        "model",
+        nargs="?",
+        default=None,
+        help="Ollama tag (e.g. qwen3.8:27b, or a pulled GGUF name)",
+    )
     use_model.add_argument(
         "--client", default="all", choices=("opencode", "codex", "claude", "all")
     )

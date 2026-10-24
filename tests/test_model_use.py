@@ -69,3 +69,13 @@ def test_current_models_reads_back_what_was_set(tmp_path, monkeypatch) -> None:
     assert current["opencode"] == "qwen3.8:27b"
     assert current["claude"] == "legal/gguf"
     assert current["codex"] == "qwen3.8:27b"
+
+
+def test_model_use_cli_allows_list_without_a_model(monkeypatch) -> None:
+    """`sovereign model-use --list` must not demand a positional model."""
+    from sovereign_code import cli
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["model-use", "--list"])
+    assert args.list is True
+    assert args.model is None

@@ -5,12 +5,19 @@ All notable changes to Sovereign Code.
 ## [Unreleased]
 
 ### Added
-- **Expanded security domain and specialist packs**: nine new packs (redteam,
-  blueteam, soc, threatintel, threatmodel, purpleteam, malware, cloudsec,
-  appsec), the `run_pack` MCP tool, and a `domain=` parameter on MCP `ask` that
-  loads the domain's specialist system prompt, skill brief and model.
-- **Broader security skill routing**: `skillrouter` now matches
-  pentest/malware/SOC/cloud-security skills to the security domain.
+- **`sovereign do`** — a one-shot coding entry point with sane defaults: it
+  auto-routes a task to direct (one-request) or agent mode, picks the models
+  from the router, and auto-detects the project's checks. `--quick`/`--big`
+  hint the mode; `pipeline`/`orchestrate` keep the full 16-flag control.
+- **`sovereign model-use --domain`** — select a specialist domain (legal,
+  forensics, finance, security, …) for OpenCode, Codex and Claude in one step.
+  The gateway routes the domain key to its specialist model; OpenCode writes
+  `sovereign/<domain>` while a real tag still uses `local/<tag>`.
+- **`sovereign summarize --dir`** — summarize a whole codebase from its
+  token-bounded repo map, plus project context and README, for a grounded
+  "what does this project do" answer.
+- **`/resume` in chat** — reload the most recent session's turns so a
+  conversation survives a restart; `history` was previously lost on exit.
 
 ### Changed
 - **The gateway no longer preloads the fast tier at startup**: warming the 4B

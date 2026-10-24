@@ -46,10 +46,12 @@ Sovereign Code keeps the idea and changes the foundation.
   `~/Documents/local-ai/config/codex/local.config.toml` and `*-local` wrappers
   under `~/Documents/local-ai/bin`; your cloud app settings
   are never touched, and `sovereign clients` reports what is installed.
-- **Honest client capabilities.** Qwen Code and OpenCode are verified to edit
-  files locally. Codex and Claude Code are wired to the loopback gateway for
-  chat, but their streamed tool calls do not execute reliably through LiteLLM +
-  Ollama, so the UI labels them chat-only instead of claiming parity.
+- **Honest client capabilities.** Qwen Code, OpenCode, Codex and Claude Code
+  are all verified to edit files locally through real tool calls — Codex via
+  the tier gateway's `/v1/responses` stream, Claude Code via the Anthropic
+  bridge, because LiteLLM's streamed Ollama translation returns tool calls as
+  text instead of executing them. `sovereign verify --clients` proves each one
+  with a live turn, not a config read.
 - **Verified context ceilings.** The 14B coder runs at 32,768 tokens with
   flash attention and a q8_0 KV cache (12 GB resident); without those settings
   24k+ returns empty output. Agent models run with `think:false` so reasoning

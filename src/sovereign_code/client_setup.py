@@ -58,8 +58,6 @@ SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
     "claude": ("2.",),
 }
 
-COMPUTER_ENV = "SOVEREIGN_MCP_COMPUTER=1"
-
 
 def unsupported_clients() -> dict[str, str]:
     """Clients whose installed major differs from the versions we exercise.
@@ -200,10 +198,6 @@ def codex_mcp_env() -> dict[str, str]:
     default.
     """
     return {"SOVEREIGN_MCP_COMPUTER": "1"}
-
-
-def _codex_mcp_env_lines() -> str:
-    return 'env = ["SOVEREIGN_MCP_COMPUTER=1"]'
 
 
 def install_codex_mcp(path: Path | None = None) -> Path:

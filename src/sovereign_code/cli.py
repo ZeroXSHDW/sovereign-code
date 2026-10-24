@@ -1718,6 +1718,21 @@ def _doctor(snap: Snapshot) -> int:
         "sovereign chatgpt --local",
         warn=True,
     )
+    # The MCP/plugin subcommands this project shells out to are tied to a
+    # client major; an upgraded CLI can silently misfire them. Surface an
+    # unverified version instead of waiting for the first failure.
+    from .client_setup import unsupported_clients as _unsupported_clients
+
+    unverified = _unsupported_clients()
+    add(
+        not unverified,
+        "Client versions",
+        "all verified"
+        if not unverified
+        else ", ".join(f"{name} {version}" for name, version in unverified.items()),
+        "run sovereign install-clients after upgrading a client; update the pin if it still works",
+        warn=True,
+    )
     browser_exe = chromium_path()
     add(
         browser_exe is not None,

@@ -56,6 +56,24 @@ All notable changes to Sovereign Code.
 - **Client config backups are bounded**: at most five timestamped copies per
   file, and an identical config is not copied again. The 187 stale backups
   accumulated on this machine were pruned.
+- **Full computer control is pinned, not inherited**: the Codex, Claude
+  Desktop, Claude Code and Qwen MCP entries now carry
+  `SOVEREIGN_MCP_COMPUTER=1` explicitly instead of relying on the server's
+  permissive default, so the `run_command` guarantee survives a tightening of
+  that default. Claude Code and Qwen also register the complementary reference
+  servers (`filesystem`, `memory`, `playwright`, `git`, `fetch`) that the
+  desktop clients already had.
+- **Ponytail install status is honest**: the Claude Code and Qwen installers
+  report `manual:`/`failed:` instead of masquerading a todo as a completed
+  install, and the Qwen path reports `installed` only on a real exit 0.
+- **Unverified client versions surface instead of silently misfiring**: a new
+  `unsupported_clients` guard reports a `codex`/`claude` major the project has
+  not exercised, both as an `install-clients` row and a `doctor` "Client
+  versions" warning. It never blocks — an unknown version still installs.
+- **Stale fallback models corrected**: the `AGENT_MODEL`/`CODE_MODEL`
+  fallbacks moved from the retired `qwen2.5-coder:14b` to the current
+  `qwen3-coder:30b`, so a client with no router-resolved model no longer
+  advertises a line the catalog has dropped.
 
 ## [0.4.1] - 2026-10-24
 

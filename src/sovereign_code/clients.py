@@ -433,20 +433,16 @@ def plan_launch(
             # Opus on the 27B, Haiku on the 4B. The default turn follows the
             # quality route, and a prompt that does not fit the model is
             # answered by the 64k 9B instead of being rejected.
+            from .client_setup import CLAUDE_LOCAL_ENV
             from .tier_gateway import CLAUDE_SLOT_MODELS
 
+            # Start from the persisted settings the install writes, so the two
+            # cannot drift, then add the launch-only knobs and the dynamic URL.
+            env.update(CLAUDE_LOCAL_ENV)
             env.update(
                 {
-                    # The bridge streams text deltas and returns tool_use blocks
-                    # as complete Anthropic content blocks.
                     "ANTHROPIC_BASE_URL": settings.bridge_url,
-                    "ANTHROPIC_AUTH_TOKEN": "local",
-                    "ANTHROPIC_API_KEY": "local",
-                    "ANTHROPIC_MODEL": "best",
-                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
-                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
                     "CLAUDE_CODE_ALLOW_OTHER_MODELS": "1",
-                    "DISABLE_AUTO_COMPACT": "1",
                     "API_TIMEOUT_MS": "900000",
                     "DISABLE_TELEMETRY": "1",
                 }
@@ -466,13 +462,14 @@ def plan_launch(
         claude_model = (
             agent_model if agent_model.startswith(("local-", "cloud-")) else "local-claude"
         )
+        from .client_setup import CLAUDE_LOCAL_ENV
+
+        # Base comes from the persisted settings so it cannot drift; the model
+        # keys are pinned to the single chosen model so Claude never swaps.
+        env.update(CLAUDE_LOCAL_ENV)
         env.update(
             {
-                # The bridge streams text deltas and returns tool_use blocks as
-                # complete Anthropic content blocks.
                 "ANTHROPIC_BASE_URL": settings.bridge_url,
-                "ANTHROPIC_AUTH_TOKEN": "local",
-                "ANTHROPIC_API_KEY": "local",
                 # Claude Code's own prompt is ~34k tokens, so a 32k coder is
                 # rejected before the first turn. `local-claude` is 64k and
                 # tool-capable; the bridge handles its tool calls.
@@ -483,10 +480,7 @@ def plan_launch(
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": claude_model,
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": claude_model,
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": claude_model,
-                "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
-                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
                 "CLAUDE_CODE_ALLOW_OTHER_MODELS": "1",
-                "DISABLE_AUTO_COMPACT": "1",
                 "API_TIMEOUT_MS": "900000",
                 "DISABLE_TELEMETRY": "1",
             }

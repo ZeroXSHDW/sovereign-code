@@ -133,6 +133,26 @@ def test_plan_launch_rejects_an_unknown_client(project):
         plan_launch("not-a-client", project, Settings(), "auto")
 
 
+def test_claude_launch_env_flows_from_the_same_base_as_install(project, monkeypatch) -> None:
+    """The launch env and the installed settings share one base, so a slot added
+    in one cannot silently drift out of the other."""
+    from sovereign_code.client_setup import CLAUDE_LOCAL_ENV
+    from sovereign_code.tier_gateway import CLAUDE_SLOT_MODELS
+
+    plan = plan_launch("claude", project, Settings(), "auto")
+    env = plan.env
+    # Every key the install writes is present in the launch env (though the
+    # launch sets a dynamic bridge URL on top).
+    for key in CLAUDE_LOCAL_ENV:
+        assert key in env, key
+    # Every picker slot is populated with a model id.
+    for slot in CLAUDE_SLOT_MODELS:
+        assert env.get(slot), slot
+    # Authentication and context budgets match the shared base.
+    assert env["ANTHROPIC_AUTH_TOKEN"] == CLAUDE_LOCAL_ENV["ANTHROPIC_AUTH_TOKEN"]
+    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "65536"
+
+
 def test_the_codex_catalog_describes_the_local_routes() -> None:
     catalog = clients.codex_model_catalog()
     slugs = {model["slug"] for model in catalog["models"]}

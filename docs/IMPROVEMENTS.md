@@ -143,7 +143,7 @@ Sovereign Code keeps the idea and changes the foundation.
 
 ## Testing
 
-- 109 pytest tests cover model merging, router context behaviour, config,
+- 800+ pytest tests cover model merging, router context behaviour, config,
   sessions/retention, logs, backup, summarization, semantic search, browser
   policy/agent/executor, memory, gateway probes, client launch planning, and
   headless TUI boot.

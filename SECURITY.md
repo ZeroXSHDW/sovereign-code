@@ -17,4 +17,10 @@ Only the latest release on the default branch is supported.
 - In scope: code in this repository.
 - Out of scope: third-party dependencies; report those upstream.
 
+## Local services
+Every HTTP endpoint binds loopback by default. `sovereign mcp --http` refuses a
+non-loopback bind unless a bearer token is configured (`--token` or
+`SOVEREIGN_MCP_TOKEN`). Do not expose the gateway, bridge, web chat or MCP
+endpoint without a token and a trusted tunnel.
+
 ZeroDevLLC · cyber-deck · local-first · no cloud · no telemetry

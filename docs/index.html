@@ -3,33 +3,68 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sovereign Code — local-first AI coding console</title>
-<meta name="description" content="A terminal-first, local-first AI coding console for Apple Silicon. 32k context, multi-model pipeline, compliant browser, semantic search, and offline model stacks — nothing leaves your Mac.">
-<meta property="og:title" content="Sovereign Code">
-<meta property="og:description" content="A local-first AI coding console for Apple Silicon. Your models, your machine, your code.">
-<meta property="og:image" content="assets/social-preview.png">
+<title>Sovereign Code — local-first AI coding console for Apple Silicon</title>
+<meta name="description" content="A terminal-first, local-first AI coding console for Apple Silicon. A tiered local gateway, on-Mac Codex, Claude Code, OpenCode and Qwen agents, 22k skill files, task packs, PDF/OCR, a policy-checked browser, and offline model stacks — nothing leaves your Mac by default.">
+<meta property="og:title" content="Sovereign Code — local-first AI coding console">
+<meta property="og:description" content="Your models, your machine, your code. A terminal dashboard and tiered local gateway for Apple Silicon, with no cloud, no telemetry, and no account.">
+<meta property="og:image" content="https://sovereign.zerodevllc.eu/assets/social-preview.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Sovereign Code">
+<meta property="og:url" content="https://sovereign.zerodevllc.eu/">
+<meta property="og:image:width" content="2400">
+<meta property="og:image:height" content="1260">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Sovereign Code — local-first AI coding console">
+<meta name="twitter:description" content="Your models, your machine, your code. Local coding agents on Apple Silicon with no cloud, no telemetry, and no account.">
+<meta name="twitter:image" content="https://sovereign.zerodevllc.eu/assets/social-preview.png">
+<meta name="theme-color" content="#0b0714">
+<meta name="author" content="ZeroDevLLC">
+<meta property="og:locale" content="en_US">
+<link rel="canonical" href="https://sovereign.zerodevllc.eu/">
+<link rel="sitemap" type="application/xml" href="/sitemap.xml">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0714'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='18' fill='%23b794f4' text-anchor='middle'%3E%26gt;_%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Sovereign Code",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS 14+ (Apple Silicon)",
+  "description": "A terminal-first, local-first AI coding console for Apple Silicon with a tiered local gateway, on-device coding agents, 22k skills, task packs, PDF/OCR, and offline model stacks.",
+  "url": "https://sovereign.zerodevllc.eu/",
+  "sameAs": "https://github.com/ZeroXSHDW/sovereign-code",
+  "offers": { "@type": "Offer", "price": "5.00", "priceCurrency": "EUR" },
+  "license": "https://opensource.org/license/mit"
+}
+</script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="nav">
   <span class="brand">▚ SOVEREIGN&nbsp;<em>CODE</em></span>
-  <nav class="links">
+  <nav class="links" aria-label="Primary">
     <a class="nav-link" href="#features">Features</a>
+    <a class="nav-link" href="#agents">Agents</a>
+    <a class="nav-link" href="#tiers">Tiers</a>
     <a class="nav-link" href="#how">How it works</a>
+    <a class="nav-link" href="#security">Security</a>
+    <a class="nav-link" href="#install">Install</a>
     <a class="nav-link" href="#faq">FAQ</a>
     <a class="nav-link" href="#buy">Buy</a>
     <a class="nav-link" href="https://github.com/ZeroXSHDW/sovereign-code">Source</a>
   </nav>
 </header>
+<main id="main">
 
 <section class="hero">
-  <h1>A local-first AI coding console<br>for your <span class="accent">Apple Silicon</span> Mac.</h1>
+  <h1>Your models. Your machine.<br>Your <span class="accent">code</span>.</h1>
   <p class="sub">
-    One terminal dashboard that runs your models on-device — 32k context with flash
-    attention, a plan&nbsp;→&nbsp;implement&nbsp;→&nbsp;review pipeline, a compliant
-    browser operator, semantic code search, and offline model stacks. No cloud, no
-    telemetry, no account. Your code never leaves the machine.
+    One terminal dashboard and a tiered local gateway that put coding agents on your
+    Apple Silicon Mac — Codex, Claude Code, OpenCode, Qwen Code, and Continue, all
+    running against models you control. A plan&nbsp;→&nbsp;implement&nbsp;→&nbsp;verify&nbsp;→&nbsp;review
+    pipeline, a policy-checked browser, local PDF/OCR, semantic search, and offline
+    model stacks. No cloud by default, no telemetry, no account.
   </p>
   <div class="cta">
     <a class="buy" href="https://buy.stripe.com/8x2dRa1uE1D7bsF3YN14404">Buy now — €5</a>
@@ -38,58 +73,142 @@
 </section>
 
 <section class="stats">
-  <div class="stat"><strong>32k</strong><span>context tokens</span></div>
-  <div class="stat"><strong>22k+</strong><span>skill library</span></div>
+  <div class="stat"><strong>22k+</strong><span>skill files</span></div>
   <div class="stat"><strong>8</strong><span>task packs</span></div>
-  <div class="stat"><strong>100%</strong><span>offline inference</span></div>
+  <div class="stat"><strong>840+</strong><span>tests</span></div>
+  <div class="stat"><strong>100%</strong><span>offline by default</span></div>
   <div class="stat"><strong>MIT</strong><span>open source</span></div>
 </section>
 
 <section class="preview">
-  <img src="assets/dashboard.png" alt="Sovereign Code terminal dashboard">
-  <p class="caption">The live terminal dashboard — model list, loaded context, memory, gateway, and a streaming chat prompt.</p>
+  <img src="assets/dashboard.png" alt="Sovereign Code terminal dashboard" width="1900" height="1100" decoding="async">
+  <p class="caption">The live terminal dashboard — skill and prompt banks, resident models, memory, gateway health, and a streaming chat prompt.</p>
 </section>
 
 <section class="features" id="features">
   <h2>Why it stands out</h2>
   <div class="grid">
-    <div class="card"><h3>32k context on-device</h3><p>Flash attention plus a q8_0 KV cache push the 14B coder to 32,768 tokens — no cloud required.</p></div>
-    <div class="card"><h3>Multi-model pipeline</h3><p>Planner, implementer, and reviewer chain three models into one coding pass: <code>sovereign pipeline</code>.</p></div>
-    <div class="card"><h3>Download &amp; run any model</h3><p>13 models, offline stacks, <code>sovereign run</code> streams on demand, and the router picks the best one installed.</p></div>
-    <div class="card"><h3>Compliant browser operator</h3><p>Playwright drives a visible Chromium — no CAPTCHA solving, secret-field refusal, and an audit log.</p></div>
-    <div class="card"><h3>Semantic search + memory</h3><p>Embed a repo and ask "where is X handled?"; project memory and <code>AGENTS.md</code> are injected automatically.</p></div>
-    <div class="card"><h3>Local-only, always</h3><p>Ollama and the LiteLLM gateway bind to 127.0.0.1. No accounts, no analytics, it never phones home.</p></div>
+    <div class="card"><h3>Tiered local gateway</h3><p>An OpenAI-compatible endpoint plus an Anthropic bridge route each request to <code>fast</code>, <code>balanced</code>, <code>deep</code>, or <code>ultra</code> — with real streamed tool calls.</p></div>
+    <div class="card"><h3>Agents on your Mac</h3><p>Codex, Claude Code, OpenCode, Qwen Code, and Continue edit files and run commands against local models. <code>--cloud</code> is the explicit escape hatch.</p></div>
+    <div class="card"><h3>22k-skill library</h3><p>Route, lint, verify, and install curated skills into every client — plus project-level <code>AGENTS.md</code>, <code>CLAUDE.md</code>, and <code>QWEN.md</code> indexes.</p></div>
+    <div class="card"><h3>Task packs</h3><p>Pentest, vulnerability, risk, vendor, legal, compliance, forensics, and finance — each with guardrails, steps, matching skills, and deliverables.</p></div>
+    <div class="card"><h3>Compliant browser operator</h3><p>Playwright drives a visible Chromium. No CAPTCHA solving, secret fields are refused, destructive actions ask first, and every run is audited.</p></div>
+    <div class="card"><h3>PDF, OCR, and vision</h3><p>Read born-digital PDFs fast, OCR scanned pages locally, render figures, and ask a local vision model — <code>sovereign pdf report.pdf</code>.</p></div>
+    <div class="card"><h3>Hugging Face, built in</h3><p>Search models and datasets, download only the files you need, and import a GGUF straight into Ollama. Shared token and cache with the standard Hub tools.</p></div>
+    <div class="card"><h3>Search and memory</h3><p>Embed a repo and ask “where is X handled?”; project memory and agent briefs are injected into chat, code, and pipeline runs automatically.</p></div>
+    <div class="card"><h3>Offline model stacks</h3><p><code>lean</code>, <code>balanced</code>, <code>capable</code>, and <code>max</code> presets pull exactly what fits your Mac. Any Ollama tag also works.</p></div>
   </div>
+</section>
+
+<section class="comparison" id="agents">
+  <h2>Works with the tools you already use</h2>
+  <div class="table-wrap">
+    <table>
+      <caption class="sr-only">Supported clients and their local agent paths</caption>
+      <thead><tr><th scope="col">Client</th><th scope="col">Local agent</th><th scope="col">How</th></tr></thead>
+      <tbody>
+        <tr><td>Codex CLI / ChatGPT desktop</td><td>Yes</td><td>tier gateway <code>/v1/responses</code>; no OpenAI sign-in</td></tr>
+        <tr><td>Claude Code</td><td>Yes</td><td>local Anthropic bridge on <code>:4001</code></td></tr>
+        <tr><td>Claude Desktop</td><td>via MCP</td><td>the same <code>sovereign</code> tools over MCP</td></tr>
+        <tr><td>OpenCode</td><td>Yes</td><td>custom <code>local/</code> provider plus the <code>sovereign</code> MCP server</td></tr>
+        <tr><td>Qwen Code</td><td>Yes</td><td>verified agent model through the local gateway</td></tr>
+        <tr><td>VS Codium + Continue</td><td>chat / edit / autocomplete</td><td>OpenAI-compatible models and local embeddings</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">One command — <code>sovereign install-clients</code> — writes the wrappers, client configs, MCP server, and skills.</p>
 </section>
 
 <section class="how" id="how">
   <h2>How it works</h2>
   <div class="steps">
-    <div class="step"><span class="num">1</span><h3>Install</h3><p>One command bootstraps the venv, links <code>sovereign</code> to your PATH, and installs the login dashboard.</p></div>
-    <div class="step"><span class="num">2</span><h3>Pull models</h3><p><code>sovereign pull-stack capable</code> grabs a coder, a reasoner, and embeddings — or pull any Ollama tag you want.</p></div>
-    <div class="step"><span class="num">3</span><h3>Code</h3><p><code>sovereign code</code> drops into Qwen Code, or wire ChatGPT/Codex/Claude with <code>eval "$(sovereign env)"</code>.</p></div>
+    <div class="step"><span class="num">1</span><h3>Install</h3><p>One script bootstraps the venv, links <code>sovereign</code> to your PATH, wires the clients, and installs the login dashboard.</p></div>
+    <div class="step"><span class="num">2</span><h3>Pull models</h3><p><code>sovereign setup-stack lean</code> grabs a coder, a tiny chat model, and embeddings; use <code>capable</code> for the best local coder. Any Ollama tag or Hugging Face GGUF also works.</p></div>
+    <div class="step"><span class="num">3</span><h3>Add a client</h3><p><code>sovereign install-clients</code> re-wires Codex, Claude Code, OpenCode, Qwen, and Continue whenever you install or upgrade one.</p></div>
+    <div class="step"><span class="num">4</span><h3>Code</h3><p><code>sovereign launch codex ~/src/app</code> or <code>sovereign chat-web --open</code>. Everything stays on loopback unless you opt into cloud.</p></div>
+  </div>
+</section>
+
+<section class="comparison" id="tiers">
+  <h2>Routing, without choosing a model</h2>
+  <p class="section-note">Ask for <code>best</code> or <code>auto</code> and the tier gateway classifies the request. Any installed model can still be named explicitly.</p>
+  <div class="table-wrap">
+    <table>
+      <caption class="sr-only">Tier gateway routing table</caption>
+      <thead><tr><th scope="col">Tier</th><th scope="col">Model</th><th scope="col">Context</th><th scope="col">Used for</th></tr></thead>
+      <tbody>
+        <tr><td><code>fast</code></td><td>qwen3.5:4b</td><td>8k</td><td>short questions, simple edits, autocomplete</td></tr>
+        <tr><td><code>balanced</code></td><td>qwen3.5:9b</td><td>65k</td><td>tool use, multi-turn work, medium prompts</td></tr>
+        <tr><td><code>deep</code></td><td>qwen3-coder:30b · glm-4.7-flash</td><td>32k</td><td>code, analysis, long or complex prompts</td></tr>
+        <tr><td><code>ultra</code></td><td>qwen3.8:27b</td><td>16k</td><td>hardest reasoning, only when requested</td></tr>
+        <tr><td><code>best</code> / <code>auto</code></td><td>quality-first / latency-first</td><td>32k</td><td>the stable aliases clients ask for</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h2 class="subsection">Offline stacks</h2>
+  <div class="table-wrap">
+    <table>
+      <caption class="sr-only">Offline model stack sizes</caption>
+      <thead><tr><th scope="col">Stack</th><th scope="col">Approx. total</th><th scope="col">Fit</th></tr></thead>
+      <tbody>
+        <tr><td><code>lean</code></td><td>~4 GB</td><td>fast edits, tiny chat, embeddings</td></tr>
+        <tr><td><code>balanced</code></td><td>~14 GB</td><td>solid coder, chat, reasoning</td></tr>
+        <tr><td><code>capable</code></td><td>~29 GB</td><td>best local coder and reasoning</td></tr>
+        <tr><td><code>max</code></td><td>~53 GB</td><td>maximum capability; pull one at a time</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="features" id="workflows">
+  <h2>What a session looks like</h2>
+  <div class="grid">
+    <div class="card"><h3>Start an agent</h3><pre><code>sovereign launch codex ~/src/app</code></pre><p>Codex, Claude Code, OpenCode, and Qwen all get the same local routing.</p></div>
+    <div class="card"><h3>Plan, build, review</h3><pre><code>sovereign pipeline "add retries" \
+  --dir ~/src/app --yes</code></pre><p>Plan, implement, verify with the project's checks, then review.</p></div>
+    <div class="card"><h3>Work a domain</h3><pre><code>sovereign pack brief pentest \
+  --brief ~/src/app/AGENTS.md</code></pre><p>Guardrails, SCOPE.md, matching skills, and model suggestions.</p></div>
+    <div class="card"><h3>Find a model</h3><pre><code>sovereign hf search "qwen coder" \
+  --gguf --license apache-2.0</code></pre><p>Search the Hub, then import a GGUF straight into Ollama.</p></div>
+    <div class="card"><h3>Read a document</h3><pre><code>sovereign pdf report.pdf ocr</code></pre><p>Text, OCR, tables, figures, and local vision review.</p></div>
+    <div class="card"><h3>Drive a browser</h3><pre><code>sovereign browse URL \
+  --task "find the pricing table"</code></pre><p>A visible Chromium, one policy-checked action at a time.</p></div>
   </div>
 </section>
 
 <section class="architecture">
   <h2>Under the hood</h2>
-  <img src="assets/architecture.png" alt="Sovereign Code architecture">
-  <p class="caption">Terminal dashboard → OllamaClient → 127.0.0.1:11434 → router → sessions. The LiteLLM gateway exposes your local models to OpenAI- and Anthropic-compatible clients — everything on loopback.</p>
+  <img src="assets/architecture.png" alt="Sovereign Code architecture" width="2920" height="1280" loading="lazy" decoding="async">
+  <p class="caption">Terminal dashboard → router → tier gateway on <code>127.0.0.1:4010</code> → Ollama, MLX, and the LiteLLM gateway on <code>:4000</code> → your clients. Model selection is memory-aware and the local-only guard is on by default.</p>
 </section>
 
 <section class="comparison">
   <h2>Sovereign Code vs. cloud AI</h2>
   <div class="table-wrap">
     <table>
-      <thead><tr><th></th><th>Sovereign Code</th><th>Cloud (ChatGPT / Codex / Claude)</th></tr></thead>
+      <caption class="sr-only">Sovereign Code compared with cloud AI</caption>
+      <thead><tr><th scope="col"><span class="sr-only">Dimension</span></th><th scope="col">Sovereign Code</th><th scope="col">Cloud (ChatGPT / Codex / Claude)</th></tr></thead>
       <tbody>
-        <tr><td>Your code</td><td>Stays on-device</td><td>Sent to servers</td></tr>
+        <tr><td>Your code</td><td>Stays on-device by default</td><td>Sent to servers</td></tr>
         <tr><td>Cost</td><td>One-time €5 + free models</td><td>Monthly subscription</td></tr>
         <tr><td>Works offline</td><td>Yes</td><td>No</td></tr>
-        <tr><td>Models</td><td>Yours — any Ollama model</td><td>Locked to the vendor</td></tr>
+        <tr><td>Models</td><td>Yours — Ollama, MLX, or any GGUF</td><td>Locked to the vendor</td></tr>
+        <tr><td>Agents</td><td>Codex, Claude Code, OpenCode, Qwen, Continue</td><td>Vendor clients only</td></tr>
         <tr><td>Telemetry</td><td>None</td><td>Varies by vendor</td></tr>
       </tbody>
     </table>
+  </div>
+</section>
+
+<section class="what-you-get" id="security">
+  <h2>Security and privacy</h2>
+  <div class="list">
+    <div class="row"><span class="check">✓</span><div><h3>Loopback by default</h3><p>Ollama, LiteLLM, the tier gateway, the Anthropic bridge, the MLX server, and MCP all bind to <code>127.0.0.1</code>. Non-loopback binds are refused unless you deliberately configure them.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Local-only guard</h3><p>Cloud aliases and provider routes return an error instead of silently leaving the Mac. <code>sovereign local --strict</code> proves every agent path is local.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>No telemetry</h3><p>No analytics, no accounts, no phone-home. Downloading models and datasets is the only network use, and it is optional.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Fenced edits</h3><p>MCP writes stay inside the workspace, are capped at 2 MB, use atomic replacement, refuse credential files, and can require a sha256 guard.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Prompt-injection and skill checks</h3><p><code>sovereign skills lint</code> flags pipe-to-shell, root deletes, credential paths, hidden characters, and injected instructions before a skill is loaded.</p></div></div>
+    <div class="row"><span class="check">✓</span><div><h3>Browser policy</h3><p>No CAPTCHA solving, bot-check bypass, or fingerprint evasion. Passwords, OTPs, and payment fields are handed back to you; destructive actions ask first.</p></div></div>
   </div>
 </section>
 
@@ -103,25 +222,61 @@
   </div>
 </section>
 
+<section class="comparison" id="editions">
+  <h2>Free source vs paid package</h2>
+  <div class="table-wrap">
+    <table>
+      <caption class="sr-only">Comparison of the free source and the paid package</caption>
+      <thead><tr><th scope="col"><span class="sr-only">Feature</span></th><th scope="col">Source (free)</th><th scope="col">License (€5)</th></tr></thead>
+      <tbody>
+        <tr><td>Full MIT source</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Build and run yourself</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Ready-to-run package</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Updates</td><td><code>git pull</code></td><td>Packaged, lifetime</td></tr>
+        <tr><td>Setup help</td><td>Docs and community</td><td>Direct support</td></tr>
+        <tr><td>Price</td><td>Free</td><td>€5 once</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="install" id="install">
-  <h2>Install in three lines</h2>
-  <pre><code>cd ~/Documents/sovereign-code
-./scripts/bootstrap.sh   # venv, install, PATH link, login agent
+  <h2>Install in four lines</h2>
+  <pre><code>git clone https://github.com/ZeroXSHDW/sovereign-code
+cd sovereign-code
+./scripts/bootstrap.sh   # venv, install, PATH, clients, login agent
 sovereign                # open the dashboard</code></pre>
-  <p class="fine">Runs on macOS with Python 3.11+ and <a href="https://ollama.com">Ollama</a>. MIT-licensed — build it free from <a href="https://github.com/ZeroXSHDW/sovereign-code">source</a>.</p>
+  <p class="fine">Then verify the stack before wiring clients:</p>
+  <pre><code>sovereign doctor         # paths, ports, models, aliases, concrete fixes
+sovereign status         # one-shot stack status</code></pre>
+  <p class="fine"><strong>Requires</strong> an Apple Silicon Mac (M1 or newer), macOS 14+, Python 3.11+, and <a href="https://ollama.com">Ollama</a>. For the browser operator run <code>playwright install chromium</code>; for PDF/OCR run <code>brew install poppler tesseract</code>. MIT-licensed — build it free from <a href="https://github.com/ZeroXSHDW/sovereign-code">source</a>; full details in the <a href="https://github.com/ZeroXSHDW/sovereign-code#readme">README</a>.</p>
+</section>
+
+<section class="what-you-get" id="docs">
+  <h2>Read the docs</h2>
+  <div class="list">
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code#readme">README</a></h3><p>Every command, model, port, and client path, plus the task packs and MCP tool list.</p></div></div>
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ARCHITECTURE.md">Architecture</a></h3><p>Modules, data flow, the tier router, and how the loopback services fit together.</p></div></div>
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ROADMAP.md">Roadmap</a></h3><p>What is next, what shipped, and where an agent or contributor can start.</p></div></div>
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code#troubleshooting">Troubleshooting</a></h3><p>Gateway offline, empty client replies, missing MCP tools, busy ports, and memory pressure.</p></div></div>
+    <div class="row"><span class="check">→</span><div><h3><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Changelog</a></h3><p>Release notes, including the 0.4.1 hardening pass and the unreleased coding loop.</p></div></div>
+  </div>
 </section>
 
 <section class="changelog">
   <h2>What's new</h2>
-  <div class="entry"><span class="date">latest</span><div><h3>Upgrade pass: browser hardening, skill bank, local-first</h3><p>Shared error module, transactional writes with undo, warm-pool command, hardened browser operator, 22k skill library with SQLite index, and strict local-only enforcement.</p></div></div>
+  <div class="entry"><span class="date">unreleased</span><div><h3>Native OpenCode V2 configuration</h3><p>Generated configs now use V2 providers, ordered permissions, read-only reviewer and planner subagents, <code>/check</code> <code>/review</code> <code>/plan</code> commands, todo tracking, and background compaction.</p></div></div>
+  <div class="entry"><span class="date">unreleased</span><div><h3>Opt-in 24/7 coding loop</h3><p>One iteration preflights the project's checks, picks the next roadmap item, routes it through the skill bank, and hands a bounded local-only prompt to OpenCode. A dirty tree or repeated failure pauses it instead of spinning.</p></div></div>
+  <div class="entry"><span class="date">v0.4.1</span><div><h3>Hardening pass</h3><p>Streamable HTTP MCP now works, the tier gateway cache is thread-safe, PDF downloads and page rendering are fenced, edits cannot corrupt files, undo restores binaries, and browser policy covers legacy numeric hosts. Plus task packs, PDF tables/figures, browser hover, and MCP authentication.</p></div></div>
   <div class="entry"><span class="date">v0.1.0</span><div><h3>Local-first console</h3><p>Terminal dashboard, 32k context, multi-model pipeline, semantic search, skills bank, compliant browser, and offline model stacks.</p></div></div>
+  <p class="fine"><a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Full changelog →</a></p>
 </section>
 
 <section class="faq" id="faq">
   <h2>Questions</h2>
   <details>
     <summary>Is it really local — does anything leave my Mac?</summary>
-    <p>Yes. Ollama and the LiteLLM gateway bind to 127.0.0.1 only, and the console never calls a cloud API. The only network use is downloading models from Ollama's registry — and that's optional; pre-downloaded models run fully offline.</p>
+    <p>Yes, by default. Ollama, the LiteLLM gateway, the tier gateway, and the Anthropic bridge all bind to <code>127.0.0.1</code>, and the console never calls a cloud API. The only network use is downloading models and datasets — and that's optional; once pulled, they run fully offline. Cloud models and provider keys are an explicit opt-in, and the local-only guard returns an error instead of silently leaving the Mac.</p>
   </details>
   <details>
     <summary>Do I have to pay to use it?</summary>
@@ -129,15 +284,19 @@ sovereign                # open the dashboard</code></pre>
   </details>
   <details>
     <summary>What Mac do I need?</summary>
-    <p>An Apple Silicon Mac (M1 or newer) with macOS 14+, Python 3.11+, and Ollama. It's tuned for a 24 GB M-series machine but scales down to smaller unified memory.</p>
+    <p>An Apple Silicon Mac (M1 or newer) with macOS 14+, Python 3.11+, and Ollama. It's tuned for a 24 GB M-series machine but scales down to smaller unified memory — and up to larger models on 64 GB and beyond.</p>
   </details>
   <details>
     <summary>Which models are included?</summary>
-    <p>You bring the models through Ollama. The console already supports 13+ verified models — Qwen, DeepSeek-R1, Gemma, Llama, Mistral, and more — and can download and run any Ollama tag with a single command.</p>
+    <p>You bring the models through Ollama, MLX, or Hugging Face. The console ships curated recommended models, four offline stacks (<code>lean</code>, <code>balanced</code>, <code>capable</code>, <code>max</code>), and can download and run any Ollama tag or import a GGUF with a single command.</p>
   </details>
   <details>
     <summary>Does it work with ChatGPT, Codex, and Claude Code?</summary>
-    <p>Yes. It wires those clients to your local models through a loopback gateway and auto-resolves the best installed model for each. Qwen Code and OpenCode are verified to edit files locally; Codex and Claude Code work as local chat clients.</p>
+    <p>Yes. The tier gateway exposes an OpenAI-compatible Responses API for Codex and the Codex side of the ChatGPT desktop app, and a local Anthropic bridge serves Claude Code. Claude Desktop uses the same <code>sovereign</code> tools over MCP. OpenCode, Qwen Code, and Continue are wired too. The coding agents can edit files and execute tools locally; <code>--cloud</code> switches a launcher back to the vendor subscription.</p>
+  </details>
+  <details>
+    <summary>What are the task packs and skills?</summary>
+    <p>Task packs bundle skills, guardrails, steps, model suggestions, and deliverables for a domain such as pentest, forensics, legal, or finance. The 22k-file skill library is ranked against the task, and only a few bodies are loaded so a large skill can't swallow the context window.</p>
   </details>
   <details>
     <summary>Refunds?</summary>
@@ -151,10 +310,11 @@ sovereign                # open the dashboard</code></pre>
   <a class="buy" href="https://buy.stripe.com/8x2dRa1uE1D7bsF3YN14404">Buy now — €5</a>
   <p class="fine">Secure checkout by Stripe. Card &amp; Apple&nbsp;Pay. No subscription.</p>
 </section>
+</main>
 
 <footer>
-  <span>Sovereign Code · macOS · Apple&nbsp;Silicon</span>
-  <span class="footer-links"><a href="mailto:support@zerodevllc.eu">Support</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code">GitHub</a></span>
+  <span>© 2026 ZeroDevLLC · Sovereign Code · macOS · Apple&nbsp;Silicon</span>
+  <span class="footer-links"><a href="https://github.com/ZeroXSHDW/sovereign-code#readme">Docs</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ARCHITECTURE.md">Architecture</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/docs/ROADMAP.md">Roadmap</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/SECURITY.md">Security</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/CONTRIBUTING.md">Contributing</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code/blob/main/LICENSE">MIT License</a> · <a href="mailto:support@zerodevllc.eu">Support</a> · <a href="https://github.com/ZeroXSHDW/sovereign-code">GitHub</a></span>
 </footer>
 </body>
 </html>

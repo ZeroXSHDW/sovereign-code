@@ -40,10 +40,12 @@ Surfaces documented in the README but not yet exercised end-to-end:
       `mlx-code`), `sovereign gateway-config --apply`.
 - [ ] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
       confirmation gates, secret refusal, masked audit log; keep integration
-      tests green. Add session locking so `browse`, MCP and web chat do not
-      fight over one Chromium profile.
-- [ ] Give the HTTP MCP endpoint an explicit authentication story before it is
-      exposed beyond loopback.
+      tests green.
+- [x] Cross-process browser session locking so `browse`, MCP and web chat cannot
+      open the same Chromium profile at once (`ProfileLock`).
+- [x] Give the HTTP MCP endpoint an explicit authentication story: a bearer
+      token (`--token`/`SOVEREIGN_MCP_TOKEN`) is required for any non-loopback
+      bind, and authenticated requests bypass the loopback `Host` guard.
 
 ## Later
 

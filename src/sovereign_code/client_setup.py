@@ -409,7 +409,8 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/auto",
-        "small_model": "sovereign/balanced",
+        # No `small_model`: OpenCode 2.x marks it deprecated and validates it
+        # against the models.dev catalog, so a local alias fails the schema.
         # Ponytail: the "lazy senior dev" ruleset that makes agents write ~53%
         # less code, ~41% faster and ~26% cheaper, while keeping every safety
         # guard. It ships as an OpenCode plugin plus /ponytail commands.
@@ -438,14 +439,14 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                 "sovereign": {
                     "type": "local",
                     "command": command,
-                    "enabled": True,
                     "environment": {"SOVEREIGN_MCP_COMPUTER": "1"},
                 },
+                # Servers are enabled by default in OpenCode 2.x; the only key
+                # is `disabled`, and an `enabled` key fails the config schema.
                 **{
                     name: {
                         "type": "local",
                         "command": [str(spec["command"]), *[str(arg) for arg in spec["args"]]],
-                        "enabled": True,
                     }
                     for name, spec in complementary_mcp_servers().items()
                 },
@@ -576,10 +577,10 @@ def install_opencode_mcp(
         merged["plugins"] = merged.get("plugins", []) + [
             item for item in user_plugins if item not in merged.get("plugins", [])
         ]
-    # The tier gateway is the default: `auto` for work, the 9B for small
-    # background calls so OpenCode does not swap models on every turn.
+    # The tier gateway is the default. `auto` already sends small turns to the
+    # 9B, so no separate small_model is written (2.x deprecates it).
     merged["model"] = "sovereign/auto"
-    merged["small_model"] = "sovereign/balanced"
+    merged.pop("small_model", None)
     # V1 used `permission`; V2 uses ordered `permissions`. Keep the user's
     # later rules so their explicit deny/ask choices still win.
     extra_rules = data.get("permissions")
@@ -589,26 +590,41 @@ def install_opencode_mcp(
         list(merged.get("permissions") or []), extra_rules
     )
     # Our server entry must win over a stale command path, while other MCP
-    # servers the user added are preserved. Accept both V1 (server map at the
-    # top level) and V2 (`{"servers": {...}}`).
-    user_mcp: dict[str, Any] = {}
+    # servers the user added are preserved. V1 kept the server map at the top
+    # level of `mcp`; 2.x only reads `mcp.servers` and marks the old shape
+    # deprecated, so the entries are moved instead of copied twice.
     candidate_mcp = data.get("mcp")
-    if isinstance(candidate_mcp, dict):
-        user_mcp = candidate_mcp
-    user_servers: dict[str, Any] = user_mcp
+    user_mcp: dict[str, Any] = candidate_mcp if isinstance(candidate_mcp, dict) else {}
+    user_servers: dict[str, Any] = {}
     if isinstance(user_mcp.get("servers"), dict):
-        user_servers = user_mcp["servers"]
+        user_servers.update(user_mcp["servers"])
+    for name, entry in user_mcp.items():
+        if name not in {"servers", "timeout"} and isinstance(entry, dict):
+            user_servers.setdefault(name, entry)
     generated_mcp = merged.get("mcp")
     generated_servers: dict[str, Any] = {}
     if isinstance(generated_mcp, dict):
         generated_servers = generated_mcp.get("servers", {})
     merged_mcp: dict[str, Any] = {
-        **user_mcp,
-        **(generated_mcp if isinstance(generated_mcp, dict) else {}),
+        "servers": {
+            name: _normalise_mcp_server(entry)
+            for name, entry in {**user_servers, **generated_servers}.items()
+        }
     }
-    merged_mcp["servers"] = {**user_servers, **generated_servers}
+    if isinstance(user_mcp.get("timeout"), dict):
+        merged_mcp["timeout"] = user_mcp["timeout"]
     merged["mcp"] = merged_mcp
     return _write(target, json.dumps(merged, indent=2) + "\n")
+
+
+def _normalise_mcp_server(entry: object) -> dict[str, Any]:
+    """Translate the V1 `enabled` flag to 2.x `disabled`, and keep the rest."""
+    server = dict(entry) if isinstance(entry, dict) else {}
+    if "enabled" in server:
+        enabled = bool(server.pop("enabled"))
+        if not enabled:
+            server["disabled"] = True
+    return server
 
 
 CONTINUE_CONFIG = """\

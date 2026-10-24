@@ -6,7 +6,9 @@ Thanks for contributing to ZeroDevLLC.
 - Keep changes local-first: no cloud dependencies, no telemetry.
 - Match the cyber-deck theme (dark bg, neon green/cyan accents, monospace).
 - Add tests where applicable.
-- Run the project's CI before submitting.
+- Run `make hooks` once, then `make check` before submitting. It runs ruff,
+  mypy in strict mode, the test suite with the coverage floor, and the format
+  check; `make quality` adds the dependency audit.
 
 ## Pull requests
 - Use the PR template.

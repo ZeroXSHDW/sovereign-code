@@ -75,7 +75,9 @@ All notable changes to Sovereign Code.
   version, first/last tags are filterable, and re-importing the same export is
   idempotent.
 - **A failed re-index keeps the old index**: `build_index` builds into a
-  sibling database and swaps it in only after a successful run.
+  sibling database and swaps it in only after a successful run. Concurrent
+  builds for the same root now use unique temp databases, so they cannot
+  corrupt each other; the last successful build wins.
 - **Knowledge search uses the indexed embedding model and configured Ollama
   URL**, so a root indexed with another model no longer returns zero-score
   noise.
@@ -91,11 +93,22 @@ All notable changes to Sovereign Code.
 - **Local-first routing cannot select a cloud tag** as the fallback model, and
   an unreadable `config.toml` is reported by `doctor` and blocks
   `config --set` instead of being silently replaced by defaults.
+- **A failed browser start releases the profile lock**, so a missing or crashed
+  Chromium cannot block every later `browse`/MCP/web-chat call.
 - **`pdf_figures` results are bounded**: the MCP tool returns at most
   `max_pages` (default 8) with base64 dropped once a payload budget is spent,
   instead of dumping every rendered page into one tool result.
+- **The TUI stylesheet ships in the wheel**: `sovereign_code/tui/app.tcss` is now
+  declared as package data, so a wheel install no longer starts the dashboard
+  without its CSS. The build job checks both `app.tcss` and `py.typed`.
 - **A failed backup leaves no partial archive**, so `prune_backups` cannot
   mistake a truncated `.partial` file for the newest good backup.
+- **Session exports are atomic**: an interrupted export is staged and renamed
+  into place, so a previous good export is never replaced by a truncated one.
+- **Web chat sends security headers** on every response: CSP, `nosniff`,
+  `X-Frame-Options: DENY` and `no-referrer`.
+- **Background command logs are pruned** to the newest 50, so a long-running
+  detached command cannot fill the disk.
 - **An MCP HTTP batch of only notifications answers 202** with no body, as the
   Streamable HTTP specification requires.
 - **`shared_client` no longer reuses a pooled client across different
@@ -114,10 +127,31 @@ All notable changes to Sovereign Code.
   `documents`, `ocr`) re-export the module. `summarize` now reads PDFs directly.
 - **OpenCode auto mode**: client config defaults to the `sovereign/auto` model alias
   with `/pdf` and `/browse` command templates; MCP exposes `pdf_auto` and `browser_*`.
+- **MCP HTTP authentication**: `--token` (or `SOVEREIGN_MCP_TOKEN`) requires
+  `Authorization: Bearer <token>`; a non-loopback bind is refused without one.
+- **Cross-process browser lock**: `ProfileLock` stops `browse`, MCP and web chat
+  from opening the same Chromium profile at once; the second caller gets a clear
+  error instead of a corrupted profile.
+- **Release and hook automation**: `.github/workflows/release.yml` builds and
+  publishes on a `v*` tag, and `.pre-commit-config.yaml` mirrors ruff + mypy.
 
 ### Changed
 - Raised timeouts, limits and token budgets across the CLI, MCP server, tier gateway,
   browser agent, search, skills, terminal, repomap and webchat for the upgrade pass.
+- **mypy runs in strict mode** across all 87 source files, including the TUI
+  (`strict = true`, plus `warn_unreachable`).
+- **`scripts/bootstrap.sh` uses `uv sync --locked`** when uv is available, so a
+  fresh install honours the lockfile instead of resolving versions again, and
+  `make install` uses the same path. `make hooks` installs the pre-commit hooks.
+- **`scripts/agent-connect.sh`** uses the same locked sync and installs the
+  browser extra, so both setup paths now agree.
+- **Minimum-dependency CI job** resolves the oldest allowed direct versions and
+  runs the full suite against them, catching a floor that claims support for a
+  version the code no longer works with.
+- **Ruff now also enforces `PIE` and `C4`**: `startswith`/`endswith` tuples,
+  redundant comprehensions and useless lambdas are cleaned up project-wide.
+- **CI runs weekly** as well as on push/PR, so dependency drift and a flaky
+  test surface before a release.
 - **Tooling gates tightened**: mypy now checks the TUI as well (87 files), the
   coverage floor rose from 45% to 50%, and the dependency audit runs
   `pip-audit --strict` against an exported third-party requirements file instead

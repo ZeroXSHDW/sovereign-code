@@ -28,6 +28,11 @@ from .tier_gateway import CLAUDE_MODEL_ROUTES, CLAUDE_SLOT_MODELS
 # exactly what it had before, instead of guessing at a default.
 CLOUD_BACKUP_SUFFIX = ".sovereign-cloud"
 
+# Ollama tags this release retired. Every client-config writer drops them so a
+# fresh install cannot keep pointing at a model no alias references any more.
+# One set, three call sites: keep them in step when the next model is retired.
+RETIRED_MODELS = frozenset({"deepseek-r1:8b", "qwen2.5-coder:7b"})
+
 
 def client_cli_version(name: str) -> str:
     """The first line of a client CLI's ``--version`` output, or ''.
@@ -705,7 +710,7 @@ def install_opencode_mcp(
         incoming = _normalise_provider(value)
         merged_models = {**existing.get("models", {})}
         merged_models.update(incoming.pop("models", {}))
-        for retired in ("deepseek-r1:8b", "qwen2.5-coder:7b"):
+        for retired in RETIRED_MODELS:
             merged_models.pop(retired, None)
         providers[key] = {**existing, **incoming, "models": merged_models}
     for key, value in data.items():
@@ -975,7 +980,7 @@ def install_qwen_router(path: Path | None = None) -> Path:
         openai = []
         providers["openai"] = openai
     tier_ids = {"best", "auto", "fast", "balanced", "deep", "ultra"}
-    retired = {"qwen2.5-coder:7b", "deepseek-r1:8b"}
+    retired = RETIRED_MODELS
     keep = [
         entry
         for entry in openai

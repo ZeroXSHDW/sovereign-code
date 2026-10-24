@@ -5916,7 +5916,6 @@ def _env(settings: Settings) -> None:
         'export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-claude"',
         'export CLAUDE_CODE_MAX_CONTEXT_TOKENS="65536"',
         'export CLAUDE_CODE_MAX_OUTPUT_TOKENS="8192"',
-        'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1"',
         'export DISABLE_AUTO_COMPACT="1"',
         'export DISABLE_TELEMETRY="1"',
     ]

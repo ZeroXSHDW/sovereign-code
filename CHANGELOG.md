@@ -2,6 +2,33 @@
 
 All notable changes to Sovereign Code.
 
+## [0.5.2] - 2026-10-24
+
+### Changed
+- **Every agent client is on its current release and re-verified**: OpenCode
+  2.1.4, Claude Code 2.1.310 and Qwen Code 0.26.1 (Codex 0.164 landed in 0.5.1).
+  `SUPPORTED_CLIENT_VERSIONS` covers them, `doctor` reports "all verified",
+  and `sovereign verify --clients` returns PASS for Codex, Claude Code and
+  OpenCode on the new versions.
+
+### Fixed
+- **The `git` and `fetch` MCP servers never started**: `@modelcontextprotocol/
+  server-git` and `.../server-fetch` do not exist on npm, so every client
+  advertised two servers that failed to launch. They now use the official
+  Python servers through `uvx` (`mcp-server-git`, `mcp-server-fetch`) and are
+  omitted entirely when `uvx` is absent. All six servers report Connected in
+  Claude Code and Qwen Code.
+- **Re-running `install-clients` reported every existing MCP server as
+  "failed"**: `mcp add` refuses a name that already exists, and the reference
+  servers were never removed first. Claude Code and Qwen now remove before
+  adding, so a re-install is idempotent.
+- **Obsolete Claude Code knobs are migrated out of settings.json**:
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (gone since 2.1) and
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` (dropped by 2.1.310) were left behind
+  by `env.update`. Install and cloud-restore both prune them.
+- **Two scheduler tests were timing-flaky under load**: a barrier and an event
+  replace the sleeps that occasionally saw 2 of 3 concurrent requests.
+
 ## [0.5.1] - 2026-10-24
 
 ### Added

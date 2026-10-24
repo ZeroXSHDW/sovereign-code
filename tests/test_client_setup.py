@@ -164,8 +164,13 @@ def test_install_qwen_mcp_registers_complementary_servers(monkeypatch) -> None:
     )
     sovereign_add = next(c for c in calls if "sovereign" in c and "--env" in c)
     assert "SOVEREIGN_MCP_COMPUTER=1" in sovereign_add
-    # The five reference servers each get their own add.
-    assert sum(1 for c in calls if "sovereign" not in c and "mcp" in c) == 5
+    # The five reference servers each get an add, and each add is preceded by
+    # a remove so a re-install does not report "already exists" as a failure.
+    adds = [c for c in calls if c[1:3] == ["mcp", "add"] and "sovereign" not in c]
+    assert len(adds) == 5
+    for add in adds:
+        name = add[3]
+        assert any(call[1:4] == ["mcp", "remove", name] for call in calls[: calls.index(add)]), name
 
 
 def test_opencode_cloud_provider_is_opt_in() -> None:
@@ -409,6 +414,7 @@ def test_claude_settings_map_every_slot_to_a_local_route(tmp_path) -> None:
     assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-4-5"
     # Removed from Claude Code 2.1: a dead knob is drift, not a setting.
     assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env
+    assert "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" not in env
     # Every slot lands on a route the local catalog can serve.
     from sovereign_code.tier_gateway import catalog_ids
 
@@ -538,3 +544,44 @@ def test_unsupported_clients_reports_an_unverified_major(monkeypatch) -> None:
 def test_the_version_guard_covers_every_scripted_client() -> None:
     """The clients this project shells out to are the ones that need a pin."""
     assert {"codex", "claude", "opencode", "qwen"} <= set(client_setup.SUPPORTED_CLIENT_VERSIONS)
+
+
+def test_reference_git_and_fetch_use_the_python_servers() -> None:
+    """The npm names do not exist; npx failed to start on every client."""
+    servers = client_setup.complementary_mcp_servers()
+    assert servers["git"]["args"] == ["mcp-server-git"]
+    assert servers["fetch"]["args"] == ["mcp-server-fetch"]
+    assert servers["git"]["command"].endswith("uvx")
+    assert servers["fetch"]["command"].endswith("uvx")
+
+
+def test_reference_git_and_fetch_are_omitted_without_uvx(monkeypatch) -> None:
+    """Better no server than one that cannot start."""
+    monkeypatch.setattr(
+        client_setup.shutil, "which", lambda name: None if name == "uvx" else "/usr/bin/" + name
+    )
+    servers = client_setup.complementary_mcp_servers()
+    assert "git" not in servers
+    assert "fetch" not in servers
+    assert {"filesystem", "memory", "playwright"} <= set(servers)
+
+
+def test_install_claude_settings_removes_obsolete_knobs(tmp_path) -> None:
+    """Dead env vars from an older release are migrated out, not left behind."""
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "env": {
+                    "ANTHROPIC_MODEL": "old",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client_setup.install_claude_settings(path)
+    env = json.loads(path.read_text(encoding="utf-8"))["env"]
+    assert env["ANTHROPIC_MODEL"] == "best"
+    assert not set(client_setup.CLAUDE_OBSOLETE_ENV) & set(env)

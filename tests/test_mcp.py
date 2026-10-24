@@ -207,3 +207,32 @@ def test_get_skill_refuses_to_leave_the_library() -> None:
     )
     assert response is not None
     assert response["result"]["isError"] is True
+
+
+def test_ask_domain_loads_the_specialist_prompt_and_model(monkeypatch) -> None:
+    from sovereign_code import mcp
+
+    seen: dict = {}
+
+    def fake_complete(base_url, model, messages, max_tokens=0, **kwargs):
+        seen.update(model=model, messages=messages)
+        return "VERDICT: tested"
+
+    monkeypatch.setattr("sovereign_code.summarize.complete", fake_complete)
+    mcp.call_tool("ask", {"prompt": "Review this NDA", "domain": "legal"})
+    assert seen["model"] == "local-reasoning-deep"
+    assert seen["messages"][0]["role"] == "system"
+    assert "legal analyst" in seen["messages"][0]["content"].lower()
+
+
+def test_ask_rejects_an_unknown_domain() -> None:
+    response = handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "ask", "arguments": {"prompt": "hi", "domain": "astrology"}},
+        }
+    )
+    assert response is not None
+    assert response["result"]["isError"] is True

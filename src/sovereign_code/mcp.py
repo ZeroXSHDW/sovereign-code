@@ -25,6 +25,7 @@ from typing import Any
 
 from . import __version__
 from .diagnostics import note
+from .domains import DOMAINS
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({"2024-11-05", "2025-03-26", "2025-06-18"})
@@ -415,12 +416,15 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "ask",
-        "Run a prompt through the local gateway using a model alias. Use model=legal "
-        "for legal/compliance work and model=forensics for digital forensics and "
-        "incident response; fast/deep/best work for general and code tasks.",
+        "Run a prompt through the local gateway. Set domain=legal for "
+        "legal/compliance work, domain=forensics for digital forensics and incident "
+        "response, or domain=security for app security: the domain loads its "
+        "specialist system prompt and skill playbook and picks its own model. "
+        "Without a domain, model=fast/deep/best answer general and code tasks.",
         {
             "prompt": {"type": "string"},
             "model": {"type": "string", "default": "best"},
+            "domain": {"type": "string", "enum": sorted(DOMAINS)},
             "max_tokens": {"type": "integer", "default": 1024},
         },
         ["prompt"],
@@ -981,17 +985,40 @@ def _project_context(path: str) -> str:
     return "\n".join(parts)
 
 
-def _ask(prompt: str, model: str, max_tokens: int) -> str:
+def _ask(prompt: str, model: str, max_tokens: int, domain_key: str = "") -> str:
     from .config import Settings
+    from .domains import FORCE_VERDICT, system_prompt, verdict
+    from .skills import read_skill, render_skill
     from .summarize import complete
 
     settings = Settings.load()
-    return complete(
-        settings.router_url,
-        model,
-        [{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    domain = None
+    if domain_key:
+        domain = DOMAINS.get(domain_key)
+        if domain is None:
+            raise ValueError(f"unknown domain: {domain_key}")
+        # The domain owns the model choice unless the caller names one.
+        if model in {"", "auto", "best"}:
+            model = domain.alias
+        system = system_prompt(domain)
+        if domain.skill and read_skill(domain.skill) is not None:
+            system += "\n\n" + render_skill(domain.skill, prompt)
+        messages = [{"role": "system", "content": system}, *messages]
+    answer = complete(settings.router_url, model, messages, max_tokens=max_tokens)
+    if domain is not None and verdict(answer) is None:
+        # One retry gets the mandatory verdict without paying for a full re-analysis.
+        answer = complete(
+            settings.router_url,
+            model,
+            [
+                *messages,
+                {"role": "assistant", "content": answer},
+                {"role": "user", "content": FORCE_VERDICT},
+            ],
+            max_tokens=max(max_tokens, 200),
+        )
+    return answer
 
 
 _BROWSER_LOCK = threading.Lock()
@@ -1659,6 +1686,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             str(args.get("prompt") or ""),
             str(args.get("model") or "best"),
             int(args.get("max_tokens") or 1024),
+            str(args.get("domain") or ""),
         )
     if name == "run_checks":
         # The tool schema has no "commands" parameter: the client never picks
@@ -1808,7 +1836,9 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "memory, and checks. Use list_models for availability, ask with "
                     "model=fast for quick work or model=deep for code/reasoning, "
                     "model=legal for legal/compliance work, model=forensics for "
-                    "digital forensics and incident response, "
+                    "digital forensics and incident response, or set domain=legal / "
+                    "domain=forensics on ask to load that specialist's playbook, "
+                    "system prompt and model, "
                     "list_skills/get_skill/load_skills for workflows, run_checks to "
                     "verify, and delegate to run a real local Codex/Claude agent on "
                     "a project (read-only unless write=true; it never skips the "

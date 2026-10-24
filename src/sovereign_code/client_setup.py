@@ -64,7 +64,7 @@ SUPPORTED_CLIENT_VERSIONS: dict[str, tuple[str, ...]] = {
     "codex": ("0.163", "0.164"),
     "claude": ("2.",),
     "opencode": ("2.",),
-    "qwen": ("0.25",),
+    "qwen": ("0.25", "0.26"),
 }
 
 
@@ -172,7 +172,7 @@ def complementary_mcp_servers() -> dict[str, dict[str, Any]]:
     """
     home = Path.home()
     roots = [str(home / "Documents"), str(home / "Downloads")]
-    return {
+    servers: dict[str, dict[str, Any]] = {
         "filesystem": {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", *roots],
@@ -187,17 +187,16 @@ def complementary_mcp_servers() -> dict[str, dict[str, Any]]:
             "command": "npx",
             "args": ["-y", "@playwright/mcp@latest"],
         },
-        # Deeper git history and blame than the repo_* tools expose.
-        "git": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-git"],
-        },
-        # Arbitrary HTTP fetching, for docs and API references.
-        "fetch": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-fetch"],
-        },
     }
+    # Deeper git history/blame and arbitrary HTTP fetching come from the
+    # official Python reference servers. Their npm names do not exist, so the
+    # old npx entries failed to start on every client; uvx is the supported
+    # runner and is already required to install this project.
+    uvx = shutil.which("uvx")
+    if uvx:
+        servers["git"] = {"command": uvx, "args": ["mcp-server-git"]}
+        servers["fetch"] = {"command": uvx, "args": ["mcp-server-fetch"]}
+    return servers
 
 
 def codex_mcp_env() -> dict[str, str]:
@@ -306,6 +305,14 @@ def install_claude_code_mcp() -> str:
     # Code, same as the desktop clients.
     extras: list[str] = []
     for name, spec in complementary_mcp_servers().items():
+        # `mcp add` refuses a name that already exists, so a re-install used
+        # to report every reference server as failed.
+        subprocess.run(
+            ["claude", "mcp", "remove", name, "-s", "user"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         r = subprocess.run(
             [
                 "claude",
@@ -354,6 +361,12 @@ def install_qwen_mcp() -> str:
         return (result.stderr or result.stdout or "failed")[:200]
     extras: list[str] = []
     for name, spec in complementary_mcp_servers().items():
+        subprocess.run(
+            ["qwen", "mcp", "remove", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         r = subprocess.run(
             ["qwen", "mcp", "add", name, str(spec["command"]), *[str(arg) for arg in spec["args"]]],
             capture_output=True,
@@ -1065,9 +1078,16 @@ CLAUDE_LOCAL_ENV = {
     "ANTHROPIC_MODEL": "best",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
-    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
     "DISABLE_AUTO_COMPACT": "1",
 }
+
+# Knobs an earlier release wrote and the current Claude Code no longer reads.
+# They are removed on install so a settings file does not accumulate dead
+# environment variables that look like settings.
+CLAUDE_OBSOLETE_ENV = (
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+)
 
 # The picker slots. Each one carries the model id Claude Code knows, and the
 # local route that id resolves to, so the picker offers the local models and
@@ -1100,6 +1120,8 @@ def install_claude_settings(path: Path | None = None) -> Path:
         env = {}
         data["env"] = env
     env.update(CLAUDE_LOCAL_ENV)
+    for key in CLAUDE_OBSOLETE_ENV:
+        env.pop(key, None)
     return _write(target, json.dumps(data, indent=2) + "\n")
 
 
@@ -1255,7 +1277,7 @@ def restore_claude_cloud(path: Path | None = None) -> Path | None:
         return None
     env = data.get("env")
     if isinstance(env, dict):
-        for key in CLAUDE_LOCAL_ENV:
+        for key in (*CLAUDE_LOCAL_ENV, *CLAUDE_OBSOLETE_ENV):
             env.pop(key, None)
         if not env:
             data.pop("env", None)

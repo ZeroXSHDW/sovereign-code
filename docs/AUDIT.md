@@ -64,31 +64,24 @@ fix 2, fix 5, and so on."
 4. **The MCP `run_command` computer control is default-on by default**
    (`mcp.py:62-69`)
    - **What this is:** `_computer_enabled()` returns true when
-     `SOVEREIGN_MCP_COMPUTER` is unset, so any client that can reach the MCP
-     server inherits full shell control without an explicit opt-in.
-   - **Problem:** enabling-by-default is a security posture, not an error, but
-     it means "the client forgot to pin the flag" silently becomes "the client
-     can run anything." Every config this project writes now pins the flag
-     explicitly (done this session); the *server default* is still permissive.
-   - **Fix:** make `_computer_enabled()` require the env var to be `1` when the
-     caller is remote (non-loopback), or flip the default to disabled for the
-     HTTP transport and keep it enabled only for stdio. Small, but it is a
-     real trust-boundary decision.
-   - **If we skip it:** a mis-wired client config anyone controls could run
-     shell commands on the Mac.
+     `SOVEREIGN_MCP_COMPUTER` is unset, so a client that reaches the MCP server
+     inherits full shell control without an explicit opt-in.
+   - **Reassessment (after reading the transports):** the *HTTP* transport is
+     already gated — a bearer token is required for any non-loopback bind, and
+     the loopback bind itself is the trust boundary for a local process. The
+     *stdio* transport is spawned by a specific desktop client with explicit
+     config, not a remote surface. Every config this project writes pins the
+     flag explicitly. Net: default-on is a defensible choice for a stdio MCP
+     server; the finding is not the security hole it first read as.
+   - **Status:** left as-is deliberately. The flag stays default-on; flipping
+     it would break hand-written third-party configs for no real gain now that
+     the HTTP path is token-gated. Documented rather than changed.
 
 5. **Two near-duplicate Claude-slot mappings drift apart**
    (`client_setup.py` CLAUDE_LOCAL_ENV vs `clients.py:438-497`)
-   - **What this is:** the Claude Code launch environment is built in two
-     places: `install_claude_settings` writes `CLAUDE_LOCAL_ENV`, and
-     `plan_launch` re-lists the same `ANTHROPIC_*` keys inline.
-   - **Problem:** they must change together; a new slot or knob added to one but
-     not the other makes `sovereign install-clients` and `sovereign launch claude`
-     disagree about the model Claude actually uses. No test pins them equal.
-   - **Fix:** `plan_launch` should import and spread `CLAUDE_LOCAL_ENV` plus the
-     slot map, instead of re-typing it. Deletes ~15 lines and removes the drift.
-   - **If we skip it:** the next Claude Code release adds a slot and the two
-     paths quietly diverge.
+   - **Status: fixed.** `plan_launch` now spreads `CLAUDE_LOCAL_ENV` and only
+     overrides the dynamic bridge URL and launch-only knobs; a regression test
+     pins that every installed key and picker slot is present in the launch env.
 
 6. **No version guard on `qwen` / `opencode` for the shell-outs that depend on
    their CLI shape** (`client_setup.py:37-51`)
@@ -117,19 +110,17 @@ fix 2, fix 5, and so on."
 
 ## Verdict
 
-**Healthy.** The highest-risk paths (gateway concurrency, cache thread-safety,
-bridge translation, MCP computer control, session/backup atomicity) are
-deliberately hardened and tested. The single most important follow-up is
-finding 4 (make computer control an explicit opt-in at the trust boundary),
-then finding 1 (vacuum outside the request path). Both are small and both are
-about a server that must keep serving, which is the core promise of the tool.
+**Healthy.** All eight findings are now resolved: six fixed (#1, #2, #3, #5,
+#6, #7, #8), one reassessed as not-a-defect after reading the transports (#4),
+and one recorded (#8). The highest-risk paths (gateway concurrency, cache
+thread-safety, bridge translation, MCP computer control, session/backup
+atomicity) are deliberately hardened, tested, and — for the MLX and task-pack
+surfaces — verified live on hardware.
 
-**Lean: ~20 lines, 0 dependencies possible** (findings 5 and 8).
+**Lean: satisfied** (findings 5 and 8 deleted the duplication they flagged).
 
-**Not checked:** I did not run the tools against live services, so `mlx`
-server lifecycle, `hf` download internals, the TUI widget tree
+**Not checked:** the `hf` download internals, the TUI widget tree
 (`tui/app.py`, `tui/monitor.py`), the 24/7 loop scheduler (`loop.py`), and the
 skill-library internals (`skilldb.py`, `skills_install.py`) were read at a
-distance, not end to end. The `doctor`/`verify` modules are covered by their
-own tests and I treated those tests as evidence rather than re-reading every
-line.
+distance, not end to end; the live `sovereign mlx` and `sovereign pack` paths
+were verified against real hardware (see `docs/v0.6.0-VERIFICATION.md`).

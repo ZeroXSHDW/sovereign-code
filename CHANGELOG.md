@@ -23,6 +23,10 @@ All notable changes to Sovereign Code.
   mlx-lm server online. `run` now routes MLX tags and aliases to the MLX
   server's OpenAI-compatible endpoint. Verified live: ~0.45 s warm reply,
   2.8 s full answer with the 0.6B speculative draft enabled.
+- **The Claude launch env drifted from the installed settings**: `plan_launch`
+  re-typed the `ANTHROPIC_*` keys inline, so a slot added to one could silently
+  miss the other. It now spreads the shared `CLAUDE_LOCAL_ENV` and overrides
+  only the dynamic bridge URL and launch-only knobs, with a regression test.
 
 ## [0.6.0] - 2026-10-24
 

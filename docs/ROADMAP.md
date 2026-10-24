@@ -12,7 +12,7 @@ rather than assumed: Codex, Claude Code and OpenCode each answer a real turn
 instead of only opening a port, and the generated configs validate against the
 clients' current schemas.
 
-- [x] Tag `v0.5.0` and publish; 0.4.1 ships in this release, not separately.
+- [x] Tag `v0.4.1` (55626c8e) and `v0.5.0`, and publish both.
 - [x] `sovereign verify --clients`: one real turn per client, PASS/FAIL table.
 - [x] Doctor probe for gateway completions, so a wedged gateway cannot pass.
 - [x] Recover a stale tier gateway via `router --stop/--restart`; a losing bind

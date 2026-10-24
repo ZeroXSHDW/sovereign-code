@@ -1,5 +1,7 @@
 """Headless boot test for the Textual dashboard."""
 
+from pathlib import Path
+
 from sovereign_code.config import Settings
 from sovereign_code.tui.app import SovereignApp
 
@@ -166,3 +168,38 @@ async def test_project_memory_notes(monkeypatch, tmp_path):
         await pilot.pause()
         await pilot.pause()
     assert "always run ruff" in app._project_memory()
+
+
+async def test_resume_command_loads_the_last_session(monkeypatch, tmp_path):
+    """`/resume` restores the previous conversation's turns into history."""
+    from sovereign_code.tui import app as app_module
+
+    fake_path = Path("/nonexistent-session.jsonl")
+    monkeypatch.setattr(app_module, "recent_sessions", lambda limit=1: [fake_path])
+    monkeypatch.setattr(
+        app_module,
+        "read_session",
+        lambda _p: [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ],
+    )
+    app = SovereignApp(settings=Settings(), demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app._resume_session()
+        await pilot.pause()
+    roles = [item["role"] for item in app.history]
+    assert roles == ["user", "assistant"]
+
+
+async def test_resume_with_no_session_is_a_noop(monkeypatch):
+    from sovereign_code.tui import app as app_module
+
+    monkeypatch.setattr(app_module, "recent_sessions", lambda limit=1: [])
+    app = SovereignApp(settings=Settings(), demo=True)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app._resume_session()
+        await pilot.pause()
+    assert app.history == []

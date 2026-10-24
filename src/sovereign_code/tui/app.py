@@ -22,7 +22,14 @@ from ..memory import project_context
 from ..models import ModelView
 from ..ollama import OllamaClient
 from ..router import Selection, Task, choose, mode_label, system_prompt, task_from_name
-from ..sessions import SessionWriter, prune_sessions, scan_sessions, select_prunable
+from ..sessions import (
+    SessionWriter,
+    prune_sessions,
+    read_session,
+    recent_sessions,
+    scan_sessions,
+    select_prunable,
+)
 from ..status import Snapshot, collect
 from ..system import Memory, wired_limit_gb
 from ..verify import CORE_ALIASES, AliasResult, probe_aliases
@@ -52,6 +59,8 @@ HELP_TEXT = """\
 - `/skills`, `/skill <name>` — saved prompt templates
 - `/memory add <note>` — remember a project note (injected into chat)
 - `/free` — unload other models and free memory
+- `/history` — the last ten turns of this conversation
+- `/resume` — reload the most recent session (context persists across restarts)
 - `/clear` — new conversation
 - `/help` — this help
 - `/pwd` — show the working directory
@@ -699,6 +708,8 @@ class SovereignApp(App[None]):
                 content = " ".join(item.get("content", "").split())[:80]
                 lines.append(f"- **{role}**: {content}")
             await self.add_message("system", "\n".join(lines))
+        elif command == "/resume":
+            await self._resume_session()
         elif command in {"/clear", "/reset", "/cls"}:
             await self.clear_chat()
         elif command == "/quit":
@@ -712,6 +723,29 @@ class SovereignApp(App[None]):
         self.history.clear()
         self.session = None
         await self.add_message("system", "_New conversation._")
+
+    async def _resume_session(self) -> None:
+        """Load the most recent session's turns into the current conversation."""
+        recent = recent_sessions(limit=1)
+        if not recent:
+            await self.add_message("system", "_No previous session to resume._")
+            return
+        records = read_session(recent[0])
+        if not records:
+            await self.add_message("system", "_The last session is empty._")
+            return
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        await scroll.remove_children()
+        self.history.clear()
+        for record in records:
+            role = record.get("role", "assistant")
+            content = record.get("content", "")
+            if role in {"user", "assistant"} and content:
+                self.history.append({"role": role, "content": content})
+                await self.add_message(role, content)
+        await self.add_message(
+            "system", f"_Resumed {len(self.history)} turns. Context persists across restarts._"
+        )
 
     # ---------------------------------------------------------------- actions
     async def action_refresh(self) -> None:

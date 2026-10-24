@@ -62,7 +62,10 @@ hardware. The code is written and CLI-wired; what remains is a real run:
 
 - [x] Task packs (`sovereign pack list/show/brief/models/install/verify`) —
       pack brief writes into a project's `AGENTS.md`; SCOPE.md gating for pentest.
-      Remaining: a live `pack brief` + `pack verify` run against a model.
+      Verified live (2026-10-24): `pack brief pentest` writes the managed block
+      plus SCOPE.md, `pack models forensics` lists live HF candidates with
+      trust/licence refusal, and `pack verify forensics --model qwen3.5:9b`
+      returns PASS.
 - [x] MLX server integration (`sovereign mlx pull/start/status/stop`) —
       speculative decoding, 8-bit KV cache, tier aliases (`mlx-fast`,
       `mlx-code`), `sovereign gateway-config --apply`.

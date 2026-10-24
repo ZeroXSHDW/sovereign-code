@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import fields as dc_fields
 from pathlib import Path
 from typing import Any, cast
@@ -994,7 +995,7 @@ def _sessions(
     return 0
 
 
-def _browse(args, settings: Settings) -> int:
+def _browse(args: argparse.Namespace, settings: Settings) -> int:
     try:
         import playwright  # noqa: F401
     except ImportError:
@@ -1161,7 +1162,7 @@ def _doctor_fix(settings: Settings, snap: Snapshot) -> int:
 
     rows: list[tuple[str, str, str]] = []
 
-    def run(label: str, fn) -> None:
+    def run(label: str, fn: Callable[[], Any]) -> None:
         try:
             result = fn()
             rows.append(("[green]FIXED[/]", label, str(result)))
@@ -2168,7 +2169,6 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
         context = project_context(target)
         args.extend(["-p", (context + "\n\n" + prompt) if context else prompt])
     os.execvp(args[0], args)  # noqa: S606 - exec replaces this process; no shell is involved
-    return 0
 
 
 def _gateway(snap: Snapshot) -> int:
@@ -3154,7 +3154,7 @@ def _guardian(
     return 0 if all(state.up for state in states) else 1
 
 
-def _autostart_report(settings: Settings) -> dict:
+def _autostart_report(settings: Settings) -> dict[str, Any]:
     """What the machine will look like after a reboot.
 
     The report answers the question a user actually has: if the Mac restarts
@@ -3320,7 +3320,7 @@ def _autostart(
     return 0 if report["ok"] else 1
 
 
-def _loop(settings: Settings, args) -> int:
+def _loop(settings: Settings, args: argparse.Namespace) -> int:
     """Enable, inspect, or run the opt-in 24/7 coding loop."""
     import json as _json
 
@@ -3570,7 +3570,7 @@ def _warm_model(settings: Settings, model: str | None, task: str) -> int:
 
     _make_room(snap, tag)
 
-    async def _preload() -> dict:
+    async def _preload() -> dict[str, Any]:
         client = OllamaClient(snap.settings.ollama_url)
         started = time.monotonic()
         data = await client.preload(tag, context)
@@ -3696,7 +3696,6 @@ def _launch(
     except OSError as exc:
         console.print(f"[red]Could not launch {info.name}:[/] {exc}")
         return 1
-    return 0
 
 
 def _consult(
@@ -3873,7 +3872,7 @@ def _mode(settings: Settings, action: str) -> int:
     return 0
 
 
-def _projects(args) -> int:
+def _projects(args: argparse.Namespace) -> int:
     from .monitor import live_projects
 
     projects = live_projects(limit=args.limit or 20)
@@ -3931,7 +3930,7 @@ def _projects(args) -> int:
     return 0
 
 
-def _feed(args) -> int:
+def _feed(args: argparse.Namespace) -> int:
     from .monitor import activity_stats, recent_activity
 
     limit = args.limit or 40
@@ -3977,7 +3976,7 @@ def _feed(args) -> int:
     return 0
 
 
-def _project(args) -> int:
+def _project(args: argparse.Namespace) -> int:
     from .packs import PACKS, get_pack
     from .projectsetup import init_project, profile
 
@@ -4018,7 +4017,7 @@ def _project(args) -> int:
     return 0
 
 
-def _mlx_cmd(settings: Settings, args) -> int:
+def _mlx_cmd(settings: Settings, args: argparse.Namespace) -> int:
     """Manage the local mlx-lm server for Apple Silicon MLX models."""
     from .backends import _mlx_url, probe, resolve, wait_online
 
@@ -4156,7 +4155,7 @@ def _mlx_cmd(settings: Settings, args) -> int:
     return 1
 
 
-def _pack(args, settings: Settings) -> int:
+def _pack(args: argparse.Namespace, settings: Settings) -> int:
     from . import packs
 
     action = args.action or "list"
@@ -4343,7 +4342,7 @@ def _pack(args, settings: Settings) -> int:
     return 1
 
 
-def _hf(args) -> int:
+def _hf(args: argparse.Namespace) -> int:
     from . import hf as hub
 
     action = args.action or "status"
@@ -4372,7 +4371,7 @@ def _hf(args) -> int:
         return 1
 
 
-def _hf_status(args, hub) -> int:
+def _hf_status(args: argparse.Namespace, hub: Any) -> int:
     from .system import disk_free_gb
 
     status = hub.token_status(verify=not args.no_verify)
@@ -4450,7 +4449,7 @@ def _hf_status(args, hub) -> int:
     return 0
 
 
-def _hf_login(args, hub) -> int:
+def _hf_login(args: argparse.Namespace, hub: Any) -> int:
     if args.browser:
         executable = hub.hf_cli_path()
         if not executable:
@@ -4481,7 +4480,7 @@ def _hf_login(args, hub) -> int:
     return 0
 
 
-def _hf_logout(hub) -> int:
+def _hf_logout(hub: Any) -> int:
     removed = hub.forget_token()
     if removed:
         console.print("[green]Removed[/] the stored Hugging Face token.")
@@ -4495,7 +4494,7 @@ def _hf_logout(hub) -> int:
     return 0
 
 
-def _hf_search(args, hub) -> int:
+def _hf_search(args: argparse.Namespace, hub: Any) -> int:
     query = args.target or ""
     repo_type = "dataset" if args.dataset else "model"
     if not query.strip():
@@ -4563,7 +4562,7 @@ def _hf_search(args, hub) -> int:
     return 0
 
 
-def _hf_info(args, hub) -> int:
+def _hf_info(args: argparse.Namespace, hub: Any) -> int:
     repo = args.target or ""
     repo_type = "dataset" if args.dataset else "model"
     if not repo:
@@ -4637,7 +4636,7 @@ def _hf_info(args, hub) -> int:
     return 0
 
 
-def _hf_file_table(title: str, files, limit: int | None = 15) -> None:
+def _hf_file_table(title: str, files: Any, limit: int | None = 15) -> None:
     rows = list(files)
     if limit is not None:
         rows = rows[:limit]
@@ -4653,7 +4652,7 @@ def _hf_file_table(title: str, files, limit: int | None = 15) -> None:
         console.print(f"[dim]… {len(files) - limit} more files; use --files to list all.[/]")
 
 
-def _hf_selected_files(info, patterns: list[str], all_files: bool):
+def _hf_selected_files(info: Any, patterns: list[str], all_files: bool) -> list[Any]:
     if all_files:
         return list(info.files)
     return [
@@ -4663,7 +4662,7 @@ def _hf_selected_files(info, patterns: list[str], all_files: bool):
     ]
 
 
-def _hf_download(args, hub) -> int:
+def _hf_download(args: argparse.Namespace, hub: Any) -> int:
     import shlex
 
     repo = args.target or ""
@@ -4767,7 +4766,7 @@ def _hf_download(args, hub) -> int:
     return 0
 
 
-def _hf_list(args, hub) -> int:
+def _hf_list(args: argparse.Namespace, hub: Any) -> int:
     repo_type = "dataset" if args.dataset else None
     rows = hub.local_repos(repo_type)
     if args.json:
@@ -4809,7 +4808,7 @@ def _hf_list(args, hub) -> int:
     return 0
 
 
-def _hf_remove(args, hub) -> int:
+def _hf_remove(args: argparse.Namespace, hub: Any) -> int:
     repo = args.target or ""
     repo_type = "dataset" if args.dataset else "model"
     if not repo:
@@ -4834,7 +4833,7 @@ def _hf_remove(args, hub) -> int:
     return 0
 
 
-def _hf_import(args, hub) -> int:
+def _hf_import(args: argparse.Namespace, hub: Any) -> int:
     import shlex
     import tempfile
 
@@ -5532,10 +5531,10 @@ def _pipeline(
         "review": ("review", review_model),
     }
 
-    def timed(label: str, fn):
+    def timed(label: str, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Record wall time per stage so the summary explains where it went."""
 
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             started = time.monotonic()
             role, model = stage_info.get(label, ("", ""))
             recorder.stage_start(label, role=role, model=model)
@@ -5572,7 +5571,7 @@ def _pipeline(
     recorder = RunRecorder(prompt, str(target))
     recorder.start()
 
-    def on_stage(stage) -> None:
+    def on_stage(stage: Any) -> None:
         """Print and publish each result the moment it exists."""
         key = stage.name.split()[0]
         role, model = stage_info.get(key, ("", ""))
@@ -5711,7 +5710,7 @@ def _harness(settings: Settings) -> int:
     return 0
 
 
-def _orchestrate(settings: Settings, args) -> int:
+def _orchestrate(settings: Settings, args: argparse.Namespace) -> int:
     """Route a coding task across a small repair model and larger workers."""
     from .harness import plan_roles
 
@@ -6015,6 +6014,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
     mcp_parser.add_argument("--port", type=int, default=8765, help="HTTP port")
+    mcp_parser.add_argument(
+        "--token",
+        default=None,
+        help="bearer token required for HTTP access (or set SOVEREIGN_MCP_TOKEN)",
+    )
     sub.add_parser("env", help="print shell exports for local OpenAI-compatible clients")
     sub.add_parser("clients", help="show local coding clients and their capabilities")
     sub.add_parser("backends", help="show which local inference servers are reachable")
@@ -6800,7 +6804,7 @@ def _agents(as_json: bool, as_tsv: bool) -> int:
 # --------------------------------------------------------------------- prompts
 
 
-def _prompts(args) -> int:
+def _prompts(args: argparse.Namespace) -> int:
     db = PromptDB()
     try:
         action = args.action or "list"
@@ -6961,7 +6965,7 @@ def _prompts(args) -> int:
 # --------------------------------------------------------------------- skill-db
 
 
-def _skill_db(args) -> int:
+def _skill_db(args: argparse.Namespace) -> int:
     db = SkillDB()
     try:
         action = args.action or "list"
@@ -7127,7 +7131,7 @@ def _skill_db(args) -> int:
 # --------------------------------------------------------------------- gateway-config
 
 
-def _gateway_config(args) -> int:
+def _gateway_config(args: argparse.Namespace) -> int:
     if args.show or args.write is False:
         print(render_gateway_config())
         return 0
@@ -7174,7 +7178,7 @@ def _parse_vars(pairs: list[str]) -> dict[str, str]:
 # --------------------------------------------------------------------- cache
 
 
-def _cache(args) -> int:
+def _cache(args: argparse.Namespace) -> int:
     from .tier_gateway import CACHE
 
     if args.action == "stats":
@@ -7220,7 +7224,7 @@ def _cache(args) -> int:
 # --------------------------------------------------------------------- warm
 
 
-def _warm_pool(args) -> int:
+def _warm_pool(args: argparse.Namespace) -> int:
     from .warm import pool as warm_pool
 
     p = warm_pool()
@@ -7254,7 +7258,7 @@ def _warm_pool(args) -> int:
 # --------------------------------------------------------------------- knowledge
 
 
-def _knowledge(args) -> int:
+def _knowledge(args: argparse.Namespace) -> int:
     from .knowledge import KnowledgeBase
 
     kb = KnowledgeBase()
@@ -7315,7 +7319,7 @@ def _knowledge(args) -> int:
         kb.close()
 
 
-def _pdf(args) -> int:
+def _pdf(args: argparse.Namespace) -> int:
     from .pdf import (
         extract_text,
         needs_ocr,
@@ -7385,7 +7389,7 @@ def _pdf(args) -> int:
     return 1
 
 
-def _ocr(args) -> int:
+def _ocr(args: argparse.Namespace) -> int:
     from .pdf import ocr_image, ocr_pdf
 
     path = args.path
@@ -7586,7 +7590,7 @@ def main(argv: list[str] | None = None) -> int:
         from .mcp import serve, serve_http
 
         if getattr(args, "http", False):
-            serve_http(host=args.host, port=args.port)
+            serve_http(host=args.host, port=args.port, token=getattr(args, "token", None))
         else:
             serve()
         return 0
@@ -7822,7 +7826,7 @@ def _stack() -> int:
 
     settings = _settings()
 
-    async def gather():
+    async def gather() -> tuple[Any, Any]:
         snapshot = await collect(settings)
         report = collect_live(settings, snapshot)
         return snapshot, report

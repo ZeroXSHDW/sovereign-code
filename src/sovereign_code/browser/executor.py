@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from ..errors import BrowserError, SensitiveFieldError
+from ..errors import BrowserError as BrowserError
+from ..errors import SensitiveFieldError as SensitiveFieldError
 from .actions import (
     SUBMIT_KEYS,
     Action,
@@ -199,7 +200,7 @@ def chromium_path() -> Path | None:
         return None
 
 
-def detect_captcha(observation: dict) -> bool:
+def detect_captcha(observation: dict[str, Any]) -> bool:
     blob = " ".join(
         [
             str(observation.get("url") or ""),
@@ -208,6 +209,50 @@ def detect_captcha(observation: dict) -> bool:
         ]
     ).lower()
     return any(marker in blob for marker in CAPTCHA_MARKERS)
+
+
+class ProfileLock:
+    """Cross-process exclusive lock for one Chromium profile.
+
+    ``browse``, the MCP server and web chat all use the same persistent
+    profile. Two Chromium processes on one profile corrupt it, so the second
+    caller gets a clear error instead of a half-broken browser.
+    """
+
+    def __init__(self, profile_dir: Path) -> None:
+        self.path = Path(profile_dir).expanduser() / ".sovereign.lock"
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        import fcntl
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise BrowserError(
+                f"another browser session is using {self.path.parent}; close it first"
+            ) from None
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        self._fd = fd
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(self._fd)
+            finally:
+                self._fd = None
 
 
 class BrowserSession:
@@ -229,6 +274,7 @@ class BrowserSession:
         self.page: Any = None
         self._blocked_url: str | None = None
         self._last_allowed_url: str | None = None
+        self._profile_lock: ProfileLock | None = None
 
     def __enter__(self) -> BrowserSession:
         return self
@@ -244,8 +290,12 @@ class BrowserSession:
             os.chmod(self.profile_dir, 0o700)
         except OSError:
             pass
-        self._playwright = sync_playwright().start()
+        if self._profile_lock is None:
+            lock = ProfileLock(self.profile_dir)
+            lock.acquire()
+            self._profile_lock = lock
         try:
+            self._playwright = sync_playwright().start()
             self.context = self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir),
                 headless=self.headless,
@@ -272,7 +322,7 @@ class BrowserSession:
         if self.context is None:
             return
 
-        def guard(route, request=None) -> None:
+        def guard(route: Any, request: Any = None) -> None:
             target = ""
             try:
                 req = request if request is not None else route.request
@@ -306,7 +356,7 @@ class BrowserSession:
             pass
 
     @staticmethod
-    def _is_main_frame_navigation(request) -> bool:
+    def _is_main_frame_navigation(request: Any) -> bool:
         """True for a top-level page load, false for a frame or a subresource."""
         try:
             if not request.is_navigation_request():
@@ -380,7 +430,7 @@ class BrowserSession:
             raise BrowserError(f"go back failed: {exc}") from exc
         self.page.wait_for_timeout(400)
         self._enforce_policy(self.page.url)
-        return self.page.url
+        return str(self.page.url)
 
     def forward(self) -> str:
         if self.page is None:
@@ -392,7 +442,7 @@ class BrowserSession:
             raise BrowserError(f"go forward failed: {exc}") from exc
         self.page.wait_for_timeout(400)
         self._enforce_policy(self.page.url)
-        return self.page.url
+        return str(self.page.url)
 
     def reload(self) -> str:
         if self.page is None:
@@ -404,9 +454,9 @@ class BrowserSession:
             raise BrowserError(f"reload failed: {exc}") from exc
         self.page.wait_for_timeout(400)
         self._enforce_policy(self.page.url)
-        return self.page.url
+        return str(self.page.url)
 
-    def observe(self) -> dict:
+    def observe(self) -> dict[str, Any]:
         if self.page is None:
             raise BrowserError("browser is not running")
         try:
@@ -424,7 +474,7 @@ class BrowserSession:
         return observation
 
     @staticmethod
-    def _blank_sensitive_values(observation: dict) -> None:
+    def _blank_sensitive_values(observation: dict[str, Any]) -> None:
         """Second line of defence: never hand a secret to the caller.
 
         The observation script already blanks sensitive fields; this keeps
@@ -434,7 +484,7 @@ class BrowserSession:
             if isinstance(element, dict) and element.get("sensitive") and element.get("value"):
                 element["value"] = ""
 
-    def _element(self, target: int):
+    def _element(self, target: int) -> Any:
         locator = self.page.locator(f'[data-sovereign-id="{target}"]')
         try:
             count = locator.count()
@@ -444,7 +494,7 @@ class BrowserSession:
             raise BrowserError(f"element {target} is stale; observe the page again")
         return locator.first
 
-    def _control_info(self, locator) -> tuple[str, str, str]:
+    def _control_info(self, locator: Any) -> tuple[str, str, str]:
         """Return (tag, type, visible label) for the control behind a locator."""
         try:
             info = locator.evaluate(_CONTROL_INFO_JS)
@@ -457,7 +507,7 @@ class BrowserSession:
         label = str(info.get("label") or "").strip()[:120]
         return tag, control_type, label
 
-    def _fallback_label(self, locator) -> str:
+    def _fallback_label(self, locator: Any) -> str:
         """Last resort label for a control with no visible text."""
         for attribute in ("name", "placeholder"):
             try:
@@ -468,13 +518,13 @@ class BrowserSession:
                 return value.replace("\n", " ").strip()[:120]
         return ""
 
-    def _label(self, locator, visible: str = "") -> str:
+    def _label(self, locator: Any, visible: str = "") -> str:
         """Human readable label used in messages and confirmations."""
         if not visible:
             _tag, _control_type, visible = self._control_info(locator)
         return visible or self._fallback_label(locator)
 
-    def _sensitive(self, locator) -> bool:
+    def _sensitive(self, locator: Any) -> bool:
         try:
             blob = locator.evaluate(
                 """(el) => [
@@ -489,7 +539,7 @@ class BrowserSession:
             return False
         return bool(SENSITIVE.search(str(blob)))
 
-    def _check_click_target(self, locator, base: str) -> None:
+    def _check_click_target(self, locator: Any, base: str) -> None:
         """Reject a click whose link points straight outside the policy."""
         try:
             href = locator.get_attribute("href")
@@ -533,7 +583,7 @@ class BrowserSession:
         self,
         action: Action,
         confirm: Callable[[str], bool] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         if self.page is None:
             raise BrowserError("browser is not running")
         self._blocked_url = None
@@ -673,4 +723,7 @@ class BrowserSession:
             except Exception:
                 pass
             self._playwright = None
+        if self._profile_lock is not None:
+            self._profile_lock.release()
+            self._profile_lock = None
         self.page = None

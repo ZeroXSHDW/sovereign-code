@@ -191,7 +191,7 @@ def codex_catalog_path() -> Path:
     return codex_home_path() / "model-catalog.json"
 
 
-def _cached_instructions() -> dict | None:
+def _cached_instructions() -> dict[str, Any] | None:
     """The prompt template Codex already uses, from its own cache.
 
     Codex refuses a model catalog entry without instructions, and the ones it
@@ -208,7 +208,7 @@ def _cached_instructions() -> dict | None:
     return None
 
 
-def codex_model_catalog() -> dict:
+def codex_model_catalog() -> dict[str, Any]:
     """A model catalog Codex can read, describing the local routes.
 
     Without one, Codex falls back to metadata for a model it has never heard
@@ -466,9 +466,7 @@ def plan_launch(
         # An explicit gateway alias (local-glm, cloud-kimi-k3, …) is honored;
         # a raw Ollama tag is not, because Claude needs the 64k local model.
         claude_model = (
-            agent_model
-            if agent_model.startswith("local-") or agent_model.startswith("cloud-")
-            else "local-claude"
+            agent_model if agent_model.startswith(("local-", "cloud-")) else "local-claude"
         )
         env.update(
             {

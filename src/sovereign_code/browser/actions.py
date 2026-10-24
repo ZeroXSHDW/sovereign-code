@@ -8,9 +8,11 @@ import re
 import socket
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from ..errors import ActionError, PolicyError
+from ..errors import ActionError as ActionError
+from ..errors import PolicyError as PolicyError
 
 ALLOWED_KEYS = {
     "Enter",
@@ -87,7 +89,7 @@ class Action:
     summary: str = ""
     reason: str = ""
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         defaults = {
             "url": "",
             "target": None,
@@ -100,7 +102,7 @@ class Action:
             "summary": "",
             "reason": "",
         }
-        data: dict = {"action": self.kind}
+        data: dict[str, Any] = {"action": self.kind}
         for field, default in defaults.items():
             value = getattr(self, field)
             if value != default:
@@ -125,7 +127,7 @@ class BrowserPolicy:
         )
 
 
-def _first_json_object(text: str) -> dict:
+def _first_json_object(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
@@ -142,14 +144,14 @@ def _first_json_object(text: str) -> dict:
     return data
 
 
-def _require_int(data: dict, key: str) -> int:
+def _require_int(data: dict[str, Any], key: str) -> int:
     value = data.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ActionError(f"`{key}` must be a non-negative integer")
     return value
 
 
-def parse_action(payload: str | dict) -> Action:
+def parse_action(payload: str | dict[str, Any]) -> Action:
     """Parse one model reply into a validated Action."""
     data = _first_json_object(payload) if isinstance(payload, str) else dict(payload)
     kind = str(data.get("action") or data.get("kind") or "").strip().lower()

@@ -454,7 +454,7 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
     }
 
 
-def _normalise_provider(value: dict) -> dict[str, Any]:
+def _normalise_provider(value: dict[str, Any]) -> dict[str, Any]:
     """Translate a V1 provider block to V2 and keep the user's model overrides."""
     normalized: dict[str, Any] = {
         key: item
@@ -465,7 +465,7 @@ def _normalise_provider(value: dict) -> dict[str, Any]:
         normalized["package"] = value["npm"]
     if "settings" not in normalized and isinstance(value.get("options"), dict):
         normalized["settings"] = value["options"]
-    models: dict[str, dict] = {}
+    models: dict[str, dict[str, Any]] = {}
     for name, model in (value.get("models") or {}).items():
         if not isinstance(model, dict):
             continue
@@ -504,7 +504,7 @@ def _v1_permission_rules(value: object) -> list[dict[str, str]]:
     return rules
 
 
-def _merge_permission_rules(base: list[dict], extra: object) -> list[dict[str, str]]:
+def _merge_permission_rules(base: list[dict[str, Any]], extra: object) -> list[dict[str, str]]:
     """Append user rules without duplicating the generated ones."""
     rules: list[dict[str, str]] = [rule for rule in base if isinstance(rule, dict)]
     seen = {(rule.get("action"), rule.get("resource"), rule.get("effect")) for rule in rules}
@@ -842,7 +842,7 @@ def install_qwen_router(path: Path | None = None) -> Path:
     return _write(target, json.dumps(data, indent=2) + "\n")
 
 
-def _mcp_entry() -> dict:
+def _mcp_entry() -> dict[str, Any]:
     command, *args = sovereign_argv()
     return {"command": command, "args": args, "env": {"SOVEREIGN_MCP_COMPUTER": "1"}}
 
@@ -951,7 +951,7 @@ def codex_needs_openai_signin(path: Path | None = None) -> bool:
         data = tomllib.loads(target.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return True
-    provider_id = data.get("model_provider")
+    provider_id = str(data.get("model_provider") or "")
     if not provider_id:
         # No provider chosen: the built-in OpenAI one is used.
         return True

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -21,7 +21,7 @@ from ..config import Settings
 from ..memory import project_context
 from ..models import ModelView
 from ..ollama import OllamaClient
-from ..router import Task, choose, mode_label, system_prompt, task_from_name
+from ..router import Selection, Task, choose, mode_label, system_prompt, task_from_name
 from ..sessions import SessionWriter, prune_sessions, scan_sessions, select_prunable
 from ..status import Snapshot, collect
 from ..system import Memory, wired_limit_gb
@@ -118,7 +118,7 @@ class SovereignApp(App[None]):
         self._refresh_busy = False
         self._verify_busy = False
         self.last_verify: list[AliasResult] = []
-        self._model_signature: tuple = ()
+        self._model_signature: tuple[Any, ...] = ()
         self.ollama = OllamaClient(self.settings.ollama_url)
         self._started_at = time.monotonic()
 
@@ -305,7 +305,7 @@ class SovereignApp(App[None]):
         await self.send(value)
 
     # ---------------------------------------------------------------- chat
-    def current_selection(self):
+    def current_selection(self) -> Selection | None:
         if not self.snapshot:
             return None
         return choose(
@@ -366,11 +366,15 @@ class SovereignApp(App[None]):
         await self.add_message("system", f"Unloaded {', '.join(others)} to free memory.")
         await self.refresh_snapshot()
 
-    async def _stream_reply(self, selection) -> None:
+    async def _stream_reply(self, selection: Selection) -> None:
         # The user turn is already in self.history, so this only has to
         # render the model's answer into the placeholder message.
         assistant = self._assistant
         if assistant is None:
+            return
+        model = selection.model
+        if model is None:
+            await assistant.update("**No local model is selected.**")
             return
         system = system_prompt(self.ai_task)
         context = self._project_memory()
@@ -382,11 +386,11 @@ class SovereignApp(App[None]):
         stats = ""
         last_update = 0.0
         try:
-            think = False if selection.model.spec.thinking else None
+            think = False if model.spec.thinking else None
             async for chunk in self.ollama.chat_stream(
-                selection.model.tag,
+                model.tag,
                 messages,
-                context=selection.context,
+                context=selection.context or 0,
                 temperature=self.settings.temperature,
                 think=think,
             ):
@@ -398,7 +402,7 @@ class SovereignApp(App[None]):
                         last_update = now
                 if chunk.done:
                     stats = (
-                        f"\n\n`{selection.model.tag} · {selection.context} ctx · "
+                        f"\n\n`{model.tag} · {selection.context} ctx · "
                         f"{chunk.eval_count} tok · {chunk.total_duration_ns / 1e9:.1f}s`"
                     )
             answer = "".join(chunks).strip()
@@ -407,7 +411,7 @@ class SovereignApp(App[None]):
             await assistant.update(answer + stats)
             self.history.append({"role": "assistant", "content": answer})
             if self.session:
-                self.session.append("assistant", answer, model=selection.model.tag)
+                self.session.append("assistant", answer, model=model.tag)
         except Exception as exc:
             await assistant.update(f"**Local model error:** {exc}")
             if self.session:
@@ -655,7 +659,7 @@ class SovereignApp(App[None]):
                     _ast.Mod: _op.mod,
                 }
 
-                def _eval(node):
+                def _eval(node: Any) -> Any:
                     if isinstance(node, _ast.Expression):
                         return _eval(node.body)
                     if isinstance(node, _ast.Constant) and isinstance(node.value, (int, float)):

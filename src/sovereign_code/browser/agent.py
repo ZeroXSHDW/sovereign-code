@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -57,7 +58,7 @@ Reply: {"action":"done","summary":"The heading is Example Domain."}
 """
 
 
-def _is_secret_element(element: dict) -> bool:
+def _is_secret_element(element: dict[str, Any]) -> bool:
     """True when an observed element looks like a password or one-time field.
 
     The executor already flags these; repeating the check here means a
@@ -88,10 +89,10 @@ class ModelPlanner:
         self.model = model
         self.timeout = timeout
 
-    def _observation(self, observation: dict) -> dict:
+    def _observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         elements = []
         for element in observation.get("elements", [])[:80]:
-            item: dict = {}
+            item: dict[str, Any] = {}
             for key in (
                 "id",
                 "tag",
@@ -122,7 +123,7 @@ class ModelPlanner:
     def plan(
         self,
         task: str,
-        observation: dict,
+        observation: dict[str, Any],
         history: list[str],
         correction: str = "",
     ) -> str:
@@ -232,7 +233,7 @@ def _redact_text(text: str) -> str:
     return _URL_RE.sub(lambda match: _redact_url(match.group(0)), str(text or ""))
 
 
-def _action_record(action: Action) -> dict:
+def _action_record(action: Action) -> dict[str, Any]:
     data = action.as_dict()
     if action.kind == "fill":
         data["text"] = f"<{len(action.text)} chars>"

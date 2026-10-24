@@ -22,7 +22,8 @@ import httpx
 from .config import LOCAL_AI_ROOT
 from .http import client_for
 from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer, content_length
-from .tier_gateway import local_only, port_open
+from .tier_gateway import local_only
+from .tier_gateway import port_open as port_open
 
 DEFAULT_PORT = 4020
 DEFAULT_ROUTER = "http://127.0.0.1:4010"
@@ -196,6 +197,21 @@ class Handler(GuardedHandler):
     def log_message(self, *_args: object) -> None:
         return
 
+    def end_headers(self) -> None:
+        # The page is self-contained; these headers keep a compromised page or
+        # a network attacker from framing it, sniffing types, or loading
+        # anything off-origin.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        )
+        super().end_headers()
+
     def _host_is_local(self) -> bool:
         """True when the request was addressed to this server by name.
 
@@ -319,7 +335,7 @@ class Handler(GuardedHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-        def event(data: dict) -> None:
+        def event(data: dict[str, Any]) -> None:
             try:
                 self.wfile.write(f"data: {json.dumps(data)}\n\n".encode())
                 self.wfile.flush()

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -34,7 +35,7 @@ class Sample:
     runners: int = 0
 
 
-def parse_ps(payload: dict) -> tuple[tuple[str, float], ...]:
+def parse_ps(payload: dict[str, Any]) -> tuple[tuple[str, float], ...]:
     """Stable (name, size_gb) pairs from an /api/ps response."""
     rows = []
     for item in payload.get("models", []):

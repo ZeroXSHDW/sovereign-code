@@ -241,8 +241,8 @@ _SIMPLE_SIGNALS = (
     "how do you spell",
 )
 
-FAST_TOKENS = 240
-BALANCED_TOKENS = 1200
+FAST_TOKENS = 400
+BALANCED_TOKENS = 2000
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
@@ -309,12 +309,12 @@ def classify(
     # 27B made every "hi" a 30-second, memory-hungry request. Tools mostly need
     # a reliable 9B; the 27B is for genuinely large tool tasks.
     if has_tools:
-        if tokens > 15000:
+        if tokens > 20000:
             return DEEP, "large tool task"
         return BALANCED, "tool use"
     if turns >= 8:
         return DEEP, "long conversation"
-    if total_tokens > 28000:
+    if total_tokens > 32000:
         return DEEP, "large context"
     if tokens > BALANCED_TOKENS or code or reason:
         return DEEP, "complex/code/reasoning prompt"

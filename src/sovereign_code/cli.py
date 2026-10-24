@@ -3947,7 +3947,7 @@ def _mlx_cmd(settings: Settings, args) -> int:
         console.print(f"[dim]Log: {mlx.log_path()}[/]")
         status = wait_online(backend)
         if status.online:
-            if mlx.warm(model, timeout=120, wait=90):
+            if mlx.warm(model, timeout=300, wait=180):
                 console.print("[dim]Model warmed for the first prompt.[/]")
             console.print(f"[green]MLX server online[/] · {len(status.models)} model(s)")
             console.print("[dim]Run: sovereign run <model> 'prompt'[/]")
@@ -5713,7 +5713,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="add the OpenRouter provider and remote models to OpenCode (opt-in)",
     )
-    cloud.add_argument("--timeout", type=float, default=12.0, help="probe timeout in seconds")
+    cloud.add_argument("--timeout", type=float, default=30.0, help="probe timeout in seconds")
     cloud.add_argument(
         "--set-key",
         choices=sorted(PROVIDERS),
@@ -5740,7 +5740,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="send a test completion through the gateway aliases")
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
     verify.add_argument("--embedding", action="store_true", help="also check the embedding model")
-    verify.add_argument("--timeout", type=float, default=120.0, help="per-alias timeout in seconds")
+    verify.add_argument("--timeout", type=float, default=300.0, help="per-alias timeout in seconds")
     gateway = sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     gateway.add_argument(
         "--restart", action="store_true", help="restart the supervisor and wait for health"
@@ -5839,7 +5839,7 @@ def build_parser() -> argparse.ArgumentParser:
     guard = sub.add_parser("guardian", help="check/restore the gateway and bridge (no 24/7 loop)")
     guard.add_argument("--status", action="store_true", help="report only, start nothing")
     guard.add_argument("--watch", action="store_true", help="keep checking until interrupted")
-    guard.add_argument("--interval", type=float, default=30.0, help="seconds between checks")
+    guard.add_argument("--interval", type=float, default=60.0, help="seconds between checks")
     guard.add_argument("--json", action="store_true", help="print machine readable output")
     auto = sub.add_parser(
         "autostart",
@@ -5931,14 +5931,14 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--path", default=".")
     search.add_argument("--model", default=DEFAULT_EMBED)
-    search.add_argument("--top", type=int, default=5)
+    search.add_argument("--top", type=int, default=10)
 
     summary = sub.add_parser("summarize", help="summarize a local file or URL")
     summary.add_argument("path", nargs="?", default=None)
     summary.add_argument("--url", default=None)
     summary.add_argument("--model", default="local-chat")
     summary.add_argument("--max-chars", type=int, default=24000)
-    summary.add_argument("--max-tokens", type=int, default=512)
+    summary.add_argument("--max-tokens", type=int, default=1024)
 
     logs = sub.add_parser("logs", help="show the last lines of a local log")
     logs.add_argument("target", nargs="?", default="gateway", choices=TARGETS)
@@ -5947,10 +5947,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sessions = sub.add_parser("sessions", help="list or prune stored chat sessions")
     sessions.add_argument("--prune", action="store_true", help="delete old sessions")
-    sessions.add_argument("--days", type=float, default=30.0, help="retention in days (default 30)")
+    sessions.add_argument("--days", type=float, default=90.0, help="retention in days (default 90)")
     sessions.add_argument("--keep", type=int, default=50, help="always keep the newest N")
     sessions.add_argument("--dry-run", action="store_true", help="show what --prune would delete")
-    sessions.add_argument("--limit", type=int, default=20, help="rows to list")
+    sessions.add_argument("--limit", type=int, default=50, help="rows to list")
     sessions.add_argument("--search", default=None, metavar="TEXT", help="search chat history")
     sessions.add_argument(
         "--export", default=None, metavar="PATH", help="export all sessions to JSONL"
@@ -6102,7 +6102,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="download (if needed) and run any model on a prompt")
     run.add_argument("model")
     run.add_argument("prompt", nargs="?", default=None)
-    run.add_argument("--context", type=int, default=16384)
+    run.add_argument("--context", type=int, default=32768)
     run.add_argument("--temperature", type=float, default=0.25)
     run.add_argument("--system", default=None)
     run.add_argument("--no-pull", action="store_true", help="fail instead of auto-pulling")
@@ -6221,7 +6221,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="downloads",
         choices=("downloads", "likes", "last_modified", "created_at", "trending_score"),
     )
-    hf.add_argument("--limit", type=int, default=20, help="search results (max 100)")
+    hf.add_argument("--limit", type=int, default=30, help="search results (max 100)")
     hf.add_argument("--include", action="append", default=[], help="file glob to download")
     hf.add_argument("--exclude", action="append", default=[], help="file glob to skip")
     hf.add_argument(
@@ -6268,7 +6268,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skills.add_argument("--name", action="append", default=[], help="install only these names")
     skills.add_argument("--dry-run", action="store_true")
-    skills.add_argument("--limit", type=int, default=30)
+    skills.add_argument("--limit", type=int, default=50)
 
     skill = sub.add_parser("skill", help="show or run a saved skill prompt")
     skill.add_argument("name", nargs="?", default=None)
@@ -6353,7 +6353,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="list the projects that are using a model now, or used one recently",
     )
     projects.add_argument("--json", action="store_true", help="machine-readable output")
-    projects.add_argument("--limit", type=int, default=20, help="rows to list")
+    projects.add_argument("--limit", type=int, default=50, help="rows to list")
     projects.add_argument("--active", action="store_true", help="only projects running right now")
     projects.add_argument("--search", default=None, metavar="TEXT", help="filter by name or model")
 
@@ -6467,7 +6467,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     knowledge.add_argument("--root", default=None, help="directory to index (for index)")
     knowledge.add_argument("--model", default="nomic-embed-text", help="embedding model")
-    knowledge.add_argument("--top", type=int, default=10, help="top results (for search)")
+    knowledge.add_argument("--top", type=int, default=20, help="top results (for search)")
+
+    # --- pdf / ocr --------------------------------------------------------
+    pdf = sub.add_parser("pdf", help="read PDFs with text extraction, OCR, and vision")
+    pdf.add_argument(
+        "action",
+        nargs="?",
+        default="text",
+        choices=("info", "text", "ocr", "images", "vision", "json"),
+    )
+    pdf.add_argument("path", nargs="?", default=None, help="PDF file")
+    pdf.add_argument("--dpi", type=int, default=200, help="render DPI for OCR/vision")
+    pdf.add_argument("--lang", default="eng", help="Tesseract language")
+    pdf.add_argument("--model", default=None, help="vision model for `vision`")
+    pdf.add_argument("--prompt", default=None, help="prompt for `vision`")
+    pdf.add_argument("--ocr", default="auto", help="auto|true|false|force")
+    pdf.add_argument("--out", default=None, help="output dir for rendered images")
+
+    # alias command
+    ocr = sub.add_parser("ocr", help="OCR a PDF or image (alias for pdf ocr)")
+    ocr.add_argument("path", nargs="?", default=None, help="PDF or image file")
+    ocr.add_argument("--dpi", type=int, default=200, help="render DPI")
+    ocr.add_argument("--lang", default="eng", help="Tesseract language")
 
     return parser
 
@@ -7026,6 +7048,80 @@ def _knowledge(args) -> int:
         kb.close()
 
 
+def _pdf(args) -> int:
+    from .pdf import (
+        extract_text,
+        needs_ocr,
+        ocr_pdf,
+        page_count,
+        read_pdf,
+        render_pages,
+        vision_review,
+    )
+
+    path = args.path
+    if not path:
+        console.print("[red]Give a PDF path.[/]")
+        return 1
+    target = Path(path)
+    if not target.is_file():
+        console.print(f"[red]Not a file:[/] {target}")
+        return 1
+
+    action = args.action or "text"
+    if action == "info":
+        console.print(f"pages: {page_count(target)}")
+        console.print(f"needs_ocr: {needs_ocr(target)}")
+        return 0
+    if action == "text":
+        text = extract_text(target)
+        console.print(text)
+        return 0
+    if action == "ocr":
+        text = ocr_pdf(target, dpi=args.dpi, lang=args.lang)
+        console.print(text)
+        return 0
+    if action == "images":
+        out = args.out
+        imgs = render_pages(target, dpi=args.dpi, output_dir=out)
+        for img in imgs:
+            console.print(str(img))
+        return 0
+    if action == "vision":
+        model = args.model
+        prompt = args.prompt or "Read this PDF page and extract all data accurately."
+        reviews = vision_review(target, prompt=prompt, model=model, dpi=args.dpi)
+        for i, review in enumerate(reviews, 1):
+            console.print(Panel(str(review), title=f"page {i}", border_style="cyan"))
+        return 0
+    if action == "json":
+        doc = read_pdf(target, ocr=args.ocr, dpi=args.dpi, lang=args.lang)
+        import json as _json
+
+        console.print(_json.dumps(doc.to_dict(), indent=2))
+        return 0
+    console.print(f"[red]Unknown action:[/] {action}")
+    return 1
+
+
+def _ocr(args) -> int:
+    from .pdf import ocr_image, ocr_pdf
+
+    path = args.path
+    if not path:
+        console.print("[red]Give a file path.[/]")
+        return 1
+    target = Path(path)
+    if not target.is_file():
+        console.print(f"[red]Not a file:[/] {target}")
+        return 1
+    if target.suffix.lower() == ".pdf":
+        console.print(ocr_pdf(target, dpi=args.dpi, lang=args.lang))
+    else:
+        console.print(ocr_image(target, lang=args.lang))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -7419,6 +7515,10 @@ def main(argv: list[str] | None = None) -> int:
         return _warm_pool(args)
     if command == "knowledge":
         return _knowledge(args)
+    if command == "pdf":
+        return _pdf(args)
+    if command == "ocr":
+        return _ocr(args)
     parser.print_help()
     return 2
 

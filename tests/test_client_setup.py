@@ -28,7 +28,7 @@ args = ["-m", "sovereign_code", "mcp"]
 
 def test_opencode_config_has_working_provider_and_mcp() -> None:
     config = client_setup.opencode_config()
-    assert config["model"] == "sovereign/best"
+    assert config["model"] == "sovereign/auto"
     local = config["provider"]["local"]
     assert local["options"]["baseURL"] == "http://127.0.0.1:11434/v1"
     assert local["models"]["qwen3-coder:30b"]["tool_call"] is True

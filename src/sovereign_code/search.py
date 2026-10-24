@@ -19,10 +19,10 @@ from .errors import EmbedError
 from .http import shared_client
 
 DEFAULT_EMBED = "nomic-embed-text"
-CHUNK_CHARS = 1200
-CHUNK_OVERLAP = 160
-MAX_FILE_BYTES = 512 * 1024
-EMBED_BATCH = 16
+CHUNK_CHARS = 2000
+CHUNK_OVERLAP = 240
+MAX_FILE_BYTES = 1024 * 1024
+EMBED_BATCH = 32
 
 IGNORED_DIRS = {
     ".git",
@@ -51,7 +51,6 @@ IGNORED_EXT = {
     ".gif",
     ".webp",
     ".ico",
-    ".pdf",
     ".zip",
     ".gz",
     ".tar",
@@ -83,7 +82,7 @@ class SearchResult:
 
 
 def _base(url: str) -> str:
-    value = url.strip()
+    value = str(url or "").strip()
     return value if value.startswith("http") else f"http://{value}"
 
 
@@ -150,6 +149,7 @@ def chunk_text(
     chunks: list[tuple[int, str]] = []
     start = 0
     size = len(text)
+    overlap = min(overlap, max(0, max_chars - 1))
     while start < size:
         end = min(start + max_chars, size)
         chunk = text[start:end]
@@ -158,6 +158,8 @@ def chunk_text(
         if end >= size:
             break
         start = end - overlap
+        if start <= 0:
+            start = end
     return chunks
 
 
@@ -184,7 +186,7 @@ def iter_source_files(root: Path) -> Iterator[Path]:
                     head = handle.read(1024)
             except OSError:
                 continue
-            if _looks_binary(head):
+            if path.suffix.lower() != ".pdf" and _looks_binary(head):
                 continue
             yield path
 
@@ -297,8 +299,13 @@ def build_index(
         if limit is not None and files >= limit:
             break
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            if path.suffix.lower() == ".pdf":
+                from .pdf import read_pdf
+
+                text = read_pdf(path).combined_text()
+            else:
+                text = path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, RuntimeError, ValueError):
             continue
         files += 1
         for line, chunk in chunk_text(text):

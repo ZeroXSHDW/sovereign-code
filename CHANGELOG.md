@@ -4,6 +4,19 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+### Added
+- **PDF auto-read** (`src/sovereign_code/pdf.py`): `auto_read()` detects local paths vs URLs,
+  downloads if needed, extracts text, OCRs scanned pages, and returns the document.
+  Compatibility shims (`pdf_ocr`, `pdf_reader`, `pdf_tools`, `doc_ocr`, `document`,
+  `documents`, `ocr`) re-export the module. `summarize` now reads PDFs directly.
+- **OpenCode auto mode**: client config defaults to the `sovereign/auto` model alias
+  with `/pdf` and `/browse` command templates; MCP exposes `pdf_auto` and `browser_*`.
+
+### Changed
+- Raised timeouts, limits and token budgets across the CLI, MCP server, tier gateway,
+  browser agent, search, skills, terminal, repomap and webchat for the upgrade pass.
+- Aligned package version to 0.4.0.
+
 ## [0.4.0] - 2026-10-23
 
 ### Added

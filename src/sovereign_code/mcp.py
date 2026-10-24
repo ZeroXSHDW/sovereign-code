@@ -203,7 +203,7 @@ TOOLS: list[dict[str, Any]] = [
         {
             "path": {"type": "string", "default": "."},
             "max_files": {"type": "integer", "default": 600},
-            "max_tokens": {"type": "integer", "default": 2400},
+            "max_tokens": {"type": "integer", "default": 4000},
         },
     ),
     _tool(
@@ -231,6 +231,37 @@ TOOLS: list[dict[str, Any]] = [
             "end": {"type": "integer", "default": 300},
         },
         ["path"],
+    ),
+    _tool(
+        "pdf_read",
+        "Read a PDF: extract text, OCR scanned pages, and optionally render page images.",
+        {
+            "path": {"type": "string"},
+            "ocr": {"type": "string", "default": "auto"},
+            "dpi": {"type": "integer", "default": 200},
+            "render_images": {"type": "boolean", "default": False},
+        },
+        ["path"],
+    ),
+    _tool(
+        "pdf_ocr",
+        "OCR a PDF or image and return the extracted text.",
+        {
+            "path": {"type": "string"},
+            "dpi": {"type": "integer", "default": 200},
+            "lang": {"type": "string", "default": "eng"},
+        },
+        ["path"],
+    ),
+    _tool(
+        "pdf_auto",
+        "Auto-read a PDF from a local path or URL.",
+        {
+            "source": {"type": "string"},
+            "dpi": {"type": "integer", "default": 200},
+            "lang": {"type": "string", "default": "eng"},
+        },
+        ["source"],
     ),
     _tool(
         "repo_write",
@@ -686,7 +717,7 @@ def _repo_read(path: str, start: int, end: int) -> dict[str, Any]:
     from .repomap import read_slice
 
     target = _workspace_path(path)
-    return read_slice(target, start=start, end=end, max_chars=32000)
+    return read_slice(target, start=start, end=end, max_chars=64000)
 
 
 def _run_command(command: str, cwd: str = "", timeout: int = 120) -> dict[str, Any]:
@@ -919,6 +950,7 @@ def _browser_observation(observation: dict) -> dict:
         "url": observation.get("url"),
         "title": observation.get("title"),
         "captcha": observation.get("captcha"),
+        "auth_required": observation.get("auth_required", observation.get("captcha")),
         "text": str(observation.get("text") or "")[:6000],
         "elements": observation.get("elements") or [],
     }
@@ -1145,7 +1177,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
             _repo_map(
                 str(args.get("path") or "."),
                 int(args.get("max_files") or 600),
-                int(args.get("max_tokens") or 2400),
+                int(args.get("max_tokens") or 4000),
             )
         )
     if name == "repo_search":
@@ -1167,6 +1199,40 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 int(args.get("end") or 300),
             )
         )
+    if name == "pdf_read":
+        from .pdf import read_pdf
+
+        doc = read_pdf(
+            str(args.get("path") or ""),
+            ocr=str(args.get("ocr") or "auto"),
+            dpi=int(args.get("dpi") or 200),
+            render_images=bool(args.get("render_images", False)),
+        )
+        return _text(doc.to_dict())
+    if name == "pdf_ocr":
+        from pathlib import Path
+
+        from .pdf import ocr_image, ocr_pdf
+
+        pdf_target = Path(str(args.get("path") or "")).expanduser()
+        if pdf_target.suffix.lower() == ".pdf":
+            return _text(
+                ocr_pdf(
+                    pdf_target,
+                    dpi=int(args.get("dpi") or 200),
+                    lang=str(args.get("lang") or "eng"),
+                )
+            )
+        return _text(ocr_image(pdf_target, lang=str(args.get("lang") or "eng")))
+    if name == "pdf_auto":
+        from .pdf import auto_read
+
+        auto_doc: Any = auto_read(
+            str(args.get("source") or ""),
+            dpi=int(args.get("dpi") or 200),
+            lang=str(args.get("lang") or "eng"),
+        )
+        return _text(auto_doc.to_dict() if hasattr(auto_doc, "to_dict") else str(auto_doc))
     if name == "repo_write":
         return _text(
             _repo_write(

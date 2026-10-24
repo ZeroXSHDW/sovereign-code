@@ -57,11 +57,16 @@ def read_text_source(
     max_chars: int = MAX_CHARS,
 ) -> str:
     if path:
-        data = Path(path).read_bytes()
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            text = data.decode("utf-8", errors="replace")
+        if Path(path).suffix.lower() == ".pdf":
+            from .pdf import read_pdf
+
+            text = read_pdf(path).combined_text()
+        else:
+            data = Path(path).read_bytes()
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = data.decode("utf-8", errors="replace")
     elif url:
         text = _fetch(url, timeout=20.0).text
     else:

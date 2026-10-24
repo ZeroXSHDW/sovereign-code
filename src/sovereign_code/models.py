@@ -333,6 +333,36 @@ CATALOG: dict[str, ModelSpec] = {
         strengths=("fast", "chat"),
         summary="Compact, fast general model.",
     ),
+    # --- Lightweight local models (small, fast, run on any Mac) ---------------
+    # Small Ollama tags that download quickly and run on modest hardware. They
+    # are the right default for smoke tests, quick edits and low-memory machines.
+    "llama3.2": ModelSpec(
+        tag="llama3.2",
+        role=CHAT,
+        params_b=3.0,
+        size_gb=2.0,
+        max_context=131072,
+        strengths=("chat", "general", "fast"),
+        summary="Llama 3.2 3B: small, fast general chat model.",
+    ),
+    "llama3.2:1b": ModelSpec(
+        tag="llama3.2:1b",
+        role=FAST,
+        params_b=1.0,
+        size_gb=0.8,
+        max_context=131072,
+        strengths=("fast", "chat", "general"),
+        summary="Llama 3.2 1B: tiny, fastest general model.",
+    ),
+    "qwen2.5": ModelSpec(
+        tag="qwen2.5",
+        role=CHAT,
+        params_b=7.6,
+        size_gb=4.4,
+        max_context=32768,
+        strengths=("chat", "general", "tools"),
+        summary="Qwen 2.5 7B: small, fast general model.",
+    ),
 }
 
 TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
@@ -376,6 +406,9 @@ TASK_PREFERENCE: dict[str, tuple[str, ...]] = {
     FAST: (
         "qwen3.5:4b",
         "qwen3.5:9b",
+        "llama3.2:1b",
+        "llama3.2",
+        "qwen2.5",
     ),
     GENERAL: (
         "qwen3.8:27b",
@@ -796,6 +829,7 @@ REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     # general / chat
     "qwen2.5:0.5b": ("tiny general model", 0.4),
     "qwen2.5:3b": ("fast general model", 1.9),
+    "qwen2.5": ("Qwen 2.5 7B; small fast general model", 4.4),
     "qwen2.5:7b": ("general model", 4.4),
     "qwen2.5:32b": ("large general model; too big for 24 GB", 20.0),
     "qwen3:0.6b": ("tiny current-gen model", 0.4),
@@ -803,6 +837,7 @@ REMOTE_CATALOG: dict[str, tuple[str, float]] = {
     "qwen3:8b": ("current-gen general model with reasoning", 4.9),
     "qwen3:14b": ("current-gen general model with reasoning", 9.0),
     "qwen3:32b": ("large reasoning model; too big for 24 GB", 20.0),
+    "llama3.2": ("Llama 3.2 3B; small fast general chat model", 2.0),
     "llama3.2:1b": ("smallest general model", 0.8),
     "llama3.2:3b": ("tiny fast general model", 2.0),
     "llama3.1:8b": ("reasoning fallback with long context", 4.9),

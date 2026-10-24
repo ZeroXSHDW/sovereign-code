@@ -200,7 +200,7 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
     max_context = max(2048, int(max_context))
     config = {
         "$schema": "https://opencode.ai/config.json",
-        "model": "sovereign/best",
+        "model": "sovereign/auto",
         "small_model": "sovereign/balanced",
         "permission": {"edit": "allow", "bash": "allow"},
         "provider": {
@@ -385,7 +385,7 @@ def install_opencode_mcp(
     )
     # The tier gateway is the default: `auto` for work, the 9B for small
     # background calls so OpenCode does not swap models on every turn.
-    merged["model"] = "sovereign/best"
+    merged["model"] = "sovereign/auto"
     merged["small_model"] = "sovereign/balanced"
     # Our server entry must win over a stale command path, while other MCP
     # servers the user added are preserved.

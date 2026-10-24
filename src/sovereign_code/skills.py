@@ -26,7 +26,7 @@ USER_SKILLS_DIR = LOCAL_AI_ROOT / "config" / "skills"
 
 # The filesystem walk read the first screen of every skill file; the index
 # stores whole bodies, so the same slice is taken from there.
-BODY_CHARS = 4000
+BODY_CHARS = 8000
 
 # How many extra name matches the index may fetch for one search. The cap
 # keeps a very broad query from reading the body of every skill.

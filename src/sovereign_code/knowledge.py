@@ -87,7 +87,7 @@ class KnowledgeBase:
         embed_model: str = DEFAULT_EMBED,
         limit: int | None = None,
     ) -> dict[str, int]:
-        """Embed every .md under ``root`` and record it as searchable."""
+        """Embed every supported file (including PDFs) under ``root``."""
         from datetime import datetime
 
         root_path = Path(root).expanduser().resolve()

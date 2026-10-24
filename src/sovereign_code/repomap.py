@@ -245,6 +245,13 @@ def iter_files(
 
 
 def _read_text(path: Path) -> str:
+    if path.suffix.lower() == ".pdf":
+        try:
+            from .pdf import read_pdf
+
+            return read_pdf(path).combined_text()
+        except (OSError, RuntimeError, ValueError):
+            return ""
     try:
         data = path.read_bytes()
     except OSError:
@@ -415,7 +422,7 @@ def read_slice(
     *,
     start: int = 1,
     end: int = 200,
-    max_chars: int = 24_000,
+    max_chars: int = 48_000,
 ) -> dict[str, object]:
     """Numbered lines ``start``..``end`` (1-based, inclusive), capped in size."""
     target = path.expanduser()

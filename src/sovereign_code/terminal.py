@@ -21,7 +21,7 @@ from typing import Any
 from .config import DATA_DIR
 from .safefile import write_private
 
-MAX_OUTPUT = 100_000
+MAX_OUTPUT = 200_000
 _SUDO = re.compile(r"^\s*(sudo|doas)\s+(.*)$", re.DOTALL)
 
 
@@ -205,7 +205,7 @@ def run_shell(
     if not text:
         raise ValueError("command is empty")
     workdir = _workdir(cwd)
-    budget = max(1, min(3600, int(timeout or 120)))
+    budget = max(1, min(7200, int(timeout or 120)))
     privileged = bool(_SUDO.match(text))
     if privileged and sys.platform == "darwin":
         body = _SUDO.match(text)

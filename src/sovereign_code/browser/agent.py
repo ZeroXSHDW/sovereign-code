@@ -248,7 +248,7 @@ class BrowserAgent:
         session: BrowserSession,
         planner: ModelPlanner,
         policy: BrowserPolicy,
-        max_steps: int = 100,
+        max_steps: int = 200,
         headless: bool = False,
         confirm: Callable[[str], bool] | None = None,
         pause: Callable[[str], None] | None = None,

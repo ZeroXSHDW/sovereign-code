@@ -47,7 +47,15 @@ def test_retry_bounds_the_attempts_and_reraises() -> None:
         retry(always, attempts=2, sleep=_sleep([]))
 
 
-def test_retry_backs_off_exponentially() -> None:
+def test_retry_backs_off_exponentially(monkeypatch) -> None:
+    """Two failures -> two sleeps, each doubling the previous base.
+
+    Jitter spans [0.5, 1.5), so consecutive sleeps overlap by design; pinning
+    the jitter makes the schedule exact instead of accidentally flaky.
+    """
+    from sovereign_code import http
+
+    monkeypatch.setattr(http.random, "random", lambda: 0.0)
     sleeps: list[float] = []
 
     def flaky() -> str:
@@ -59,9 +67,7 @@ def test_retry_backs_off_exponentially() -> None:
 
     calls = 0
     assert retry(flaky, attempts=3, backoff=0.5, sleep=_sleep(sleeps)) == "ok"
-    # Two failures -> two sleeps, each strictly larger than the last (backoff x jitter).
-    assert len(sleeps) == 2
-    assert sleeps[0] >= 0.25 and sleeps[1] > sleeps[0]
+    assert sleeps == [0.25, 0.5]
 
 
 def test_retry_reraises_non_transient_immediately() -> None:

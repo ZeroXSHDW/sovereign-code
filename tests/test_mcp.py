@@ -236,3 +236,35 @@ def test_ask_rejects_an_unknown_domain() -> None:
     )
     assert response is not None
     assert response["result"]["isError"] is True
+
+
+def test_run_pack_loads_guardrails_and_skills(monkeypatch) -> None:
+    from sovereign_code import mcp
+
+    seen: dict = {}
+
+    def fake_complete(base_url, model, messages, max_tokens=0, **kwargs):
+        seen.update(model=model, messages=messages)
+        return "VERDICT: tested"
+
+    monkeypatch.setattr("sovereign_code.summarize.complete", fake_complete)
+    mcp.call_tool("run_pack", {"key": "pentest", "prompt": "Assess a staging web app we own."})
+    system = seen["messages"][0]["content"]
+    assert seen["model"] == "local-reasoning"
+    assert "SCOPE.md" in system
+    assert "FINDINGS.md" in system
+    assert "### Skills to load" in system
+    assert "- **" in system
+
+
+def test_run_pack_rejects_an_unknown_pack() -> None:
+    response = handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "run_pack", "arguments": {"key": "astrology", "prompt": "hi"}},
+        }
+    )
+    assert response is not None
+    assert response["result"]["isError"] is True

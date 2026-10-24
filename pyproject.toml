@@ -81,7 +81,7 @@ omit = ["*/__main__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 50
+fail_under = 53
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

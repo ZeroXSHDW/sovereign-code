@@ -28,7 +28,7 @@ clients' current schemas.
 
 `v0.4.0` is tagged (2026-10-23). A post-release review produced the
 `[0.4.1]` changelog entry. The repairs are complete and covered by
-`tests/test_upgrade_repairs.py`; `make check`, coverage (≈50%, floor 50) and
+`tests/test_upgrade_repairs.py`; `make check`, coverage (≈54%, floor 53) and
 `uv build` are green.
 
 - [x] Implement the Streamable HTTP MCP transport the launchd service names.
@@ -75,7 +75,7 @@ hardware. The code is written and CLI-wired; what remains is a real run:
 ## Later
 
 - Python 3.15 support matrix (pyproject lists 3.11–3.15; CI verifies all five).
-- Coverage floor above the current 50%.
+- Coverage floor above the current 53%.
 - Additional local stacks and model aliases as new hardware arrives.
 
 ## Principles

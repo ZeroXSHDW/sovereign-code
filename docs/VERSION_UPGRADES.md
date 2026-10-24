@@ -126,7 +126,7 @@ The project targets 3.11 today. When macOS toolchain pressure or a dependency
 
 ## Definition of done
 
-- [ ] `make check` — lint + format + typecheck + test with coverage (≥50%).
+- [ ] `make check` — lint + format + typecheck + test with coverage (≥53%).
 - [ ] `make quality` — the above plus `pip-audit --strict`.
 - [ ] `make minimum` — oldest allowed direct versions still pass.
 - [ ] `uv.lock` regenerated and committed whenever `pyproject.toml` changes.

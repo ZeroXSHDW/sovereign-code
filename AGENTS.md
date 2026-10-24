@@ -14,7 +14,7 @@ of instructions for OpenCode, Codex/ChatGPT, Claude Code and Qwen Code.
 make check
 ```
 
-`make check` runs ruff, mypy, the full test suite with the 50% coverage floor,
+`make check` runs ruff, mypy, the full test suite with the 53% coverage floor,
 and the format check. `make quality` adds the dependency audit.
 
 ## Working rules

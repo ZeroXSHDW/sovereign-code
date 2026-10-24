@@ -17,6 +17,13 @@ All notable changes to Sovereign Code.
   held ~3 GB for traffic that might never arrive and evicted the model the
   user actually asked for. The first request loads what it needs.
 
+### Fixed
+- **`sovereign run` could not run MLX models**: an MLX tag fell through to
+  Ollama's `/api/tags` (which has no MLX model) and returned 404 even with the
+  mlx-lm server online. `run` now routes MLX tags and aliases to the MLX
+  server's OpenAI-compatible endpoint. Verified live: ~0.45 s warm reply,
+  2.8 s full answer with the 0.6B speculative draft enabled.
+
 ## [0.6.0] - 2026-10-24
 
 ### Added

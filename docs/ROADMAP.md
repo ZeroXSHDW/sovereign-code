@@ -66,7 +66,9 @@ hardware. The code is written and CLI-wired; what remains is a real run:
 - [x] MLX server integration (`sovereign mlx pull/start/status/stop`) —
       speculative decoding, 8-bit KV cache, tier aliases (`mlx-fast`,
       `mlx-code`), `sovereign gateway-config --apply`.
-      Remaining: a live `mlx start` run recording the tok/s gains.
+      Verified live (2026-10-24): `mlx-qwen3-4b-4bit` starts supervised with
+      the 0.6B draft and 8-bit KV cache; ~0.45 s warm short reply, 2.8 s full
+      answer. `sovereign run` now routes MLX tags to the MLX server (see below).
 - [x] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
       confirmation gates, secret refusal, masked audit log; keep integration
       tests green.

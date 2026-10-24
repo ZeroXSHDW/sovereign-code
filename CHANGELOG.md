@@ -2,6 +2,21 @@
 
 All notable changes to Sovereign Code.
 
+## [Unreleased]
+
+### Added
+- **Expanded security domain and specialist packs**: nine new packs (redteam,
+  blueteam, soc, threatintel, threatmodel, purpleteam, malware, cloudsec,
+  appsec), the `run_pack` MCP tool, and a `domain=` parameter on MCP `ask` that
+  loads the domain's specialist system prompt, skill brief and model.
+- **Broader security skill routing**: `skillrouter` now matches
+  pentest/malware/SOC/cloud-security skills to the security domain.
+
+### Changed
+- **The gateway no longer preloads the fast tier at startup**: warming the 4B
+  held ~3 GB for traffic that might never arrive and evicted the model the
+  user actually asked for. The first request loads what it needs.
+
 ## [0.6.0] - 2026-10-24
 
 ### Added

@@ -507,23 +507,25 @@ def plan_launch(
         )
 
     if client == "opencode":
-        # OpenCode's interactive command has no --model flag: it takes the
-        # model from its own config. `OPENCODE_CONFIG_CONTENT` is OpenCode's
-        # inline-config hook, so the model is pinned for this child process
-        # only — no user file is rewritten.
-        pinned = _pin_opencode_model(env, agent_model)
+        # The interactive command has no --model flag, and OpenCode 2.x ignores
+        # OPENCODE_CONFIG_CONTENT, so the model comes from its own config.
+        # `opencode run --model` is the only per-run pin; say so instead of
+        # claiming a pin that does not happen.
         argv = ["opencode"]
         if yolo:
             argv.append("--auto")
         argv.append(str(target))
-        if pinned:
-            note = "OpenCode local coding agent (model pinned for this session)"
+        label = "sovereign/auto" if agent_model == "auto" else f"local/{agent_model}"
+        if agent_model == "auto":
+            note = (
+                "OpenCode local coding agent; it uses sovereign/auto from your "
+                "OpenCode config (written by sovereign install-clients)"
+            )
         else:
             note = (
-                "OpenCode local coding agent; it uses the model from your OpenCode "
-                f"config because '{agent_model}' is not in that config's model list"
+                f"OpenCode has no --model for interactive mode: pick it in /models, "
+                f"or run: opencode run --model {label}"
             )
-        label = f"sovereign/{agent_model}" if agent_model == "auto" else f"local/{agent_model}"
         return LaunchPlan(argv, target, env, label, note)
 
     if client == "codium":
@@ -536,26 +538,6 @@ def plan_launch(
         )
 
     raise ValueError(f"unsupported client: {client}")
-
-
-def _pin_opencode_model(env: dict[str, str], agent_model: str) -> bool:
-    """Pin OpenCode's model for this session. Returns False when it cannot.
-
-    The user's OpenCode config may list its models explicitly. Pinning a model
-    that is not in that list would make OpenCode fail to start, so in that case
-    the launch is left alone and the caller says so.
-    """
-    from .tools import opencode_models, read_text
-
-    if agent_model == "auto":
-        env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"model": "sovereign/auto"})
-        return True
-    config = Path.home() / ".config" / "opencode" / "opencode.json"
-    available = opencode_models(read_text(config))
-    if available and agent_model not in available:
-        return False
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"model": f"local/{agent_model}"})
-    return True
 
 
 def wrapper_path(client: str) -> Path:

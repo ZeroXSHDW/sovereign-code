@@ -468,6 +468,7 @@ TOOLS: list[dict[str, Any]] = [
                     "press",
                     "scroll",
                     "extract",
+                    "wait",
                     "handoff",
                     "done",
                 ],
@@ -479,6 +480,7 @@ TOOLS: list[dict[str, Any]] = [
             "value": {"type": "string"},
             "direction": {"type": "string", "enum": ["up", "down", "top", "bottom"]},
             "amount": {"type": "integer"},
+            "seconds": {"type": "number", "default": 1},
             "confirm": {"type": "boolean", "default": False},
         },
         ["action"],
@@ -489,6 +491,28 @@ TOOLS: list[dict[str, Any]] = [
         {},
     ),
     _tool("browser_close", "Close the local browser session.", {}),
+    _tool(
+        "browser_task",
+        "Run an autonomous browser task with the local model: opens the URL (if not "
+        "already open), plans and performs actions until done or blocked, and "
+        "returns a summary plus any extracted text. Destructive actions are "
+        "cancelled unless confirm_destructive is true.",
+        {
+            "url": {"type": "string"},
+            "task": {"type": "string"},
+            "allow_local": {"type": "boolean", "default": False},
+            "headless": {"type": "boolean", "default": False},
+            "allowed_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "default": [],
+            },
+            "max_steps": {"type": "integer", "default": 50},
+            "confirm_destructive": {"type": "boolean", "default": False},
+            "model": {"type": "string", "default": "local-agent"},
+        },
+        ["url", "task"],
+    ),
     _tool(
         "browser_back",
         "Navigate back in the browser history and return the page state.",
@@ -995,7 +1019,7 @@ def _browser_observation(observation: dict) -> dict:
         "title": observation.get("title"),
         "captcha": observation.get("captcha"),
         "auth_required": observation.get("auth_required", observation.get("captcha")),
-        "text": str(observation.get("text") or "")[:8000],
+        "text": str(observation.get("text") or "")[:12000],
         "elements": observation.get("elements") or [],
     }
 
@@ -1018,7 +1042,8 @@ def _browser_act(arguments: dict[str, Any]) -> dict:
         payload = {
             key: value
             for key, value in arguments.items()
-            if key in {"action", "url", "id", "text", "key", "value", "direction", "amount"}
+            if key
+            in {"action", "url", "id", "text", "key", "value", "direction", "amount", "seconds"}
         }
         action = parse_action(payload)
         confirm = bool(arguments.get("confirm", False))
@@ -1058,6 +1083,89 @@ def _browser_screenshot() -> list[dict[str, Any]]:
         except OSError:
             pass
         return content
+
+
+def _browser_task(
+    url: str,
+    task: str,
+    allow_local: bool = False,
+    headless: bool = False,
+    allowed_domains: list[str] | None = None,
+    max_steps: int = 50,
+    confirm_destructive: bool = False,
+    model: str = "local-agent",
+) -> dict:
+    global _BROWSER, _BROWSER_MODE
+    from .browser.actions import BrowserPolicy, PolicyError, check_url
+    from .browser.agent import BrowserAgent, ModelPlanner
+    from .browser.executor import BrowserSession
+    from .config import LOCAL_AI_ROOT, Settings
+
+    settings = Settings.load()
+    with _BROWSER_LOCK:
+        mode = (allow_local, headless, tuple(allowed_domains or ()))
+        if _BROWSER is not None and mode != _BROWSER_MODE:
+            _BROWSER.close()
+            _BROWSER = None
+        policy = BrowserPolicy(
+            allow_local=allow_local,
+            allowed_domains=tuple(allowed_domains or ()),
+        )
+        try:
+            target = check_url(url, policy)
+        except PolicyError as exc:
+            return {"error": str(exc)}
+        if _BROWSER is None:
+            _BROWSER = BrowserSession(
+                profile_dir=LOCAL_AI_ROOT / "data" / "browser" / "profile",
+                policy=policy,
+                headless=headless,
+                timeout_ms=60000,
+            )
+            try:
+                _BROWSER.start(target)
+            except Exception as exc:
+                _BROWSER = None
+                return {"error": f"could not start browser: {exc}"}
+            _BROWSER_MODE = mode
+        else:
+            try:
+                _BROWSER.goto(target)
+            except Exception as exc:
+                return {"error": f"navigation failed: {exc}"}
+
+        session = _BROWSER
+        planner = ModelPlanner(settings.gateway_url, model=model)
+
+        def confirm(_message: str) -> bool:
+            return bool(confirm_destructive)
+
+        agent = BrowserAgent(
+            session=session,
+            planner=planner,
+            policy=policy,
+            max_steps=max(1, min(100, int(max_steps))),
+            headless=headless,
+            confirm=confirm if confirm_destructive else None,
+            pause=None,
+            screenshots_dir=LOCAL_AI_ROOT / "data" / "browser" / "screenshots",
+        )
+        try:
+            result = agent.run(task)
+        except Exception as exc:
+            return {"error": str(exc), "page": _browser_observation(session.observe())}
+        return {
+            "summary": result.summary,
+            "stopped": result.stopped,
+            "steps": result.steps,
+            "extracts": result.extracts,
+            "screenshots": agent.screenshots,
+            "page": (
+                _browser_observation(session.observe())
+                if result.stopped not in {"done", "handoff"}
+                else None
+            ),
+        }
 
 
 def _browser_close() -> dict:
@@ -1463,6 +1571,19 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
     if name == "browser_search":
         return _text(
             _browser_search(str(args.get("query") or ""), str(args.get("engine") or "duckduckgo"))
+        )
+    if name == "browser_task":
+        return _text(
+            _browser_task(
+                str(args.get("url") or ""),
+                str(args.get("task") or ""),
+                bool(args.get("allow_local", False)),
+                bool(args.get("headless", False)),
+                list(args.get("allowed_domains") or []),
+                int(args.get("max_steps") or 20),
+                bool(args.get("confirm_destructive", False)),
+                str(args.get("model") or "local-agent"),
+            )
         )
     if name == "browser_close":
         return _text(_browser_close())

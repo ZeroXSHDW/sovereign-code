@@ -64,7 +64,7 @@ _OBSERVE_JS_TEMPLATE = """
       style.display !== 'none' &&
       style.opacity !== '0'
     );
-  }).slice(0, 80);
+  }).slice(0, 120);
   visible.forEach((el, i) => el.setAttribute('data-sovereign-id', String(i)));
   const sensitivePattern = /__SENSITIVE__/i;
   const elements = visible.map((el, i) => {
@@ -110,7 +110,7 @@ _OBSERVE_JS_TEMPLATE = """
   return {
     url: location.href,
     title: document.title,
-    text: bodyText.slice(0, 8000),
+    text: bodyText.slice(0, 16000),
     elements: elements
   };
 }
@@ -617,7 +617,7 @@ class BrowserSession:
                 if action.target is not None
                 else self.page.inner_text("body")
             )
-            return {"ok": True, "detail": "extracted text", "extract": text[:4000]}
+            return {"ok": True, "detail": "extracted text", "extract": text[:8000]}
 
         if action.kind in {"handoff", "done"}:
             return {"ok": True, "detail": action.kind}

@@ -50,13 +50,16 @@ clients' current schemas.
 
 ## Next — v0.6.0
 
-Surfaces documented in the README but not yet exercised end-to-end:
+Surfaces documented in the README but not yet exercised end-to-end on live
+hardware. The code is written and CLI-wired; what remains is a real run:
 
-- [ ] Task packs (`sovereign pack list/show/brief/models/install`) — pack
-      brief writes into a project's `AGENTS.md`; SCOPE.md gating for pentest.
-- [ ] MLX server integration (`sovereign mlx pull/start/status/stop`) —
+- [x] Task packs (`sovereign pack list/show/brief/models/install/verify`) —
+      pack brief writes into a project's `AGENTS.md`; SCOPE.md gating for pentest.
+      Remaining: a live `pack brief` + `pack verify` run against a model.
+- [x] MLX server integration (`sovereign mlx pull/start/status/stop`) —
       speculative decoding, 8-bit KV cache, tier aliases (`mlx-fast`,
       `mlx-code`), `sovereign gateway-config --apply`.
+      Remaining: a live `mlx start` run recording the tok/s gains.
 - [x] Browser operator (`sovereign browse`) — Playwright Chromium, policy,
       confirmation gates, secret refusal, masked audit log; keep integration
       tests green.

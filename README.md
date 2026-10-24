@@ -48,7 +48,8 @@ to set as the repository's social preview.)
 - **Tier gateway** — an OpenAI-compatible endpoint on `:4010` (plus an
   Anthropic bridge on `:4001`) routes each request to `fast`, `balanced`,
   `deep`, or `ultra`, with real streamed tool calls for Codex, Claude Code,
-  OpenCode, Qwen, and Continue.
+  OpenCode, Qwen, and Continue. An optional MLX server joins the same gateway
+  on Apple Silicon.
 - **Local coding agents** — Codex, Claude Code, OpenCode, Qwen Code, Continue,
   and the Codex side of ChatGPT desktop run on-Mac; `--cloud` is the explicit
   escape hatch.
@@ -116,7 +117,8 @@ Verify the install and pull a starter stack:
 ```sh
 sovereign doctor                 # paths, ports, models, aliases, concrete fixes
 sovereign doctor --fix           # apply the safe fixes automatically
-sovereign setup-stack lean       # ~4 GB starter; use `capable` for the best coder
+sovereign setup-stack lean       # ~8 GB starter; use `capable` for the best coder
+sovereign verify --clients       # real turn through Codex, Claude Code, OpenCode
 sovereign status                 # one-shot stack status
 ```
 

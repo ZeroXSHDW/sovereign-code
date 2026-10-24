@@ -120,7 +120,10 @@ def spawn_terminal(
     if dry_run:
         result["method"] = "dry-run"
         return result
-    if sys.platform != "darwin":
+    # Through `available()` so mypy keeps the platform opaque: compared
+    # inline, a Linux run narrows sys.platform and marks the rest of this
+    # function unreachable, which fails `mypy --platform linux` in CI.
+    if not available():
         raise ValueError("opening a new terminal window is supported on macOS only")
     opened = subprocess.run(
         ["osascript", "-e", _apple_script(line)],

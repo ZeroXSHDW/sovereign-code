@@ -585,17 +585,17 @@ def stop_detached(service: Service) -> bool:
         subprocess.run(["pkill", "-f", "run_gateway.sh"], capture_output=True, check=False)
         subprocess.run(["pkill", "-f", "litellm --config"], capture_output=True, check=False)
     elif service.label == TIER_LABEL:
-        from .tier_gateway import stop
+        from .tier_gateway import stop as stop_tier
 
-        stop()
+        stop_tier()
     elif service.label == BRIDGE_LABEL:
-        from .bridge import stop
+        from .bridge import stop as stop_bridge
 
-        stop()
+        stop_bridge()
     elif service.label == WEBCHAT_LABEL:
-        from .webchat import stop
+        from .webchat import stop as stop_webchat
 
-        stop()
+        stop_webchat()
     return _wait_closed(service.port)
 
 

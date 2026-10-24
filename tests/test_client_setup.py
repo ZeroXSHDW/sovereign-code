@@ -302,7 +302,12 @@ def test_claude_settings_map_every_slot_to_a_local_route(tmp_path) -> None:
     # complains about a name it does not recognise.
     assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-5"
     assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-1"
+    # Claude Code 2.1 added the Fable tier; unset, the picker falls through to
+    # the bridge's default alias instead of a chosen route.
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-5"
     assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-4-5"
+    # Removed from Claude Code 2.1: a dead knob is drift, not a setting.
+    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env
     # Every slot lands on a route the local catalog can serve.
     from sovereign_code.tier_gateway import catalog_ids
 
@@ -310,6 +315,7 @@ def test_claude_settings_map_every_slot_to_a_local_route(tmp_path) -> None:
     routes = client_setup.claude_slot_routes(path)
     assert routes["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "deep"
     assert routes["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "ultra"
+    assert routes["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "ultra"
     assert routes["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "fast"
     for route in routes.values():
         assert route in known
@@ -334,3 +340,73 @@ def test_configured_models_are_read_back_from_the_client_files(tmp_path) -> None
     assert slots["ANTHROPIC_MODEL"] == "best"
     assert slots["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-5"
     assert client_setup.claude_slot_routes(claude)["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "deep"
+
+
+def test_opencode_config_matches_the_2x_schema() -> None:
+    """The keys OpenCode 2.x accepts — checked against opencode.ai/config.json.
+
+    `enabled` on a server and a custom `small_model` both fail the current
+    schema, and the server map may only live under `mcp.servers`.
+    """
+    config = client_setup.opencode_config()
+    assert "small_model" not in config
+    assert set(config["mcp"]) <= {"servers", "timeout"}
+    allowed = {
+        "type",
+        "command",
+        "cwd",
+        "environment",
+        "disabled",
+        "codemode",
+        "timeout",
+        "protocol",
+        "url",
+        "headers",
+        "oauth",
+    }
+    for name, server in config["mcp"]["servers"].items():
+        assert "enabled" not in server, name
+        assert set(server) <= allowed, name
+
+
+def test_install_opencode_mcp_moves_the_v1_server_map(tmp_path) -> None:
+    """A V1 top-level map is migrated, not copied next to `servers`."""
+    path = tmp_path / "opencode.json"
+    path.write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "docs": {"type": "local", "command": ["docs"], "enabled": True},
+                    "off": {"type": "remote", "url": "http://127.0.0.1:1", "enabled": False},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    client_setup.install_opencode_mcp(path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    servers = data["mcp"]["servers"]
+    assert "docs" not in data["mcp"]
+    assert servers["docs"]["command"] == ["docs"]
+    assert "enabled" not in servers["docs"]
+    assert servers["off"]["disabled"] is True
+
+
+def test_backups_keep_only_the_newest_five(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text('{"live": 1}', encoding="utf-8")
+    for minute in range(10):
+        (tmp_path / f"settings.json.bak-20260101-0000{minute:02d}").write_text(
+            f'{{"old": {minute}}}', encoding="utf-8"
+        )
+    client_setup._backup(path)
+    assert len(list(tmp_path.glob("settings.json.bak-*"))) == client_setup.BACKUP_KEEP
+
+
+def test_backup_skips_an_identical_copy(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text('{"a": 1}', encoding="utf-8")
+    client_setup._backup(path)
+    before = set(tmp_path.glob("settings.json.bak-*"))
+    client_setup._backup(path)
+    assert set(tmp_path.glob("settings.json.bak-*")) == before

@@ -350,17 +350,25 @@ QUALITY_ALIASES = {
 CLAUDE_MODEL_ROUTES: dict[str, str] = {
     "claude-sonnet-4-5": "deep",
     "claude-sonnet-4-5-20250929": "deep",
+    "claude-sonnet-5": "deep",
     "claude-opus-4-1": "ultra",
     "claude-opus-4-1-20250805": "ultra",
+    "claude-opus-5": "ultra",
+    # Claude Code 2.1 added a Fable tier; without a route the bridge falls back
+    # to the default alias, so the picker entry would silently lose its model.
+    "claude-fable-5": "ultra",
+    "claude-fable-5-1": "ultra",
     "claude-3-7-sonnet-latest": "deep",
     "claude-3-5-haiku-latest": "fast",
     "claude-haiku-4-5": "fast",
+    "claude-haiku-5-5": "fast",
 }
 
 # The Claude slots, and the model id and local route behind each of them.
 CLAUDE_SLOT_MODELS: dict[str, tuple[str, str]] = {
     "ANTHROPIC_DEFAULT_SONNET_MODEL": ("claude-sonnet-4-5", "deep"),
     "ANTHROPIC_DEFAULT_OPUS_MODEL": ("claude-opus-4-1", "ultra"),
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": ("claude-fable-5", "ultra"),
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": ("claude-haiku-4-5", "fast"),
     "ANTHROPIC_SMALL_FAST_MODEL": ("claude-haiku-4-5", "fast"),
 }
@@ -1382,13 +1390,12 @@ def repeated_tool_call(messages: list[dict[str, Any]]) -> bool:
     return len(signatures) >= 3 and len(set(signatures[-3:])) == 1
 
 
-def truncate_tool_outputs(messages: list[Any], limit: int = 6000) -> list[dict[str, Any]]:
+def truncate_tool_outputs(
+    messages: list[dict[str, Any]], limit: int = 6000
+) -> list[dict[str, Any]]:
     """Keep long tool results from consuming the whole context on long runs."""
     result: list[dict[str, Any]] = []
     for message in messages:
-        if not isinstance(message, dict):
-            result.append(message)
-            continue
         if message.get("role") == "tool" and isinstance(message.get("content"), str):
             content = message["content"]
             if len(content) > limit:
@@ -2340,15 +2347,64 @@ def ensure_running(
     return False
 
 
-def stop() -> bool:
+def _listener_pid(port: int) -> int | None:
+    """The PID holding the loopback port, from lsof."""
     try:
-        pid = int(pid_path().read_text(encoding="utf-8").strip())
+        result = subprocess.run(
+            ["lsof", "-nP", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for token in result.stdout.split():
+        if token.isdigit():
+            return int(token)
+    return None
+
+
+def _is_gateway_process(pid: int) -> bool:
+    """Only ever signal a process this project started."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "sovereign_code" in result.stdout and "router" in result.stdout
+
+
+def stop(port: int = DEFAULT_PORT) -> bool:
+    """Stop the gateway: by pid file, else by whoever owns the port.
+
+    A gateway started before its pid file existed — or whose file a later start
+    replaced — was unstoppable. `--restart` then started a second server that
+    died with EADDRINUSE on every launchd retry while the stale one kept the
+    port.
+    """
+    try:
+        owner = int(pid_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
+        owner = 0
+    pid = owner if owner and _is_gateway_process(owner) else None
+    if pid is None:
+        candidate = _listener_pid(port)
+        pid = candidate if candidate and _is_gateway_process(candidate) else None
+    if pid is None:
         return False
     try:
         os.kill(pid, 15)
     except OSError:
         return False
+    deadline = time.monotonic() + 10.0
+    while port_open(port=port) and time.monotonic() < deadline:
+        time.sleep(0.2)
     try:
         pid_path().unlink()
     except OSError:
@@ -2389,9 +2445,15 @@ def serve(host: str, port: int, ollama: str, upstream: str) -> None:
         # restarting this one into a fight with the server that is up.
         print(f"tier gateway already serving on {port}", flush=True)
         return
+    try:
+        server = make_server(host, port, ollama, upstream)
+    except OSError as exc:
+        # Another instance won the race between the check and the bind.
+        # Crashing here made launchd retry a losing bind every ten seconds.
+        print(f"tier gateway already serving on {port} ({exc})", flush=True)
+        return
     pid_path().parent.mkdir(parents=True, exist_ok=True)
     pid_path().write_text(str(os.getpid()), encoding="utf-8")
-    server = make_server(host, port, ollama, upstream)
     # Listen first, warm second: a restart used to refuse connections for as
     # long as the 4B model took to load. Requests that arrive during the warm-up
     # wait on the model lock; they are not rejected by a closed port.

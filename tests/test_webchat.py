@@ -109,14 +109,20 @@ def server():
         httpd.server_close()
 
 
-def _request(server, path: str, method: str = "GET", headers: dict[str, str] | None = None):
+def _request(
+    server,
+    path: str,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+):
     port = server.server_address[1]
     conn = HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        conn.request(method, path, headers=headers or {})
+        conn.request(method, path, body=body, headers=headers or {})
         response = conn.getresponse()
-        body = response.read()
-        return response.status, body
+        body_bytes = response.read()
+        return response.status, body_bytes
     finally:
         conn.close()
 
@@ -189,3 +195,116 @@ def test_webchat_sends_security_headers(server) -> None:
     assert headers["x-frame-options"] == "DENY"
     assert headers["referrer-policy"] == "no-referrer"
     assert "default-src 'self'" in headers["content-security-policy"]
+
+
+def test_webchat_last_shot_404_when_none(server, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(webchat, "_LAST_SHOT", None)
+    status, body = _request(server, "/api/last-shot", headers={"Host": "127.0.0.1"})
+    assert status == 404
+    assert json.loads(body)["error"] == "no screenshot"
+
+
+def test_webchat_last_shot_serves_a_png(server, monkeypatch, tmp_path) -> None:
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(webchat, "_LAST_SHOT", shot)
+    status, body = _request(server, "/api/last-shot", headers={"Host": "127.0.0.1"})
+    assert status == 200
+    assert body == b"\x89PNG\r\n\x1a\n"
+
+
+def test_webchat_skill_404_for_unknown(server, monkeypatch) -> None:
+    monkeypatch.setattr(webchat.Handler, "_reject_cross_origin", lambda self: False)
+    status, _ = _request(server, "/api/skill?name=no-such-skill", headers={"Host": "127.0.0.1"})
+    assert status == 404
+
+
+def test_webchat_skills_lists_matches(server, monkeypatch) -> None:
+    monkeypatch.setattr(webchat.Handler, "_reject_cross_origin", lambda self: False)
+
+    def fake_search(query: str, limit: int):
+        return [("react", "a react skill")] if query == "react" else []
+
+    monkeypatch.setattr("sovereign_code.skills.search_skills", fake_search)
+    status, body = _request(server, "/api/skills?q=react", headers={"Host": "127.0.0.1"})
+    assert status == 200
+    assert json.loads(body) == [{"name": "react", "description": "a react skill"}]
+
+
+def test_webchat_rejects_a_too_large_body(server) -> None:
+    # serverguard caps a declared body well before it is read.
+    status, _ = _request(
+        server,
+        "/api/browse",
+        method="POST",
+        headers={"Host": "127.0.0.1", "Content-Length": str(64 * 1024 * 1024)},
+    )
+    assert status == 413
+
+
+def test_webchat_rejects_invalid_json(server) -> None:
+    raw = b"not json"
+    status, _ = _request(
+        server,
+        "/api/browse",
+        method="POST",
+        headers={
+            "Host": "127.0.0.1",
+            "Content-Length": str(len(raw)),
+            "Content-Type": "application/json",
+        },
+        body=raw,
+    )
+    assert status == 400
+
+
+def test_webchat_unknown_route_is_404(server) -> None:
+    status, body = _request(server, "/nope", headers={"Host": "127.0.0.1"})
+    assert status == 404
+    assert json.loads(body)["error"] == "not found"
+
+
+def test_webchat_unknown_post_route_is_404(server) -> None:
+    status, _ = _request(
+        server,
+        "/api/nope",
+        method="POST",
+        headers={"Host": "127.0.0.1", "Content-Length": "2"},
+    )
+    assert status == 404
+
+
+def test_host_is_local_requires_a_host_header(server) -> None:
+    handler = webchat.Handler.__new__(webchat.Handler)
+    handler.headers = {}
+    assert handler._host_is_local() is False
+    handler.headers = {"Host": "attacker.example"}
+    assert handler._host_is_local() is False
+    handler.headers = {"Host": "localhost"}
+    assert handler._host_is_local() is True
+
+
+def test_origin_is_local_allows_a_same_origin_post(server) -> None:
+    port = server.server_address[1]
+    handler = webchat.Handler.__new__(webchat.Handler)
+    handler.headers = {}
+    handler.port = port
+    assert handler._origin_is_local() is True
+    handler.headers = {"Origin": f"http://127.0.0.1:{port}"}
+    assert handler._origin_is_local() is True
+    handler.headers = {"Origin": f"http://127.0.0.1:{port + 1}"}
+    assert handler._origin_is_local() is False
+
+
+def test_model_options_falls_back_without_a_catalog(monkeypatch) -> None:
+    monkeypatch.setattr("sovereign_code.tier_gateway.catalog_models", lambda *_a, **_k: [])
+    options = webchat.model_options()
+    assert 'value="best"' in options
+
+
+def test_pid_is_webchat_rejects_an_unrelated_process(monkeypatch) -> None:
+    def fake_run(_cmd, **_kwargs):
+        return webchat.subprocess.CompletedProcess(_cmd, 0, stdout="python -m http.server")
+
+    monkeypatch.setattr(webchat.subprocess, "run", fake_run)
+    assert webchat._pid_is_webchat(1234) is False

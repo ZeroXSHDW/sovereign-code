@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
+from .config import Settings
 from .gateway import alias_names
 from .http import client_for
 
 CORE_ALIASES = ("local-chat", "local-code", "local-agent", "local-claude")
+
+# Each client answers one real turn in its own non-interactive mode. "Configured"
+# is not "working": an alias probe never proves the client's auth, its model
+# mapping, or its tool loop.
+CLIENT_PROBES = ("codex", "claude", "opencode")
+PROBE_PROMPT = "Reply with exactly: LOCAL_OK"
+PROBE_MARKER = "LOCAL_OK"
 
 
 def configured_aliases(config_path: Path) -> tuple[str, ...]:
@@ -171,3 +181,110 @@ def probe_liveness(
     if isinstance(payload, dict) and payload.get("error"):
         return LivenessResult(False, f"error: {str(payload['error'])[:120]}")
     return LivenessResult(True, f"served in {elapsed * 1000:.0f} ms")
+
+
+def probe_router(
+    base_url: str,
+    timeout: float = 30.0,
+    transport: httpx.BaseTransport | None = None,
+) -> AliasResult:
+    """Prove the tier gateway serves a completion, not just /health.
+
+    The gateway can answer /health while every completion is dropped — a leaked
+    scheduler slot or a stale process does exactly that. Doctor only checked
+    Ollama, so the whole stack looked healthy while the clients got nothing.
+    """
+    started = time.monotonic()
+    try:
+        with client_for(timeout=timeout, connect=3.0, transport=transport) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/v1/chat/completions",
+                headers={"Authorization": "Bearer local"},
+                json={
+                    "model": "fast",
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                },
+            )
+    except httpx.HTTPError as exc:
+        elapsed = time.monotonic() - started
+        return AliasResult("gateway", False, elapsed, f"no response ({type(exc).__name__})")
+    elapsed = time.monotonic() - started
+    if response.status_code >= 400:
+        return AliasResult("gateway", False, elapsed, f"HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError:
+        return AliasResult("gateway", False, elapsed, "malformed response")
+    if not isinstance(payload, dict) or not payload.get("choices"):
+        return AliasResult("gateway", False, elapsed, "empty reply")
+    return AliasResult("gateway", True, elapsed, f"served in {elapsed * 1000:.0f} ms")
+
+
+@dataclass(frozen=True)
+class ClientResult:
+    client: str
+    ok: bool
+    seconds: float
+    detail: str
+
+
+def client_probe_argv(client: str, target: Path) -> list[str]:
+    """The one-shot command each client runs for a single turn."""
+    if client == "codex":
+        return ["codex", "exec", "-C", str(target), "--skip-git-repo-check", PROBE_PROMPT]
+    if client == "claude":
+        return ["claude", "-p", PROBE_PROMPT]
+    return ["opencode", "run", "--format", "json", PROBE_PROMPT]
+
+
+def probe_clients(
+    target: Path,
+    settings: Settings,
+    agent_model: str = "auto",
+    timeout: float = 180.0,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> list[ClientResult]:
+    """One real turn per client, through the env its launcher would use."""
+    from .clients import plan_launch
+
+    run = runner or subprocess.run
+    results: list[ClientResult] = []
+    for client in CLIENT_PROBES:
+        started = time.monotonic()
+        try:
+            plan = plan_launch(client, target, settings, agent_model)
+        except ValueError as exc:
+            results.append(ClientResult(client, False, 0.0, str(exc)))
+            continue
+        try:
+            process = run(
+                client_probe_argv(client, target),
+                cwd=str(target),
+                env=plan.env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError:
+            results.append(ClientResult(client, False, 0.0, f"{client} is not installed"))
+            continue
+        except subprocess.TimeoutExpired:
+            results.append(
+                ClientResult(
+                    client, False, time.monotonic() - started, f"timed out after {timeout:.0f}s"
+                )
+            )
+            continue
+        elapsed = time.monotonic() - started
+        output = (process.stdout or "") + (process.stderr or "")
+        ok = PROBE_MARKER in output.upper()
+        line = next((text.strip() for text in reversed(output.splitlines()) if text.strip()), "")
+        detail = line[:160] if line else f"exit {process.returncode}"
+        if not ok and process.returncode:
+            detail = f"exit {process.returncode}: {detail}"
+        results.append(ClientResult(client, ok, elapsed, detail))
+    return results

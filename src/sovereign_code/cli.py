@@ -777,6 +777,31 @@ def _verify(
     return 0 if failed == 0 else 1
 
 
+def _verify_clients(snap: Snapshot, timeout: float = 180.0) -> int:
+    """One real turn through each agent client, in its own non-interactive mode."""
+    from .verify import probe_clients
+
+    target = Path.cwd()
+    console.print(f"[dim]One real turn per client in {target} (timeout {timeout:.0f}s each)...[/]")
+    results = probe_clients(target, snap.settings, timeout=timeout)
+    table = Table(box=None, padding=(0, 1))
+    table.add_column("Client", style="bold")
+    table.add_column("Result")
+    table.add_column("Time", justify="right")
+    table.add_column("Detail", style="dim", overflow="fold")
+    for result in results:
+        mark = "[green]PASS[/]" if result.ok else "[red]FAIL[/]"
+        table.add_row(result.client, mark, f"{result.seconds:.1f}s", result.detail)
+    console.print(table)
+    failed = [result.client for result in results if not result.ok]
+    if failed:
+        console.print(f"[red]{len(failed)} client(s) did not answer:[/] {', '.join(failed)}")
+        console.print("[dim]Fix the client config with: sovereign install-clients[/]")
+        return 1
+    console.print("[green]All clients answered through the local stack.[/]")
+    return 0
+
+
 def _bench(
     settings: Settings,
     models: list[str],
@@ -1651,6 +1676,19 @@ def _doctor(snap: Snapshot) -> int:
         "sovereign router --start",
         warn=True,
     )
+    # An open port is not a working gateway: a stale process or a leaked
+    # scheduler slot answers /health and drops every completion. That state is
+    # invisible unless something asks for a token.
+    if snap.router_up:
+        from .verify import probe_router
+
+        served = probe_router(snap.settings.router_url)
+        add(
+            served.ok,
+            "Gateway completions",
+            served.detail if served.ok else f"not serving: {served.detail}",
+            "sovereign router --restart",
+        )
     # The bridge and the web chat are the same kind of detached process: a
     # dead one looks exactly like a broken app.
     from .guardian import check as _guardian_check
@@ -5845,7 +5883,6 @@ def _env(settings: Settings) -> None:
         'export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-claude"',
         'export CLAUDE_CODE_MAX_CONTEXT_TOKENS="65536"',
         'export CLAUDE_CODE_MAX_OUTPUT_TOKENS="8192"',
-        'export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"',
         'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1"',
         'export DISABLE_AUTO_COMPACT="1"',
         'export DISABLE_TELEMETRY="1"',
@@ -5932,6 +5969,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--all", action="store_true", help="test all nine aliases")
     verify.add_argument("--embedding", action="store_true", help="also check the embedding model")
     verify.add_argument("--timeout", type=float, default=300.0, help="per-alias timeout in seconds")
+    verify.add_argument(
+        "--clients",
+        action="store_true",
+        help="run one real turn through Codex, Claude Code and OpenCode",
+    )
     gateway = sub.add_parser("gateway", help="show gateway status, paths, and restart command")
     gateway.add_argument(
         "--restart", action="store_true", help="restart the supervisor and wait for health"
@@ -7540,8 +7582,11 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor_fix(settings, snap)
         return _doctor(snap)
     if command == "verify":
+        snap = _snapshot(settings)
+        if args.clients:
+            return _verify_clients(snap, timeout=args.timeout)
         return _verify(
-            _snapshot(settings),
+            snap,
             all_aliases=args.all,
             timeout=args.timeout,
             embedding=args.embedding,

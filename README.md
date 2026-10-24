@@ -502,22 +502,24 @@ Every `pull` prints an estimated size and warns when free disk is low, and
 ### Offline model stacks
 
 These are rough installed-size totals for a 24 GB Mac; models run one or two
-at a time (Ollama swaps automatically).
+at a time (Ollama swaps automatically). The stacks are defined in
+`src/sovereign_code/models.py`, so `sovereign pull-stack --help` always lists
+the current set.
 
 | Stack | Models | Approx. total | Note |
 | --- | --- | --- | --- |
-| `lean` | qwen2.5-coder:3b, qwen2.5:0.5b, nomic-embed-text | ~4 GB | fast edits + tiny chat + embeddings |
-| `balanced` | qwen2.5-coder:7b, qwen3:4b, deepseek-r1:8b, nomic-embed-text | ~14 GB | solid coder + chat + reasoning |
-| `capable` | qwen2.5-coder:14b, gemma4:12b, deepseek-r1:14b, nomic-embed-text | ~29 GB | best local coder + reasoning; swap with `sovereign free` |
-| `max` | qwen2.5-coder:32b, deepseek-r1:32b, codestral:22b | ~53 GB | maximum capability; pull only what you need |
+| `lean` | qwen3.5:4b, qwen2.5-coder:7b, nomic-embed-text | ~8 GB | fast chat + a FIM coder + embeddings; leaves most RAM free |
+| `balanced` | gpt-oss:20b, qwen3.5:9b, nomic-embed-text | ~21 GB | strong tool-caller + fast chat; still fits beside the OS |
+| `capable` | qwen3-coder:30b, qwen3.5:9b, qwen3.5:4b, nomic-embed-text | ~33 GB | daily stack: best coder, fast chat, tiny helper; the 30B wants the machine to itself |
+| `max` | qwen3-coder:30b, glm-4.7-flash, gpt-oss:20b, deepseek-r1:8b | ~51 GB | every model worth keeping; the 18–19 GB models run strictly one at a time |
 
 Pull a stack one model at a time, or pull a whole stack in one command:
 
 ```sh
-sovereign pull-stack lean       # ~4 GB: fast edits + tiny chat + embeddings
-sovereign pull-stack balanced   # ~14 GB: solid coder + chat + reasoning
-sovereign pull-stack capable    # ~29 GB: best coder + deep reasoning
-sovereign pull-stack max        # ~53 GB: maximum capability (pull one at a time)
+sovereign pull-stack lean       # ~8 GB: fast chat, coder, embeddings
+sovereign pull-stack balanced   # ~21 GB: strong tool-caller + fast chat
+sovereign pull-stack capable    # ~33 GB: best coder + fast chat + helper
+sovereign pull-stack max        # ~51 GB: full set (pull one at a time)
 sovereign setup-stack capable   # pull stack, then verify gateway aliases
 sovereign pull-stack cloud      # register the 7 cloud tags (no download)
 ```

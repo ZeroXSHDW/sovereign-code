@@ -44,14 +44,35 @@ def sovereign_argv() -> list[str]:
     return [command, "-m", "sovereign_code", "mcp"]
 
 
+BACKUP_KEEP = 5
+
+
 def _backup(path: Path) -> None:
+    """Keep a copy of a user config, at most BACKUP_KEEP per file.
+
+    Every `install-clients` run used to add a timestamped copy forever: three
+    client configs reached 187 stale files. Identical content is not copied
+    again, and only the newest BACKUP_KEEP are kept.
+    """
     if not path.is_file():
         return
+    existing = sorted(path.parent.glob(f"{path.name}.bak-*"))
+    if existing:
+        try:
+            if existing[-1].read_bytes() == path.read_bytes():
+                return
+        except OSError:
+            pass
     target = path.with_name(f"{path.name}.bak-{datetime.now():%Y%m%d-%H%M%S}")
     try:
         shutil.copy2(path, target)
     except OSError:
-        pass
+        return
+    for old in sorted(path.parent.glob(f"{path.name}.bak-*"))[:-BACKUP_KEEP]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def _write(path: Path, text: str) -> Path:
@@ -917,7 +938,6 @@ CLAUDE_LOCAL_ENV = {
     "ANTHROPIC_MODEL": "best",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "65536",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
     "DISABLE_AUTO_COMPACT": "1",
 }

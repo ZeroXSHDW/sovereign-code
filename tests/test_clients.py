@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from sovereign_code import clients
 from sovereign_code.clients import (
     CLIENT_ROLE_ALIAS,
-    _pin_opencode_model,
     local_clients,
     plan_launch,
     resolve_client_models,
@@ -80,42 +78,6 @@ def test_local_clients_falls_back_to_the_defaults():
     clients = local_clients(None)
     assert clients
     assert all(info.model for info in clients)
-
-
-def test_pin_opencode_model_writes_the_config_content(monkeypatch, tmp_path):
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(
-        "sovereign_code.tools.read_text",
-        lambda _path: json.dumps(
-            {"provider": {"local": {"models": {"qwen3-coder:30b": {"name": "Qwen"}}}}}
-        ),
-    )
-    env: dict[str, str] = {}
-    assert _pin_opencode_model(env, "qwen3-coder:30b") is True
-    payload = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert payload["model"] == "local/qwen3-coder:30b"
-
-
-def test_pin_opencode_model_refuses_an_unlisted_model(monkeypatch, tmp_path):
-    """Pinning a model OpenCode does not know makes it fail to start."""
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(
-        "sovereign_code.tools.read_text",
-        lambda _path: json.dumps(
-            {"provider": {"ollama": {"models": {"other:1b": {"name": "Other"}}}}}
-        ),
-    )
-    env: dict[str, str] = {}
-    assert _pin_opencode_model(env, "qwen3-coder:30b") is False
-    assert "OPENCODE_CONFIG_CONTENT" not in env
-
-
-def test_pin_opencode_model_works_without_a_user_config(monkeypatch, tmp_path):
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr("sovereign_code.tools.read_text", lambda _path: "")
-    env: dict[str, str] = {}
-    assert _pin_opencode_model(env, "qwen3-coder:30b") is True
-    assert "OPENCODE_CONFIG_CONTENT" in env
 
 
 def test_plan_launch_sets_the_local_environment(project, codex_home):

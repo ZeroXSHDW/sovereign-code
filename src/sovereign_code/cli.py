@@ -5988,6 +5988,10 @@ def _do(settings: Settings, args: argparse.Namespace) -> int:
     )
     agent = pick.model.tag if pick.model else "qwen3-coder:30b"
     review = "gemma4:12b"
+    # `--quick` is the fast path: direct mode already writes whole files in one
+    # request, so a separate review model round-trip adds latency with little
+    # benefit. `auto`/`--big` keep the review.
+    review_eager = not args.quick
     return _pipeline(
         settings,
         args.prompt,
@@ -5996,7 +6000,7 @@ def _do(settings: Settings, args: argparse.Namespace) -> int:
         agent=agent,
         review_model=review,
         yes=args.yes,
-        no_review=False,
+        no_review=not review_eager,
         tokens=700,
         no_verify=args.no_verify,
         dry_run=args.dry_run,

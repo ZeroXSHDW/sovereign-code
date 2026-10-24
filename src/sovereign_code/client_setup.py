@@ -225,8 +225,9 @@ def install_codex_mcp(path: Path | None = None) -> Path:
         "[mcp_servers.sovereign]\n"
         f'command = "{command}"\n'
         f"args = [{', '.join(json.dumps(arg) for arg in args)}]\n"
-        'env = ["SOVEREIGN_MCP_COMPUTER=1"]\n'
-        "startup_timeout_sec = 30"
+        "startup_timeout_sec = 30\n"
+        "[mcp_servers.sovereign.env]\n"
+        'SOVEREIGN_MCP_COMPUTER = "1"'
     ]
     for name, spec in complementary_mcp_servers().items():
         args_text = ", ".join(json.dumps(str(arg)) for arg in spec["args"])

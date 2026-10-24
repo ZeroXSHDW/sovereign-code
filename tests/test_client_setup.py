@@ -69,11 +69,21 @@ def test_ponytail_installers_are_graceful_without_clis(monkeypatch) -> None:
 
 
 def test_codex_mcp_block_carries_the_computer_env(tmp_path) -> None:
-    """Full computer control is pinned, not left to the server's default."""
+    """Full computer control is pinned, and TOML stays parseable by Codex.
+
+    Codex's MCP schema wants ``env`` as a sub-table, not a bare array: an
+    ``env = [...]`` line made Codex refuse the whole config with
+    "invalid type: sequence, expected a map".
+    """
     path = tmp_path / "config.toml"
     client_setup.install_codex_mcp(path)
     text = path.read_text(encoding="utf-8")
-    assert 'env = ["SOVEREIGN_MCP_COMPUTER=1"]' in text
+    assert "[mcp_servers.sovereign.env]" in text
+    assert 'SOVEREIGN_MCP_COMPUTER = "1"' in text
+    import tomllib
+
+    parsed = tomllib.loads(text)
+    assert parsed["mcp_servers"]["sovereign"]["env"]["SOVEREIGN_MCP_COMPUTER"] == "1"
 
 
 def test_claude_desktop_sovereign_entry_carries_computer_env(tmp_path) -> None:

@@ -162,3 +162,47 @@ def summarize_text(
         timeout=timeout,
         transport=transport,
     )
+
+
+REPO_PROMPT = (
+    "Here is the structure of a codebase. In a few short paragraphs, explain what "
+    "this project does, the main components and how they fit together, the primary "
+    "entry points, and anything a new contributor must know first. Keep it factual "
+    "and ground every claim in the outline below."
+)
+
+
+def summarize_repo(
+    base_url: str,
+    model: str,
+    root: Path,
+    max_tokens: int = 700,
+    timeout: float = 180.0,
+) -> str:
+    """Summarize a whole codebase from its repo map and project context."""
+    from .memory import project_context
+    from .repomap import repo_map
+
+    outline = repo_map(root)
+    if not outline.strip():
+        raise SourceError(f"no code files found under {root}")
+    context = project_context(root)
+    parts = [outline]
+    if context.strip():
+        parts.append(f"# Project instructions\n{context}")
+    readme = root / "README.md"
+    if readme.is_file():
+        # A README is the project's own description; include its head as a hint.
+        readme_text = readme.read_text(encoding="utf-8", errors="replace")[:4000]
+        parts.append(f"# README (partial)\n{readme_text}")
+    body = "\n\n".join(parts)
+    return complete(
+        base_url,
+        model,
+        [
+            {"role": "system", "content": REPO_PROMPT},
+            {"role": "user", "content": body},
+        ],
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )

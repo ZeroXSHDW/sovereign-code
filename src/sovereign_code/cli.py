@@ -1505,7 +1505,24 @@ def _summarize(
     model: str,
     max_chars: int,
     max_tokens: int,
+    directory: str | None = None,
 ) -> int:
+    if directory:
+        from .summarize import summarize_repo
+
+        root = Path(directory).expanduser().resolve()
+        if not root.is_dir():
+            console.print(f"[red]Not a directory:[/] {directory}")
+            return 1
+        console.print(f"[dim]Mapping and summarizing {root.name} via {model}…[/]")
+        try:
+            summary = summarize_repo(settings.router_url, model, root, max_tokens=max_tokens)
+        except SourceError as exc:
+            console.print(f"[red]{exc}[/]")
+            console.print("[dim]Start the gateway: sovereign gateway --restart[/]")
+            return 1
+        console.print(Panel(Text(summary), title=f"summary · {root.name}", border_style="cyan"))
+        return 0
     try:
         text = read_text_source(path=path, url=url, max_chars=max_chars)
     except SourceError as exc:
@@ -6406,9 +6423,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--model", default=DEFAULT_EMBED)
     search.add_argument("--top", type=int, default=10)
 
-    summary = sub.add_parser("summarize", help="summarize a local file or URL")
+    summary = sub.add_parser("summarize", help="summarize a local file, URL, or codebase")
     summary.add_argument("path", nargs="?", default=None)
     summary.add_argument("--url", default=None)
+    summary.add_argument("--dir", default=None, help="summarize a whole codebase instead")
     summary.add_argument("--model", default="local-chat")
     summary.add_argument("--max-chars", type=int, default=24000)
     summary.add_argument("--max-tokens", type=int, default=1024)
@@ -7894,6 +7912,7 @@ def main(argv: list[str] | None = None) -> int:
             args.model,
             args.max_chars,
             args.max_tokens,
+            directory=args.dir,
         )
     if command == "sessions":
         return _sessions(

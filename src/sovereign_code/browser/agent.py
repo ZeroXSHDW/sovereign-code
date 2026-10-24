@@ -89,7 +89,7 @@ class ModelPlanner:
 
     def _observation(self, observation: dict) -> dict:
         elements = []
-        for element in observation.get("elements", [])[:60]:
+        for element in observation.get("elements", [])[:80]:
             item: dict = {}
             for key in (
                 "id",
@@ -114,7 +114,7 @@ class ModelPlanner:
         return {
             "url": observation.get("url"),
             "title": observation.get("title"),
-            "text": str(observation.get("text") or "")[:4000],
+            "text": str(observation.get("text") or "")[:8000],
             "elements": elements,
         }
 

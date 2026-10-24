@@ -23,6 +23,7 @@
 | `tui/monitor.py` | Login dashboard: live monitor, no chat, no model residency |
 | `tui/app.py` | Opt-in streaming chat (`sovereign chat`), suspend-to-Qwen |
 | `cli.py` | `sovereign` commands and login agent installer |
+| `pdf.py` | PDF reading: Poppler text extraction, Tesseract OCR, page rendering, vision-model review; graceful degradation when binaries are missing |
 
 ## Data flow
 

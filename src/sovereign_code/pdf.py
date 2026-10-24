@@ -246,9 +246,42 @@ def extract_text(
 
 
 def extract_pages(path: str | Path, **kwargs: Any) -> list[str]:
-    """Return one text string per page."""
-    count = page_count(path)
-    return [extract_text(path, first=i, last=i, **kwargs) for i in range(1, count + 1)]
+    """Return one text string per page.
+
+    Poppler separates pages with a form-feed (``\\f``) when extracting the
+    whole document, so we can do a single ``pdftotext`` invocation instead of
+    one process per page.  Falls back to the per-page path if the count cannot
+    be determined.
+    """
+    layout = kwargs.pop("layout", True)
+    first = kwargs.pop("first", None)
+    last = kwargs.pop("last", None)
+    timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
+    if first is not None or last is not None:
+        count = page_count(path) if first is None and last is None else None
+        if count is None:
+            try:
+                count = page_count(path)
+            except RuntimeError:
+                count = 1
+        lo = first if first is not None else 1
+        hi = last if last is not None else count
+        return [
+            extract_text(path, layout=layout, first=i, last=i, timeout=timeout)
+            for i in range(lo, hi + 1)
+        ]
+    try:
+        count = page_count(path)
+    except RuntimeError:
+        return [extract_text(path, layout=layout, timeout=timeout)]
+    whole = extract_text(path, layout=layout, timeout=timeout)
+    pages = whole.split("\f")
+    # pdftotext emits a trailing empty page after the last form feed.
+    while len(pages) > count and pages and pages[-1].strip() == "":
+        pages.pop()
+    while len(pages) < count:
+        pages.append("")
+    return pages[:count]
 
 
 def needs_ocr(path: str | Path, *, min_chars: int = DEFAULT_MIN_TEXT_CHARS) -> bool:

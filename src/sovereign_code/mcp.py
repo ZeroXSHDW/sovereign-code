@@ -434,11 +434,17 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "browser_open",
-        "Open a visible local Chromium session at a URL and return the page state.",
+        "Open a visible local Chromium session at a URL and return the page state. "
+        "Pass allowed_domains to restrict navigation to a set of hosts.",
         {
             "url": {"type": "string"},
             "allow_local": {"type": "boolean", "default": False},
             "headless": {"type": "boolean", "default": False},
+            "allowed_domains": {
+                "type": "array",
+                "items": {"type": "string"},
+                "default": [],
+            },
         },
         ["url"],
     ),
@@ -483,6 +489,39 @@ TOOLS: list[dict[str, Any]] = [
         {},
     ),
     _tool("browser_close", "Close the local browser session.", {}),
+    _tool(
+        "browser_back",
+        "Navigate back in the browser history and return the page state.",
+        {},
+    ),
+    _tool(
+        "browser_forward",
+        "Navigate forward in the browser history and return the page state.",
+        {},
+    ),
+    _tool(
+        "browser_reload",
+        "Reload the current page and return the page state.",
+        {},
+    ),
+    _tool(
+        "browser_wait",
+        "Wait for a number of seconds for the page to settle, then return state.",
+        {"seconds": {"type": "number", "default": 2}},
+    ),
+    _tool(
+        "browser_search",
+        "Open a search engine results page for a query and return the page state.",
+        {
+            "query": {"type": "string"},
+            "engine": {
+                "type": "string",
+                "enum": ["duckduckgo", "google", "bing"],
+                "default": "duckduckgo",
+            },
+        },
+        ["query"],
+    ),
     _tool(
         "run_command",
         "Run a shell command on this Mac and return its output. This is full local "
@@ -909,27 +948,32 @@ def _ask(prompt: str, model: str, max_tokens: int) -> str:
 
 _BROWSER_LOCK = threading.Lock()
 _BROWSER: Any = None
-_BROWSER_MODE: tuple[bool, bool] | None = None
+_BROWSER_MODE: Any = None
 
 
-def _browser_policy(allow_local: bool):
+def _browser_policy(allow_local: bool, allowed_domains: list[str] | None = None):
     from .browser.actions import BrowserPolicy
 
-    return BrowserPolicy(allow_local=allow_local)
+    return BrowserPolicy(allow_local=allow_local, allowed_domains=tuple(allowed_domains or ()))
 
 
-def _browser_open(url: str, allow_local: bool = False, headless: bool = False) -> dict:
+def _browser_open(
+    url: str,
+    allow_local: bool = False,
+    headless: bool = False,
+    allowed_domains: list[str] | None = None,
+) -> dict:
     global _BROWSER, _BROWSER_MODE
     from .browser.actions import check_url
     from .browser.executor import BrowserSession
     from .config import LOCAL_AI_ROOT
 
     with _BROWSER_LOCK:
-        mode = (allow_local, headless)
+        mode = (allow_local, headless, tuple(allowed_domains or ()))
         if _BROWSER is not None and mode != _BROWSER_MODE:
             _BROWSER.close()
             _BROWSER = None
-        policy = _browser_policy(allow_local)
+        policy = _browser_policy(allow_local, allowed_domains)
         target = check_url(url, policy)
         if _BROWSER is None:
             _BROWSER = BrowserSession(
@@ -951,7 +995,7 @@ def _browser_observation(observation: dict) -> dict:
         "title": observation.get("title"),
         "captcha": observation.get("captcha"),
         "auth_required": observation.get("auth_required", observation.get("captcha")),
-        "text": str(observation.get("text") or "")[:6000],
+        "text": str(observation.get("text") or "")[:8000],
         "elements": observation.get("elements") or [],
     }
 
@@ -1024,6 +1068,77 @@ def _browser_close() -> dict:
         _BROWSER = None
         _BROWSER_MODE = None
         return {"ok": True}
+
+
+def _browser_back() -> dict:
+    global _BROWSER
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        url = _BROWSER.back()
+        return {
+            "result": {"ok": True, "detail": f"navigated back to {url}"},
+            "page": _browser_observation(_BROWSER.observe()),
+        }
+
+
+def _browser_forward() -> dict:
+    global _BROWSER
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        url = _BROWSER.forward()
+        return {
+            "result": {"ok": True, "detail": f"navigated forward to {url}"},
+            "page": _browser_observation(_BROWSER.observe()),
+        }
+
+
+def _browser_reload() -> dict:
+    global _BROWSER
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        url = _BROWSER.reload()
+        return {
+            "result": {"ok": True, "detail": f"reloaded {url}"},
+            "page": _browser_observation(_BROWSER.observe()),
+        }
+
+
+def _browser_wait(seconds: float = 2) -> dict:
+    global _BROWSER
+    import time as _time
+
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        _time.sleep(max(0.0, min(10.0, float(seconds))))
+        return {
+            "result": {"ok": True, "detail": f"waited {seconds:g}s"},
+            "page": _browser_observation(_BROWSER.observe()),
+        }
+
+
+def _browser_search(query: str, engine: str = "duckduckgo") -> dict:
+    global _BROWSER
+    from urllib.parse import quote_plus
+
+    urls = {
+        "duckduckgo": "https://duckduckgo.com/?q=",
+        "google": "https://www.google.com/search?q=",
+        "bing": "https://www.bing.com/search?q=",
+    }
+    base = urls.get(engine, urls["duckduckgo"])
+    target = base + quote_plus(query)
+    with _BROWSER_LOCK:
+        if _BROWSER is None:
+            raise ValueError("browser is not open; call browser_open first")
+        _BROWSER.goto(target)
+        return {
+            "result": {"ok": True, "detail": f"searched {engine} for {query}"},
+            "page": _browser_observation(_BROWSER.observe()),
+        }
 
 
 def _delegate(
@@ -1328,6 +1443,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
                 str(args.get("url") or ""),
                 bool(args.get("allow_local", False)),
                 bool(args.get("headless", False)),
+                list(args.get("allowed_domains") or []),
             )
         )
     if name == "browser_observe":
@@ -1336,6 +1452,18 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> str | list[
         return _text(_browser_act(args))
     if name == "browser_screenshot":
         return _browser_screenshot()
+    if name == "browser_back":
+        return _text(_browser_back())
+    if name == "browser_forward":
+        return _text(_browser_forward())
+    if name == "browser_reload":
+        return _text(_browser_reload())
+    if name == "browser_wait":
+        return _text(_browser_wait(float(args.get("seconds") or 2)))
+    if name == "browser_search":
+        return _text(
+            _browser_search(str(args.get("query") or ""), str(args.get("engine") or "duckduckgo"))
+        )
     if name == "browser_close":
         return _text(_browser_close())
     if name == "delegate":
@@ -1441,7 +1569,8 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                     "repo_read and edit with repo_write/repo_edit/repo_patch. "
                     "Task packs (pentest, legal, forensics, ...) via list_packs/"
                     "pack_profile. Browser control via browser_open/observe/act/"
-                    "screenshot/close. Hugging Face: hf_status, search_hf_models/"
+                    "screenshot/back/forward/reload/wait/search/close. Hugging Face: "
+                    "hf_status, search_hf_models/"
                     "hf_model_info, search_hf_datasets/hf_dataset_info, "
                     "list_hf_local. Downloads are an explicit CLI action "
                     "(`sovereign hf download`). Run shell commands via "

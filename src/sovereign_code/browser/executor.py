@@ -64,7 +64,7 @@ _OBSERVE_JS_TEMPLATE = """
       style.display !== 'none' &&
       style.opacity !== '0'
     );
-  }).slice(0, 60);
+  }).slice(0, 80);
   visible.forEach((el, i) => el.setAttribute('data-sovereign-id', String(i)));
   const sensitivePattern = /__SENSITIVE__/i;
   const elements = visible.map((el, i) => {
@@ -110,7 +110,7 @@ _OBSERVE_JS_TEMPLATE = """
   return {
     url: location.href,
     title: document.title,
-    text: bodyText.slice(0, 6000),
+    text: bodyText.slice(0, 8000),
     elements: elements
   };
 }
@@ -361,6 +361,39 @@ class BrowserSession:
         self.page.wait_for_timeout(400)
         self._enforce_policy(self.page.url)
         return target
+
+    def back(self) -> str:
+        if self.page is None:
+            raise BrowserError("browser is not running")
+        try:
+            self.page.go_back(wait_until="domcontentloaded", timeout=self.timeout_ms)
+        except Exception as exc:
+            raise BrowserError(f"go back failed: {exc}") from exc
+        self.page.wait_for_timeout(400)
+        self._enforce_policy(self.page.url)
+        return self.page.url
+
+    def forward(self) -> str:
+        if self.page is None:
+            raise BrowserError("browser is not running")
+        try:
+            self.page.go_forward(wait_until="domcontentloaded", timeout=self.timeout_ms)
+        except Exception as exc:
+            raise BrowserError(f"go forward failed: {exc}") from exc
+        self.page.wait_for_timeout(400)
+        self._enforce_policy(self.page.url)
+        return self.page.url
+
+    def reload(self) -> str:
+        if self.page is None:
+            raise BrowserError("browser is not running")
+        try:
+            self.page.reload(wait_until="domcontentloaded", timeout=self.timeout_ms)
+        except Exception as exc:
+            raise BrowserError(f"reload failed: {exc}") from exc
+        self.page.wait_for_timeout(400)
+        self._enforce_policy(self.page.url)
+        return self.page.url
 
     def observe(self) -> dict:
         if self.page is None:

@@ -1020,6 +1020,10 @@ sovereign pull-recommended # qwen2.5-coder:14b
 sovereign undo --path ~/src/app   # restore files changed by the last pipeline/code pass
 sovereign warm-pool status        # warm model pool: status/load/touch/start/stop
 sovereign browse URL --task "…" # local model drives a visible Chromium
+sovereign pdf FILE                 # read a PDF: text, OCR, images, or JSON
+sovereign pdf FILE ocr            # OCR a scanned PDF (or image)
+sovereign pdf FILE vision --model qwen3.8:27b   # vision-model review of pages
+sovereign ocr FILE                # OCR a PDF or image (alias for `pdf ocr`)
 sovereign install-login --start-now
 sovereign uninstall-login
 ```
@@ -1049,6 +1053,38 @@ when it needs you. Run it from the CLI with `sovereign browse <url> --task "…"
   `~/Documents/local-ai/data/browser/runs/`.
 
 Install: `pip install -e '.[browser]' && playwright install chromium`.
+
+## PDF, OCR, and document imaging
+
+Sovereign Code reads PDFs locally — born-digital text via Poppler, scanned
+pages via Tesseract OCR, and page images for vision models. Nothing leaves the
+Mac.
+
+```sh
+sovereign pdf report.pdf                 # extract text (auto-OCR if needed)
+sovereign pdf report.pdf info            # page count + whether OCR is needed
+sovereign pdf report.pdf ocr             # force OCR of every page
+sovereign pdf report.pdf images --dpi 300 --out ./pages
+sovereign pdf report.pdf vision --model qwen3.8:27b
+sovereign pdf report.pdf json            # full structured document as JSON
+sovereign ocr scan.png                   # OCR a single image
+```
+
+- **Fast path**: born-digital pages use `pdftotext -layout` (sub-second for
+  whole documents); scanned/image-only pages are rendered with `pdftoppm` and
+  OCR'd in parallel (up to 4 workers).
+- **Auto-OCR**: `read_pdf` only renders and OCRs pages whose extracted text
+  is below a threshold, so text PDFs stay fast.
+- **Vision review**: render pages to PNG and ask a local vision model to read
+  them; useful for tables, charts, and forms.
+- **Graceful degradation**: if Poppler or Tesseract is missing, helpers raise a
+  clear `RuntimeError` pointing at `brew install poppler tesseract`.
+- **Knowledge indexing**: `sovereign index` and `sovereign knowledge` now
+  include PDFs, so semantic search covers documents too.
+- **MCP tools**: `pdf_read`, `pdf_ocr`, `pdf_auto` are exposed to connected
+  agents.
+
+Install: `brew install poppler tesseract`.
 
 ## Skills, memory, and multi-model
 

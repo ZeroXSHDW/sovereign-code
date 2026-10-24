@@ -35,6 +35,19 @@ def test_unknown_project_has_no_checks(tmp_path: Path) -> None:
     assert detect_checks(tmp_path) == []
 
 
+def test_detects_bun_deno_and_justfile(tmp_path: Path) -> None:
+    (tmp_path / "bun.lockb").write_text("", encoding="utf-8")
+    assert detect_checks(tmp_path) == ["bun test"]
+
+    (tmp_path / "bun.lockb").unlink()
+    (tmp_path / "deno.json").write_text("{}", encoding="utf-8")
+    assert detect_checks(tmp_path) == ["deno test"]
+
+    (tmp_path / "deno.json").unlink()
+    (tmp_path / "justfile").write_text("test:\n", encoding="utf-8")
+    assert detect_checks(tmp_path) == ["just test"]
+
+
 def test_run_checks_reports_failure(tmp_path: Path) -> None:
     result = run_checks(tmp_path, ["exit 3"], timeout=30)
     assert result.ok is False

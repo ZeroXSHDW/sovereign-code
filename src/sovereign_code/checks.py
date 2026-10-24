@@ -102,6 +102,14 @@ def detect_checks(directory: Path) -> list[str]:
         return ["cargo test --quiet"]
     if (directory / "go.mod").is_file():
         return ["go test ./..."]
+    # Emerging runtimes and task runners that otherwise report "unknown check"
+    # and skip the verify stage of the pipeline entirely.
+    if (directory / "bun.lockb").is_file() or (directory / "bun.lock").is_file():
+        return ["bun test"]
+    if (directory / "deno.json").is_file() or (directory / "deno.jsonc").is_file():
+        return ["deno test"]
+    if (directory / "justfile").is_file() or (directory / ".justfile").is_file():
+        return ["just test"]
     return []
 
 

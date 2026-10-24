@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sovereign-code"
-version = "0.5.2"
+version = "0.6.0"
 description = "Terminal-first, local-first AI coding console for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.11"

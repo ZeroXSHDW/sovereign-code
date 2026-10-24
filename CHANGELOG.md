@@ -2,6 +2,36 @@
 
 All notable changes to Sovereign Code.
 
+## [0.6.0] - 2026-10-24
+
+### Added
+- **`sovereign model-use`**: select an installed model for OpenCode, Codex
+  (ChatGPT) and Claude Code in one command, instead of hand-editing configs.
+  The tier gateway already routes every installed tag by name, and the bridge
+  passes unknown names through, so `model-use` only writes the client-side
+  selection: OpenCode's `model` key, Codex's local profile (model + the
+  catalog's context window), and Claude's `ANTHROPIC_MODEL`. `--pull` fetches a
+  missing model first, `--list` shows each client's current model, and
+  `--client opencode|codex|claude|all` scopes the change.
+
+### Changed
+- **Coverage floor raised to 53%** and the suite grown to 1000 tests, with new
+  coverage for the guardian supervision paths, the Ollama client's stream
+  parsing, the HTTP retry/backoff policy, the client launch-plan branches, the
+  direct-mode transaction/rollback and undo paths, and the per-client model-use
+  wiring.
+
+### Fixed
+- **`DiskCache.stats()` reported disk counters under `memory_*` names**, so any
+  reader deciding "is the memory cache working?" saw the wrong layer. It now
+  returns `hits`/`misses` like `MemoryCache`, and `sovereign cache --stats`
+  shows the real disk miss count.
+- **`DiskCache.clear()` ran `VACUUM` under the single request lock**, which
+  rewrites the whole database and stalled every cached answer until it
+  finished. The delete is enough; WAL reclaims space lazily.
+- **The retired-model set was written out three times** in the client-config
+  writers; a single `RETIRED_MODELS` constant keeps them in step.
+
 ## [0.5.2] - 2026-10-24
 
 ### Changed

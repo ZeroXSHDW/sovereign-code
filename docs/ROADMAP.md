@@ -4,7 +4,14 @@ Prioritised work for Sovereign Code. This is the list the agent starts from
 when asked "what next". Every item here must pass `make check` before it is
 considered done.
 
-## Now — v0.5.0: client compatibility
+## Now — v0.6.0: model selection and release polish
+
+`v0.6.0` (2026-10-24) adds `sovereign model-use` (select a model for OpenCode,
+Codex and Claude in one command), lifts the coverage floor to 53% with 1000
+tests, and folds in the cache and client-wiring fixes from the post-0.5.2
+hardening pass. The live-hardware verification for MLX and `pack verify`
+remains explicitly deferred — the code is wired, the release does not claim
+those runs are done.
 
 `v0.5.0` (2026-10-24) is the release where the three agent clients are verified
 rather than assumed: Codex, Claude Code and OpenCode each answer a real turn

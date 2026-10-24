@@ -238,19 +238,31 @@ def install_codex_mcp(path: Path | None = None) -> Path:
         )
     block = "\n\n".join(parts) + "\n"
     marker = "[mcp_servers.sovereign]"
+    # A machine-specific server from an older install must be pruned whether or
+    # not the sovereign block is already present: a fresh run against a config
+    # that only has the stale entry must not silently keep it.
+    if "browseros-neo" in text:
+        import re
+
+        text = (
+            re.sub(r"(?ms)^\[mcp_servers\.browseros-neo\].*?(?=^\[|\Z)", "", text).rstrip() + "\n"
+        )
     if marker in text:
         import re
 
         # Remove every block this function owns before appending the new
         # versions. Replacing only the sovereign block left the previous
         # filesystem/memory tables behind, so the next run produced duplicate
-        # TOML tables and the client refused the whole config.
+        # TOML tables and the client refused the whole config. The `sovereign`
+        # env sub-table is removed separately because it sits *after* the
+        # sovereign header, and the header regex stops at the next `[`.
         for name in ("sovereign", *complementary_mcp_servers()):
             text = re.sub(
                 rf"(?ms)^\[mcp_servers\.{re.escape(name)}\].*?(?=^\[|\Z)",
                 "",
                 text,
             )
+        text = re.sub(r"(?ms)^\[mcp_servers\.sovereign\.env\].*?(?=^\[|\Z)", "", text)
         return _write(target, text.rstrip() + "\n\n" + block)
     return _write(target, text.rstrip() + "\n\n" + block)
 

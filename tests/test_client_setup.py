@@ -220,6 +220,19 @@ def test_codex_mcp_block_is_idempotent(tmp_path) -> None:
     assert 'model = "x"' in path.read_text()
 
 
+def test_codex_mcp_prunes_a_retired_server(tmp_path) -> None:
+    """A stale machine-specific server from an older install is removed."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[mcp_servers.browseros-neo]\nurl = "http://127.0.0.1:9010/mcp"\n',
+        encoding="utf-8",
+    )
+    client_setup.install_codex_mcp(path)
+    text = path.read_text(encoding="utf-8")
+    assert "browseros-neo" not in text
+    assert "[mcp_servers.sovereign]" in text
+
+
 def test_claude_desktop_config_preserves_existing_keys(tmp_path) -> None:
     path = tmp_path / "claude_desktop_config.json"
     path.write_text(json.dumps({"deploymentMode": "1p", "mcpServers": {"other": {}}}))

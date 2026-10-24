@@ -7,6 +7,7 @@ stale gateway can be stopped instead of blocking its own restart.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -25,12 +26,17 @@ def _fake_cli(bin_dir: Path, name: str, body: str) -> None:
 
 
 def test_probe_router_accepts_a_served_completion() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
         return httpx.Response(200, json={"choices": [{"message": {"content": "p"}}]})
 
     result = verify.probe_router("http://127.0.0.1:4010", transport=httpx.MockTransport(handler))
     assert result.ok
     assert "served" in result.detail
+    # No model is named, so the probe works on a machine without the 4B tier.
+    assert "model" not in seen
 
 
 def test_probe_router_rejects_an_empty_reply() -> None:
@@ -148,3 +154,16 @@ def test_a_losing_bind_does_not_crash(monkeypatch) -> None:
     monkeypatch.setattr(gateway, "make_server", busy)
     monkeypatch.setattr(gateway.threading, "Thread", lambda *_a, **_k: pytest.fail("warmed"))
     gateway.serve("127.0.0.1", 4010, "http://127.0.0.1:11434", "http://127.0.0.1:4000")
+
+
+def test_stop_reports_a_gateway_that_stays_up(monkeypatch, tmp_path) -> None:
+    """A process that ignores SIGTERM is not reported as stopped."""
+    pid_file = tmp_path / "tier.pid"
+    pid_file.write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(tier_gateway, "pid_path", lambda: pid_file)
+    monkeypatch.setattr(tier_gateway, "STOP_WAIT", 0.0)
+    monkeypatch.setattr(tier_gateway, "_is_gateway_process", lambda _pid: True)
+    monkeypatch.setattr(tier_gateway.os, "kill", lambda *_args: None)
+    monkeypatch.setattr(tier_gateway, "port_open", lambda **_kwargs: True)
+    assert tier_gateway.stop(port=59999) is False
+    assert pid_file.exists()

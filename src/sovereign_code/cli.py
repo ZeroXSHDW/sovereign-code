@@ -2207,7 +2207,8 @@ def _code(path: str, yolo: bool = False, prompt: str | None = None) -> int:
     if not selection.model:
         console.print("[red]No local model installed.[/] Run: sovereign pull-recommended")
         return 1
-    tag = selection.tag or "qwen2.5-coder:7b"
+    # selection.model is non-empty above, so selection.tag is a concrete tag.
+    tag = selection.model.tag
     console.print(
         f"[bold]Qwen Code[/] · model [green]{tag}[/] · {selection.context} ctx · {target}"
     )
@@ -2379,7 +2380,15 @@ def _router(
         start = True
     if stop:
         stopped = tg.stop()
-        console.print("[green]Tier gateway stopped.[/]" if stopped else "[dim]Not running.[/]")
+        if stopped:
+            console.print("[green]Tier gateway stopped.[/]")
+        elif tg.port_open(port=port):
+            console.print(
+                "[red]Tier gateway ignored SIGTERM and still holds "
+                f"{host}:{port}.[/] [dim]Stop it with: lsof -ti tcp:{port} | xargs kill -9[/]"
+            )
+        else:
+            console.print("[dim]Not running.[/]")
         return 0 if stopped else 1
     if status:
         running = tg.port_open(host, port)
@@ -5849,6 +5858,7 @@ def _install_clients() -> int:
         "[dim]Launch: sovereign launch codex|claude|opencode|qwen|codium [path]. "
         "Restart Claude Desktop and ChatGPT to pick up the MCP server.[/]"
     )
+    console.print("[dim]Prove it: sovereign verify --clients (one real turn through each).[/]")
     return 0
 
 
@@ -6455,7 +6465,7 @@ def build_parser() -> argparse.ArgumentParser:
     consult = sub.add_parser("consult", help="run one prompt through several models")
     consult.add_argument("prompt")
     consult.add_argument("--models", default=None, help="comma-separated aliases")
-    consult.add_argument("--tokens", type=int, default=400)
+    consult.add_argument("--tokens", type=int, default=900)
     consult.add_argument(
         "--domain",
         default=None,

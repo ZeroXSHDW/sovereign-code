@@ -41,6 +41,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .cache import MEMORY, cache_key_chat, disk_cache
+from .domains import DOMAINS
 from .http import leased_client, shared_client
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
@@ -163,6 +164,7 @@ TIER_ALIASES: dict[str, str | None] = {
     "local-code": DEEP,
     "local-agent": DEEP,
     "local-reasoning": DEEP,
+    "local-reasoning-deep": ULTRA,
     "local-thinking": DEEP,
     "ultra": ULTRA,
     "sovereign-ultra": ULTRA,
@@ -180,6 +182,10 @@ EXPLICIT_LOCAL: dict[str, tuple[str, int, bool | None]] = {
     "local-browser-nav": ("qwen3.8:27b", 16384, False),
     "local-code-dense": ("qwen2.5-coder:14b", 32768, False),
 }
+
+# Domain keys are public route names too: `ask(model="legal")` must reach the
+# specialist the domain names, not fall through to the cloud proxy.
+DOMAIN_ALIASES: dict[str, str] = {key: domain.alias for key, domain in DOMAINS.items()}
 
 _CODE_SIGNALS = (
     "```",
@@ -510,6 +516,16 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
         add(alias, "sovereign", tier=alias_tier, model=model, context=context)
     for alias in QUALITY_ALIASES:
         add(alias, "sovereign", tier="auto")
+
+    # Domain keys (legal, forensics, ...) so a client can name the specialist.
+    for key, alias in DOMAIN_ALIASES.items():
+        domain_tier = TIER_ALIASES.get(alias)
+        if domain_tier:
+            model, context, _think = TIER_MODELS[domain_tier]
+            add(key, "sovereign", tier=domain_tier, model=model, context=context)
+        elif alias in EXPLICIT_LOCAL:
+            model, context, _think = EXPLICIT_LOCAL[alias]
+            add(key, "sovereign", model=model, context=context)
 
     # The models Ollama has installed, so a client can name one directly.
     for tag in sorted(installed):
@@ -1593,6 +1609,7 @@ def resolve_route(
     installed: set[str] | None = None,
 ) -> Route:
     model = str(request.get("model") or "auto")
+    model = DOMAIN_ALIASES.get(model, model)
     installed = installed if installed is not None else set()
     if forced_tier in TIERS:
         model = forced_tier
@@ -2380,6 +2397,9 @@ def _is_gateway_process(pid: int) -> bool:
     return "sovereign_code" in result.stdout and "router" in result.stdout
 
 
+STOP_WAIT = 10.0
+
+
 def stop(port: int = DEFAULT_PORT) -> bool:
     """Stop the gateway: by pid file, else by whoever owns the port.
 
@@ -2402,9 +2422,13 @@ def stop(port: int = DEFAULT_PORT) -> bool:
         os.kill(pid, 15)
     except OSError:
         return False
-    deadline = time.monotonic() + 10.0
+    deadline = time.monotonic() + STOP_WAIT
     while port_open(port=port) and time.monotonic() < deadline:
         time.sleep(0.2)
+    if port_open(port=port):
+        # It ignored SIGTERM and still owns the port; say so instead of
+        # reporting a stop that did not happen and leaving the pid file gone.
+        return False
     try:
         pid_path().unlink()
     except OSError:

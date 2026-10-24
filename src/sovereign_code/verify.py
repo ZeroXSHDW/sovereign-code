@@ -201,7 +201,9 @@ def probe_router(
                 f"{base_url.rstrip('/')}/v1/chat/completions",
                 headers={"Authorization": "Bearer local"},
                 json={
-                    "model": "fast",
+                    # No model: the gateway routes a short prompt to its fast
+                    # tier, so the probe does not fail on a machine where the
+                    # 4B happens not to be installed.
                     "messages": [{"role": "user", "content": "ping"}],
                     "max_tokens": 1,
                     "stream": False,

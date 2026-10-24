@@ -51,6 +51,8 @@ format:
 
 typecheck:
 	$(VENV)/bin/mypy
+	# CI runs on Linux, where sys.platform narrows; check that view too.
+	$(VENV)/bin/mypy --platform linux
 
 check: lint typecheck coverage
 	$(VENV)/bin/ruff format --check .

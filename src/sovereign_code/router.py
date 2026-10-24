@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .models import CATALOG, ModelView, preferred_tags
+from .models import CATALOG, ModelView
+from .models import preferred_tags as preferred_tags
 
 
 class Task(StrEnum):

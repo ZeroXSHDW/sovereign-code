@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
-from .errors import OllamaError
+from .errors import OllamaError as OllamaError
 from .http import async_client
 
 PRELOAD_TIMEOUT = 900.0
@@ -58,10 +58,10 @@ class OllamaClient:
         self,
         method: str,
         path: str,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         timeout: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Send one request and return the decoded body.
 
         `timeout` defaults to the client timeout. The connect phase is kept
@@ -94,7 +94,7 @@ class OllamaClient:
                 )
             )
         try:
-            return response.json()
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise OllamaError(f"Ollama returned invalid JSON for {path}") from exc
 

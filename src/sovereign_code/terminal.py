@@ -264,6 +264,15 @@ def tmux_available() -> bool:
     return shutil.which("tmux") is not None
 
 
+def _prune_background_logs(folder: Path, keep: int = 50) -> None:
+    """Keep background command logs from growing without bound."""
+    for old in sorted(folder.glob("bg-*.log"), reverse=True)[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            continue
+
+
 def run_background(
     command: str,
     *,
@@ -277,6 +286,7 @@ def run_background(
     workdir = _workdir(cwd)
     folder = DATA_DIR / "terminals"
     ensure_private_dir(folder)
+    _prune_background_logs(folder)
     log_path = folder / f"bg-{time.time_ns()}.log"
     merged_env = os.environ.copy()
     if env:

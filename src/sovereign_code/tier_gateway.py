@@ -928,7 +928,9 @@ def responses_stream(
         seq += 1
         return _event(name, data)
 
-    def response_object(status: str, output: list[dict[str, Any]], usage: dict[str, int]) -> dict:
+    def response_object(
+        status: str, output: list[dict[str, Any]], usage: dict[str, int]
+    ) -> dict[str, Any]:
         return {
             "id": response_id,
             "object": "response",
@@ -1380,11 +1382,9 @@ def repeated_tool_call(messages: list[dict[str, Any]]) -> bool:
     return len(signatures) >= 3 and len(set(signatures[-3:])) == 1
 
 
-def truncate_tool_outputs(
-    messages: list[dict[str, Any]], limit: int = 6000
-) -> list[dict[str, Any]]:
+def truncate_tool_outputs(messages: list[Any], limit: int = 6000) -> list[dict[str, Any]]:
     """Keep long tool results from consuming the whole context on long runs."""
-    result = []
+    result: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             result.append(message)

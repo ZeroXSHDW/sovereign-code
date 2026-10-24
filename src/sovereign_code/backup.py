@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tarfile
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +15,7 @@ def _entries(
     include_dirs: list[Path],
     exclude: dict[Path, tuple[str, ...]],
     root: Path | None,
-):
+) -> Iterator[tuple[Path, Path]]:
     for directory in include_dirs:
         if not directory.is_dir():
             continue
@@ -73,9 +74,9 @@ def create_backup(
             with tarfile.open(fileobj=raw, mode="w:gz") as archive:
                 for file_path, arcname in _entries(include_dirs, exclude or {}, root):
                     archive.add(file_path, arcname=str(arcname))
-                for file_path, arcname in (extra_files or {}).items():
+                for file_path, extra_arcname in (extra_files or {}).items():
                     if file_path.is_file():
-                        archive.add(file_path, arcname=arcname)
+                        archive.add(file_path, arcname=extra_arcname)
         os.replace(partial, path)
     except BaseException:
         # An interrupted or failed archive must not leave a truncated

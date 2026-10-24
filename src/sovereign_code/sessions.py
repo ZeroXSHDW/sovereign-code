@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .config import SESSIONS_DIR, ensure_layout
-from .safefile import open_private
 
 
 def _now() -> str:
@@ -58,7 +59,7 @@ class SessionWriter:
         )
         return writer
 
-    def _append_record(self, record: dict) -> None:
+    def _append_record(self, record: dict[str, Any]) -> None:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         try:
@@ -93,10 +94,10 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
-def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
+def search_sessions(query: str, directory: Path | None = None) -> list[dict[str, Any]]:
     """Return message records whose content matches the query (case-insensitive)."""
     needle = query.lower()
-    matches: list[dict] = []
+    matches: list[dict[str, Any]] = []
     for info in scan_sessions(directory):
         for record in read_session(info.path):
             if record.get("type") != "message":
@@ -115,14 +116,32 @@ def search_sessions(query: str, directory: Path | None = None) -> list[dict]:
 
 
 def export_sessions(dest: Path, directory: Path | None = None) -> int:
-    """Write every session record to a single JSONL file; returns the record count."""
+    """Write every session record to a single JSONL file; returns the record count.
+
+    The export is staged in a private temp file and renamed into place, so an
+    interrupted run cannot leave a truncated file in place of a previous good
+    export.
+    """
     records = 0
-    with open_private(dest, "w") as output:
-        for info in scan_sessions(directory):
-            for record in read_session(info.path):
-                record["_session"] = info.path.name
-                output.write(json.dumps(record, ensure_ascii=False) + "\n")
-                records += 1
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=str(dest.parent), prefix=f".{dest.name}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            for info in scan_sessions(directory):
+                for record in read_session(info.path):
+                    record["_session"] = info.path.name
+                    output.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    records += 1
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, dest)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     # An export contains every chat message, so it is private like the
     # session files themselves.
     try:
@@ -132,7 +151,7 @@ def export_sessions(dest: Path, directory: Path | None = None) -> int:
     return records
 
 
-def read_session(path: Path) -> list[dict]:
+def read_session(path: Path) -> list[dict[str, Any]]:
     """Read a session file, skipping a corrupt line instead of losing the rest.
 
     A crash during an append can leave one truncated JSONL line. The previous
@@ -140,7 +159,7 @@ def read_session(path: Path) -> list[dict]:
     so every later message became invisible to search, export and the session
     list.
     """
-    records: list[dict] = []
+    records: list[dict[str, Any]] = []
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

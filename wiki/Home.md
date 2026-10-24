@@ -23,6 +23,19 @@ agents** — not chat wrappers — against those local models, with streamed too
 calls, a policy-checked browser, PDF/OCR, Hugging Face, task packs, skills, and
 an MCP server for the desktop apps.
 
+## Menu bar
+
+The `Sovereign Local` menu bar controller puts the stack one click away:
+
+![Sovereign Local menu bar](https://raw.githubusercontent.com/ZeroXSHDW/sovereign-code/main/docs/assets/menu-bar.png)
+
+Live gateway and per-tier latency, the resident model and free memory, and
+one-click local/cloud switches. Install it with:
+
+```sh
+sovereign local-bar --install --open
+```
+
 ## Quick start
 
 ```sh

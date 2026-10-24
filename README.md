@@ -41,6 +41,11 @@ The terminal configuration as a 3D stack:
 
 ![Sovereign Code 3D stack](docs/assets/architecture-3d.png)
 
+The macOS menu bar controller (`sovereign local-bar`), with live gateway, latency,
+resident-model and local/cloud status at a glance:
+
+![Sovereign Local menu bar](docs/assets/menu-bar.png)
+
 (`docs/assets/social-preview.png` is the 2400×1260 image — a 2× 1200×630 card —
 to set as the repository's social preview.)
 

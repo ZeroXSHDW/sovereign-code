@@ -1,0 +1,50 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3a3c"/>
+      <stop offset="1" stop-color="#242426"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS menu bar -->
+  <rect width="1200" height="52" fill="url(#bar)"/>
+  <text x="16" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif"> Local</text>
+  <text x="60" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif" font-weight="700"></text>
+  <text x="100" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif">File</text>
+  <text x="150" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif">Edit</text>
+  <text x="200" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif">View</text>
+  <text x="255" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif">Window</text>
+  <text x="325" y="34" fill="#f5f5f7" font-size="16" font-family="sans-serif">Help</text>
+  <!-- Sovereign Local status item on the right -->
+  <circle cx="1038" cy="27" r="5" fill="#54e07d"/>
+  <text x="1052" y="34" fill="#f5f5f7" font-size="16" font-family="monospace" font-weight="700">● local</text>
+  <!-- menu, opened -->
+  <rect x="936" y="52" width="280" height="620" rx="10" fill="#2b2b2e" stroke="#4a4a4d" stroke-width="1"/>
+  <text x="956" y="86" fill="#9a9a9e" font-size="15" font-family="sans-serif">Tier gateway · local-only</text>
+  <text x="956" y="112" fill="#9a9a9e" font-size="15" font-family="sans-serif">Latency · fast 804ms · balanced 4373ms</text>
+  <text x="956" y="138" fill="#9a9a9e" font-size="15" font-family="sans-serif">ChatGPT Local · running</text>
+  <text x="956" y="164" fill="#9a9a9e" font-size="15" font-family="sans-serif">ChatGPT desktop · local, no sign-in</text>
+  <text x="956" y="190" fill="#9a9a9e" font-size="15" font-family="sans-serif">Claude · local bridge</text>
+  <text x="956" y="216" fill="#9a9a9e" font-size="15" font-family="sans-serif">Resident · qwen3.8:27b · 18.0 GB</text>
+  <text x="956" y="242" fill="#9a9a9e" font-size="15" font-family="sans-serif">Memory · 9.5 GB free</text>
+  <line x1="946" y1="256" x2="1206" y2="256" stroke="#4a4a4d" stroke-width="1"/>
+  <text x="956" y="284" fill="#e8e8ea" font-size="15" font-family="sans-serif">Open ChatGPT Local</text>
+  <text x="956" y="310" fill="#e8e8ea" font-size="15" font-family="sans-serif">Open ChatGPT desktop</text>
+  <text x="956" y="336" fill="#e8e8ea" font-size="15" font-family="sans-serif">Start local Codex</text>
+  <text x="956" y="362" fill="#e8e8ea" font-size="15" font-family="sans-serif">Start local Claude</text>
+  <line x1="946" y1="376" x2="1206" y2="376" stroke="#4a4a4d" stroke-width="1"/>
+  <text x="956" y="404" fill="#9a9a9e" font-size="15" font-family="sans-serif">Force local ChatGPT (no sign-in)</text>
+  <text x="956" y="430" fill="#9a9a9e" font-size="15" font-family="sans-serif">Repair ChatGPT local config</text>
+  <text x="956" y="456" fill="#9a9a9e" font-size="15" font-family="sans-serif">Restore cloud ChatGPT</text>
+  <text x="956" y="482" fill="#9a9a9e" font-size="15" font-family="sans-serif">Point Claude at local bridge</text>
+  <text x="956" y="508" fill="#9a9a9e" font-size="15" font-family="sans-serif">Restore cloud Claude</text>
+  <line x1="946" y1="522" x2="1206" y2="522" stroke="#4a4a4d" stroke-width="1"/>
+  <text x="956" y="550" fill="#e8e8ea" font-size="15" font-family="sans-serif">Unload resident models</text>
+  <text x="956" y="576" fill="#e8e8ea" font-size="15" font-family="sans-serif">Restart local stack</text>
+  <text x="956" y="602" fill="#e8e8ea" font-size="15" font-family="sans-serif">Run local-only audit</text>
+  <text x="956" y="628" fill="#e8e8ea" font-size="15" font-family="sans-serif">Verify ChatGPT is local</text>
+  <line x1="946" y1="642" x2="1206" y2="642" stroke="#4a4a4d" stroke-width="1"/>
+  <text x="956" y="668" fill="#e8e8ea" font-size="15" font-family="sans-serif">Quit</text>
+  <!-- caption -->
+  <text x="16" y="560" fill="#9a9a9e" font-size="14" font-family="sans-serif">Sovereign Local — the macOS menu bar controller</text>
+  <text x="16" y="584" fill="#7c6cf0" font-size="13" font-family="monospace">sovereign local-bar --install --open</text>
+</svg>

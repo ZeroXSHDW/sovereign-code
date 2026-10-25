@@ -702,6 +702,7 @@ def start_server(
     kv_bits: int = 8,
     draft_tokens: int = 4,
     decode_concurrency: int = 4,
+    auto_install: bool = False,
 ) -> tuple[bool, str]:
     """Start mlx-lm detached for a catalog tag. Returns (started, detail)."""
     if disabled():
@@ -710,9 +711,24 @@ def start_server(
         return True, "already online"
     python = python_executable()
     if not module_available(python):
-        return False, (
-            f"mlx-lm is not installed for {python}; run: {python} -m pip install mlx mlx-lm"
-        )
+        if auto_install:
+            import subprocess as _sp
+
+            try:
+                result = _sp.run(
+                    [python, "-m", "pip", "install", "mlx", "mlx-lm"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            except (OSError, _sp.SubprocessError) as exc:
+                return False, f"install failed: {exc}"
+            if result.returncode != 0:
+                return False, (f"mlx-lm install failed: {result.stderr.strip()[:200]}")
+        else:
+            return False, (
+                f"mlx-lm is not installed for {python}; run: {python} -m pip install mlx mlx-lm"
+            )
     target = start_target(model)
     draft = draft_target(model, draft)
     # Auto-download the model (and its speculative draft) if the weights are not

@@ -4444,6 +4444,7 @@ def _mlx_cmd(settings: Settings, args: argparse.Namespace) -> int:
             kv_bits=args.kv_bits,
             draft_tokens=args.draft_tokens,
             decode_concurrency=args.decode_concurrency,
+            auto_install=getattr(args, "yes", False),
         )
         if not started:
             console.print(f"[red]MLX did not start:[/] {detail}")

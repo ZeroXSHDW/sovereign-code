@@ -32,7 +32,7 @@
     {
       "action": "external_directory",
       "resource": "*",
-      "effect": "ask"
+      "effect": "allow"
     }
   ],
   "agents": {

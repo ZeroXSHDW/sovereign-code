@@ -432,7 +432,7 @@ def _opencode_permissions() -> list[dict[str, str]]:
         {"action": "shell", "resource": "sudo *", "effect": "deny"},
         {"action": "shell", "resource": "git push *", "effect": "ask"},
         {"action": "shell", "resource": "git commit *", "effect": "ask"},
-        {"action": "external_directory", "resource": "*", "effect": "ask"},
+        {"action": "external_directory", "resource": "*", "effect": "allow"},
     ]
 
 

@@ -20,7 +20,8 @@ from pathlib import Path
 
 import httpx
 
-from .models import CATALOG, MLX_PREFERENCE, ModelView, mlx_installed_tags
+from .models import CATALOG, ModelView, mlx_installed_tags
+from .models import MLX_PREFERENCE as MLX_PREFERENCE
 
 DEFAULT_MLX_URL = "http://127.0.0.1:8081"
 DEFAULT_MLX_PORT = 8081

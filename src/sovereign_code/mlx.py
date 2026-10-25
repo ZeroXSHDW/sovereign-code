@@ -715,6 +715,12 @@ def start_server(
         )
     target = start_target(model)
     draft = draft_target(model, draft)
+    # Auto-download the model (and its speculative draft) if the weights are not
+    # on disk yet, so `sovereign mlx start` is a single self-contained step.
+    if model in REPO_IDS and not local_path(model):
+        ok, detail = download_model(model)
+        if not ok:
+            return False, f"download failed: {detail}"
     log = log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = server_command(

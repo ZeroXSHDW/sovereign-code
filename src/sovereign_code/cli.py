@@ -1691,6 +1691,30 @@ def _doctor(snap: Snapshot) -> int:
         f"{snap.settings.ollama_url} · {snap.version}",
         "open Ollama.app",
     )
+    # MLX is optional (Apple Silicon only) but gives the fastest coding on
+    # this Mac. Report its state so the user knows whether Metal acceleration
+    # is live or whether they need `sovereign mlx start`.
+    try:
+        from . import mlx as _mlx
+
+        mlx_up = _mlx.online()
+        mlx_detail = (
+            f"{_mlx.mlx_url()} · {len(_mlx.available_tags())} model(s)"
+            if mlx_up
+            else "offline (sovereign mlx start)"
+        )
+        mlx_hint = "" if mlx_up else "sovereign mlx start --model mlx-qwen3-4b-4bit"
+    except Exception:
+        mlx_up = False
+        mlx_detail = "not available on this platform"
+        mlx_hint = ""
+    add(
+        mlx_up,
+        "MLX server (Metal)",
+        mlx_detail,
+        mlx_hint,
+        warn=True,
+    )
     if snap.exposed_ports:
         exposed = ", ".join(
             f"{port} on {', '.join(addresses)}" for port, addresses in snap.exposed_ports.items()

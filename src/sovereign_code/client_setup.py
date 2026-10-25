@@ -566,7 +566,13 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                 "apiKey": "mlx",
             },
             "models": {
-                name: _opencode_model(name, title, context, max_context)
+                # mlx-lm serves each model under its Hugging Face repo id, so
+                # the catalog tag is translated to that id (falling back to the
+                # tag itself when no mapping exists). The tier-gateway path
+                # (sovereign/mlx-*) handles the same models dynamically.
+                _mlx_served_name(name): _opencode_model(
+                    _mlx_served_name(name), title, context, max_context
+                )
                 for name, (title, context) in MLX_MODELS.items()
             },
         },
@@ -1966,6 +1972,21 @@ MLX_ROUTES: dict[str, str] = {
     "mlx-fast": "MLX Fast — 4B class",
     "mlx-chat": "MLX Chat — Llama 3.1 8B",
 }
+
+# Catalog tag -> the Hugging Face repo id mlx-lm actually serves. The direct
+# MLX provider in OpenCode must use these ids, because mlx-lm rejects our short
+# catalog tags and tries to fetch them from the Hub.
+_MLX_SERVED_NAMES: dict[str, str] = {
+    "mlx-qwen3-14b-4bit": "mlx-community/Qwen3-14B-4bit",
+    "mlx-qwen3-8b-4bit": "mlx-community/Qwen3-8B-4bit",
+    "mlx-qwen3-4b-4bit": "mlx-community/Qwen3-4B-4bit",
+    "mlx-qwen2.5-coder-7b-4bit": "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+    "mlx-llama-3.1-8b-instruct-4bit": "mlx-community/Llama-3.1-8B-Instruct-4bit",
+}
+
+
+def _mlx_served_name(tag: str) -> str:
+    return _MLX_SERVED_NAMES.get(tag, tag)
 
 
 def mlx_provider_models() -> dict[str, dict[str, Any]]:

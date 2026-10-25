@@ -49,10 +49,12 @@ def test_opencode_config_includes_an_mlx_provider() -> None:
     assert mlx["package"] == "@opencode/ai/providers/openai-compatible"
     assert mlx["settings"]["baseURL"] == "http://127.0.0.1:8081/v1"
     assert mlx["settings"]["apiKey"] == "mlx"
-    # Every curated MLX model is offered to OpenCode.
+    # Every curated MLX model is offered to OpenCode, keyed by the served id
+    # mlx-lm actually accepts (its Hugging Face repo path).
     for name in client_setup.MLX_MODELS:
-        assert name in mlx["models"]
-        assert mlx["models"][name]["capabilities"]["tools"] is True
+        served = client_setup._mlx_served_name(name)
+        assert served in mlx["models"]
+        assert mlx["models"][served]["capabilities"]["tools"] is True
 
 
 def test_opencode_config_is_native_v2_and_adds_coding_helpers() -> None:

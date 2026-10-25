@@ -159,23 +159,35 @@ class DiskCache:
         self.path = Path(path) if path else DEFAULT_DB
         ensure_private_dir(self.path.parent)
         self.ttl = ttl
-        # The tier gateway serves each request on its own thread, so the
-        # connection is deliberately shared across threads. All access is
-        # serialised by ``self._lock`` below.
-        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        # Each thread gets its own connection: sqlite3 connections are not
+        # safe to share across threads even with check_same_thread=False, and
+        # the tier gateway serves every request on a fresh thread. All access
+        # is still serialised by ``self._lock`` below.
+        self._local = threading.local()
+        self._lock = threading.Lock()
+        # Bootstrap the schema on the creating thread so the first reader does
+        # not race the writer.
+        conn = self._connection()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
         for statement in self._SCHEMA:
-            self._conn.execute(statement)
-        self._conn.commit()
+            conn.execute(statement)
+        conn.commit()
         # The cached values are whole completions, which contain the user's
         # prompt and the model's reply. They are not anybody else's business.
         self._harden_sidecars()
-        self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+
+    def _connection(self) -> sqlite3.Connection:
+        """A per-thread SQLite connection (created lazily on first use)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
 
     def _harden_sidecars(self) -> None:
         """Lock down the database and the WAL/SHM files SQLite creates.
@@ -190,7 +202,7 @@ class DiskCache:
 
     def close(self) -> None:
         try:
-            self._conn.close()
+            self._connection().close()
         except sqlite3.Error:
             pass
 
@@ -202,19 +214,23 @@ class DiskCache:
 
     def get(self, key: str) -> dict[str, Any] | None:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT value, expires_at FROM cache WHERE key = ?", (key,)
-            ).fetchone()
+            row = (
+                self._connection()
+                .execute("SELECT value, expires_at FROM cache WHERE key = ?", (key,))
+                .fetchone()
+            )
             if row is None:
                 self.misses += 1
                 return None
             if float(row["expires_at"]) < time.time():
-                self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
-                self._conn.commit()
+                self._connection().execute("DELETE FROM cache WHERE key = ?", (key,))
+                self._connection().commit()
                 self.misses += 1
                 return None
-            self._conn.execute("UPDATE cache SET hit_count = hit_count + 1 WHERE key = ?", (key,))
-            self._conn.commit()
+            self._connection().execute(
+                "UPDATE cache SET hit_count = hit_count + 1 WHERE key = ?", (key,)
+            )
+            self._connection().commit()
             self.hits += 1
             return cast(dict[str, Any], json.loads(bytes(row["value"])))
 
@@ -223,7 +239,7 @@ class DiskCache:
             now = time.time()
             expires = now + self.ttl
             blob = json.dumps(value, default=str).encode()
-            self._conn.execute(
+            self._connection().execute(
                 """
                 INSERT INTO cache (key, value, expires_at, created_at, model, tier)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -237,15 +253,17 @@ class DiskCache:
                 """,
                 (key, blob, expires, now, model, tier),
             )
-            self._conn.commit()
+            self._connection().commit()
             # The sidecars are created on the first write, after __init__.
             self._harden_sidecars()
 
     def stats(self) -> dict[str, Any]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT COUNT(*) AS n, SUM(hit_count) AS hits FROM cache"
-            ).fetchone()
+            row = (
+                self._connection()
+                .execute("SELECT COUNT(*) AS n, SUM(hit_count) AS hits FROM cache")
+                .fetchone()
+            )
             total = (self.hits + self.misses) or 1
             return {
                 "entries": int(row["n"] or 0),
@@ -267,11 +285,13 @@ class DiskCache:
         """
         with self._lock:
             if older_than is None:
-                result = self._conn.execute("DELETE FROM cache")
+                result = self._connection().execute("DELETE FROM cache")
             else:
                 deadline = time.time() - max(0.0, older_than)
-                result = self._conn.execute("DELETE FROM cache WHERE created_at < ?", (deadline,))
-            self._conn.commit()
+                result = self._connection().execute(
+                    "DELETE FROM cache WHERE created_at < ?", (deadline,)
+                )
+            self._connection().commit()
             # No VACUUM here: it rewrites the whole database under the single
             # request lock, stalling every cached answer while it runs. WAL
             # reclaims the space lazily, so the delete alone is enough.

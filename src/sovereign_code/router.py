@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .models import CATALOG, ModelView
+from .mlx import online as mlx_online
+from .models import CATALOG, ModelView, mlx_preferred_tags
 from .models import preferred_tags as preferred_tags
 
 
@@ -127,6 +128,17 @@ def choose(
         if view and view.installed:
             context = context_for(view, free_gb, max_context)
             return Selection(task, view, context, f"selected {view.tag}", None)
+
+    # MLX models run on Apple Metal and answer far faster than Ollama for the
+    # same size, so when the mlx-lm server is online they take performance
+    # priority for code, reason, agent, chat and general work. `fast` stays
+    # Ollama-only: a warm tiny Ollama model answers sooner than loading MLX.
+    if task != Task.FAST and mlx_online():
+        for tag in mlx_preferred_tags(task.value):
+            view = views.get(tag)
+            if view and view.installed:
+                context = context_for(view, free_gb, max_context)
+                return Selection(task, view, context, f"mlx {view.tag}", None)
 
     for tag in preferred_tags(task.value):
         view = views.get(tag)

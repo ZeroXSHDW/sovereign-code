@@ -48,6 +48,48 @@ def test_the_router_reports_what_to_pull_when_nothing_is_installed():
     assert selection.needs_pull in CATALOG
 
 
+def test_mlx_model_is_preferred_for_code_when_server_online(monkeypatch) -> None:
+    """MLX on Metal answers faster than Ollama, so it wins for code when served."""
+    import sovereign_code.router as router
+
+    monkeypatch.setattr(router, "mlx_online", lambda: True)
+    views = _views("mlx-qwen3-4b-4bit", "qwen3-coder:30b")
+    selection = choose(Task.CODE, views, free_gb=8.0)
+    assert selection.model is not None
+    assert selection.model.tag == "mlx-qwen3-4b-4bit"
+
+
+def test_mlx_model_is_preferred_for_reason_when_server_online(monkeypatch) -> None:
+    import sovereign_code.router as router
+
+    monkeypatch.setattr(router, "mlx_online", lambda: True)
+    views = _views("mlx-qwen3-8b-4bit", "qwen3-coder:30b")
+    selection = choose(Task.REASON, views, free_gb=8.0)
+    assert selection.model is not None
+    assert selection.model.tag == "mlx-qwen3-8b-4bit"
+
+
+def test_fast_stays_ollama_even_when_mlx_is_online(monkeypatch) -> None:
+    """A warm tiny Ollama model answers sooner than an MLX load."""
+    import sovereign_code.router as router
+
+    monkeypatch.setattr(router, "mlx_online", lambda: True)
+    views = _views("mlx-qwen3-4b-4bit", "qwen3.5:4b")
+    selection = choose(Task.FAST, views, free_gb=8.0)
+    assert selection.model is not None
+    assert selection.model.tag == "qwen3.5:4b"
+
+
+def test_mlx_is_not_preferred_when_server_offline(monkeypatch) -> None:
+    import sovereign_code.router as router
+
+    monkeypatch.setattr(router, "mlx_online", lambda: False)
+    views = _views("mlx-qwen3-4b-4bit", "qwen3-coder:30b")
+    selection = choose(Task.CODE, views, free_gb=8.0)
+    assert selection.model is not None
+    assert selection.model.tag == "qwen3-coder:30b"
+
+
 def test_unknown_free_memory_keeps_a_usable_context():
     """`free_gb=None` means "unknown", not "no memory at all"."""
     view = _views("qwen3-coder:30b")["qwen3-coder:30b"]

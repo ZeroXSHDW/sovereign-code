@@ -170,6 +170,10 @@ CODEX_CATALOG_ROUTES: tuple[tuple[str, str, int], ...] = (
     ("balanced", "Balanced — 9B, 65k", 65536),
     ("ultra", "Ultra — 27B reasoning", 16384),
     ("fast", "Fast — 4B", 8192),
+    # MLX routes on Apple Metal (mlx-lm server on port 8081).
+    ("mlx-code", "MLX Code — Apple Silicon coder", 32768),
+    ("mlx-fast", "MLX Fast — Apple Silicon 4B", 16384),
+    ("mlx-chat", "MLX Chat — Apple Silicon chat", 32768),
 )
 
 # A short instruction set for the case where Codex has no cached prompt of its

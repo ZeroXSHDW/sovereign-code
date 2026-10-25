@@ -43,6 +43,13 @@ import httpx
 from .cache import MEMORY, cache_key_chat, disk_cache
 from .domains import DOMAINS
 from .http import leased_client, shared_client
+from .mlx import available_tags as mlx_available_tags
+from .mlx import context_for as mlx_context_for
+from .mlx import forward_model as mlx_forward_model
+from .mlx import mlx_url as mlx_url
+from .mlx import online as mlx_online
+from .mlx import resolve_model as mlx_resolve_model
+from .mlx import served_models as mlx_served_models
 from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
 from .scheduler import ModelScheduler
@@ -52,6 +59,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4010
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 DEFAULT_UPSTREAM = "http://127.0.0.1:4000"
+DEFAULT_MLX = "http://127.0.0.1:8081"
 
 # A wedged model used to hold the single-resident lock for ten minutes. These
 # bounds turn "looks hung" into either a fallback model or an explicit error.
@@ -120,6 +128,17 @@ def _event(name: str, data: dict[str, Any]) -> bytes:
 
 FAST, BALANCED, DEEP, ULTRA = "fast", "balanced", "deep", "ultra"
 TIERS = (FAST, BALANCED, DEEP, ULTRA)
+
+# MLX models answer on Apple Metal, so a coding/reasoning turn served by MLX is
+# much faster than the same weights through Ollama. Map the MLX task to a tier
+# for headers/metrics; MLX itself has no tiers and serves one model at a time.
+MLX_TASK_TIER: dict[str, str] = {
+    "code": DEEP,
+    "reason": DEEP,
+    "agent": DEEP,
+    "chat": BALANCED,
+    "general": BALANCED,
+}
 
 # tier -> (model, context, think)
 TIER_MODELS: dict[str, tuple[str, int, bool | None]] = {
@@ -538,6 +557,20 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
             continue
         context, _think = MODEL_CONTEXT.get(name, (0, False))
         add(name, "ollama", model=name, context=context)
+
+    # MLX models are served by the mlx-lm server on port 8081; list them so a
+    # client can name one directly. `mlx.catalog_models()` returns nothing while
+    # the server is offline, so this is a no-op until `sovereign mlx start`.
+    try:
+        from .mlx import catalog_models as _mlx_catalog_models
+
+        for entry in _mlx_catalog_models():
+            if str(entry.get("id")) in seen:
+                continue
+            seen.add(str(entry["id"]))
+            entries.append(entry)
+    except Exception:
+        pass
 
     return entries
 
@@ -1616,6 +1649,24 @@ def resolve_route(
     needed = (
         estimate_tokens(request.get("messages") or []) + int(request.get("max_tokens") or 0) + 512
     )
+    # MLX models are served by the mlx-lm server on port 8081, not Ollama. Route
+    # an MLX catalog tag or alias there so coding clients get Metal speed
+    # instead of an Ollama fall-through that 404s. Only route when the server is
+    # actually serving a matching model, so a request never lands on a name the
+    # server did not load.
+    mlx_resolved = mlx_resolve_model(model)
+    if mlx_resolved is not None and mlx_online():
+        tag, task = mlx_resolved
+        forwarded = mlx_forward_model(tag)
+        if forwarded in mlx_served_models():
+            return Route(
+                "mlx",
+                forwarded,
+                MLX_TASK_TIER.get(task, DEEP),
+                mlx_context_for(tag),
+                None,
+                f"mlx {tag}",
+            )
     if model == "local-claude":
         # Quality-first for normal Claude turns; fall back to the 65k 9B only
         # when the prompt genuinely needs the larger context.
@@ -2191,6 +2242,61 @@ class _Handler(GuardedHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _mlx(self, request: dict[str, Any], route: Route) -> None:
+        """Forward an OpenAI-format request to the supervised mlx-lm server.
+
+        mlx-lm speaks the OpenAI chat API, so the request passes through
+        unchanged apart from the model id (the HF repo path the server loaded).
+        Streaming forwards the upstream SSE bytes verbatim.
+        """
+        stream = bool(request.get("stream"))
+        payload = dict(request)
+        payload["model"] = route.model
+        payload["stream"] = stream
+        url = f"{mlx_url().rstrip('/')}/v1/chat/completions"
+        try:
+            if stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.send_header("x-sovereign-tier", route.tier)
+                self.send_header("x-sovereign-model", route.model)
+                self._cors()
+                self.end_headers()
+                with httpx.stream(
+                    "POST", url, json=payload, timeout=httpx.Timeout(request_timeout(), connect=5)
+                ) as response:
+                    if response.status_code >= 400:
+                        body = response.read().decode("utf-8", "replace")[:400]
+                        error = {"error": {"message": body, "type": "upstream_error"}}
+                        self.wfile.write(f"data: {json.dumps(error)}\n\n".encode())
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                        return
+                    for chunk in response.iter_bytes():
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+            else:
+                response = shared_client().post(
+                    url,
+                    json=payload,
+                    timeout=httpx.Timeout(request_timeout(), connect=5),
+                )
+                self.send_response(response.status_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response.content)))
+                self.send_header("x-sovereign-tier", route.tier)
+                self.send_header("x-sovereign-model", route.model)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(response.content)
+        except (httpx.HTTPError, BrokenPipeError, ConnectionResetError) as exc:
+            try:
+                self._json(502, {"error": {"message": str(exc), "type": "upstream_error"}})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
     def _responses(self, payload: dict[str, Any]) -> None:
         """Responses API adapter so Codex can use the tier gateway."""
         chat = responses_to_chat(payload)
@@ -2299,9 +2405,14 @@ class _Handler(GuardedHandler):
             return
         forced = self.headers.get("x-sovereign-tier")
         installed = _installed(self.ollama)
+        if mlx_online():
+            installed |= set(mlx_available_tags())
         route = resolve_route(request, forced, installed)
         if route.kind == "proxy":
             self._proxy(request, route)
+            return
+        if route.kind == "mlx":
+            self._mlx(request, route)
             return
 
         # Cache only simple, deterministic, tool-free calls (streamed or not).

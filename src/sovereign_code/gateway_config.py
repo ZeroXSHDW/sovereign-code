@@ -54,6 +54,17 @@ ROLE_ALIASES: dict[str, str] = {
     "local-code-dense": "qwen2.5-coder:14b",
 }
 
+# MLX aliases route through the tier gateway, which forwards to the mlx-lm
+# server on port 8081 (Apple Metal). They give MLX models performance priority
+# for coding/reasoning work on Apple Silicon.
+MLX_ALIASES: tuple[str, ...] = (
+    "local-mlx",
+    "local-mlx-code",
+    "local-mlx-fast",
+    "local-mlx-chat",
+    "local-mlx-balanced",
+)
+
 # Client-specific model lists so each agent only sees models it can use.
 CLIENT_MODELS: dict[str, tuple[str, ...]] = {
     "opencode": (
@@ -74,6 +85,10 @@ CLIENT_MODELS: dict[str, tuple[str, ...]] = {
         "local-review",
         "local-browser-nav",
         "local-code-dense",
+        "local-mlx",
+        "local-mlx-code",
+        "local-mlx-fast",
+        "local-mlx-chat",
     ),
     "codex": (
         "local-auto",
@@ -287,6 +302,14 @@ def _direct_model_entries() -> list[ModelEntry]:
     return entries
 
 
+def _mlx_entries() -> list[ModelEntry]:
+    """MLX aliases that route through the tier gateway to the mlx-lm server."""
+    entries: list[ModelEntry] = []
+    for alias in MLX_ALIASES:
+        entries.append(_entry(alias, alias, TIER_GATEWAY))
+    return entries
+
+
 def render(cloud_block: str | None = None) -> str:
     """Render the local-only model_list YAML document."""
     lines: list[str] = [
@@ -297,7 +320,7 @@ def render(cloud_block: str | None = None) -> str:
         "# Local-only: every model resolves to an installed Ollama model.",
         "model_list:",
     ]
-    for entry in _role_entries() + _direct_model_entries():
+    for entry in _role_entries() + _direct_model_entries() + _mlx_entries():
         lines.append(f"  - model_name: {entry.model_name}")
         lines.append("    litellm_params:")
         lines.append(f"      model: {entry.litellm_model}")

@@ -458,7 +458,75 @@ def test_every_catalog_name_is_routable() -> None:
             None,
             installed,
         )
-        assert route.kind == "local", entry["id"]
+        # Ollama models route locally ("local"); MLX models route to the
+        # mlx-lm server ("mlx"). Either way the name is routable without a
+        # cloud proxy.
+        assert route.kind in ("local", "mlx"), (entry["id"], route.kind)
+
+
+def test_mlx_model_names_route_to_mlx(monkeypatch) -> None:
+    """An MLX catalog tag served by the server routes to kind "mlx", not Ollama.
+
+    The mlx-lm server is not running in CI, so this pins the route shape using
+    a fake probe rather than a live server.
+    """
+    import sovereign_code.tier_gateway as tg
+
+    monkeypatch.setattr(tg, "mlx_online", lambda: True)
+    monkeypatch.setattr(
+        tg,
+        "mlx_resolve_model",
+        lambda name: ("mlx-qwen3-4b-4bit", "code") if name == "mlx-qwen3-4b-4bit" else None,
+    )
+    monkeypatch.setattr(tg, "mlx_forward_model", lambda tag: "mlx-community/Qwen3-4B-4bit")
+    monkeypatch.setattr(tg, "mlx_served_models", lambda: ("mlx-community/Qwen3-4B-4bit",))
+    monkeypatch.setattr(tg, "mlx_context_for", lambda tag, default=32768: 32768)
+
+    route = tg.resolve_route(
+        {"model": "mlx-qwen3-4b-4bit", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        set(),
+    )
+    assert route.kind == "mlx"
+    assert route.model == "mlx-community/Qwen3-4B-4bit"
+    assert route.tier == "deep"
+
+
+def test_mlx_alias_routes_to_mlx(monkeypatch) -> None:
+    import sovereign_code.tier_gateway as tg
+
+    monkeypatch.setattr(tg, "mlx_online", lambda: True)
+    monkeypatch.setattr(
+        tg,
+        "mlx_resolve_model",
+        lambda name: ("mlx-qwen3-4b-4bit", "code") if name == "mlx-code" else None,
+    )
+    monkeypatch.setattr(tg, "mlx_forward_model", lambda tag: "mlx-community/Qwen3-4B-4bit")
+    monkeypatch.setattr(tg, "mlx_served_models", lambda: ("mlx-community/Qwen3-4B-4bit",))
+    monkeypatch.setattr(tg, "mlx_context_for", lambda tag, default=32768: 32768)
+
+    route = tg.resolve_route(
+        {"model": "mlx-code", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        set(),
+    )
+    assert route.kind == "mlx"
+    assert route.tier == "deep"
+
+
+def test_mlx_route_falls_through_when_server_offline(monkeypatch) -> None:
+    """Without a running mlx-lm server, an MLX name is not forced to MLX."""
+    import sovereign_code.tier_gateway as tg
+
+    monkeypatch.setattr(tg, "mlx_online", lambda: False)
+    route = tg.resolve_route(
+        {"model": "mlx-qwen3-4b-4bit", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        {"mlx-qwen3-4b-4bit"},
+    )
+    # Not served by mlx-lm, and not an Ollama model: falls to proxy/unknown
+    # rather than being incorrectly sent to Ollama.
+    assert route.kind != "mlx"
 
 
 def test_catalog_reports_the_model_behind_a_name() -> None:

@@ -38,6 +38,23 @@ def test_opencode_config_has_working_provider_and_mcp() -> None:
     assert config["mcp"]["servers"]["sovereign"]["command"][-2:] == ["sovereign_code", "mcp"]
 
 
+def test_opencode_config_includes_an_mlx_provider() -> None:
+    """OpenCode can talk to the supervised mlx-lm server on port 8081.
+
+    The MLX provider is always written (like Ollama); a missing server just
+    means MLX models can't be selected until `sovereign mlx start` has run.
+    """
+    config = client_setup.opencode_config()
+    mlx = config["providers"]["mlx"]
+    assert mlx["package"] == "@opencode/ai/providers/openai-compatible"
+    assert mlx["settings"]["baseURL"] == "http://127.0.0.1:8081/v1"
+    assert mlx["settings"]["apiKey"] == "mlx"
+    # Every curated MLX model is offered to OpenCode.
+    for name in client_setup.MLX_MODELS:
+        assert name in mlx["models"]
+        assert mlx["models"][name]["capabilities"]["tools"] is True
+
+
 def test_opencode_config_is_native_v2_and_adds_coding_helpers() -> None:
     config = client_setup.opencode_config()
     # V2 maps and ordered rules, not the deprecated V1 shapes.

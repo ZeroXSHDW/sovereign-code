@@ -558,6 +558,18 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                 ),
             },
         },
+        "mlx": {
+            "name": "MLX (Apple Silicon)",
+            "package": OPENCODE_PACKAGE,
+            "settings": {
+                "baseURL": MLX_BASE_URL,
+                "apiKey": "mlx",
+            },
+            "models": {
+                name: _opencode_model(name, title, context, max_context)
+                for name, (title, context) in MLX_MODELS.items()
+            },
+        },
         "openrouter": {
             "name": "OpenRouter",
             "package": OPENCODE_PACKAGE,

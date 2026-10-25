@@ -308,6 +308,39 @@ def preferred_start_model() -> str:
     return "mlx-qwen3-4b-4bit"
 
 
+def recommend_model(task: str = "code") -> str:
+    """Recommend the best MLX model for a task from what is installed or served.
+
+    Returns a catalog tag. Prefers served models (live server) over merely
+    downloaded ones, and falls back to the strongest downloaded model or the
+    small default when nothing better is available.
+    """
+    available = set(available_tags()) or set(installed_tags())
+    for tag in MLX_PREFERENCE.get(task, MLX_PREFERENCE.get("code", ())):
+        if tag in available:
+            return tag
+    # Fall back to any available tag (strongest first by catalog order).
+    for tag in MLX_PREFERENCE.get("code", ()):
+        if tag in available:
+            return tag
+    return "mlx-qwen3-4b-4bit"
+
+
+def model_summary() -> dict[str, str]:
+    """One-line status for each catalog model, for display and auto-selection."""
+    served = set(served_models())
+    downloaded = set(installed_tags())
+    summary: dict[str, str] = {}
+    for tag in catalog_tags():
+        if tag in served or any(tag_for_served(n) == tag for n in served):
+            summary[tag] = "served"
+        elif tag in downloaded:
+            summary[tag] = "downloaded"
+        else:
+            summary[tag] = "not installed"
+    return summary
+
+
 def server_command(
     model: str,
     port: int = DEFAULT_MLX_PORT,

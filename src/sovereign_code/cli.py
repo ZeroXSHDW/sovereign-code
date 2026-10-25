@@ -4415,6 +4415,30 @@ def _mlx_cmd(settings: Settings, args: argparse.Namespace) -> int:
         )
         return 0
 
+    if args.action == "recommend":
+        from . import mlx
+
+        task = getattr(args, "task", None) or "code"
+        tag = mlx.recommend_model(task)
+        summary = mlx.model_summary()
+        state = summary.get(tag, "unknown")
+        spec = CATALOG.get(tag)
+        console.print(f"[bold]Recommended MLX model for {task}:[/] {tag}")
+        if spec:
+            console.print(f"  {spec.summary}")
+        console.print(f"  State: {state} · Context: {spec.max_context if spec else '?'}")
+        if state != "served":
+            console.print(f"  [dim]Start with: sovereign mlx start --model {tag}[/]")
+        # Show top alternatives
+        console.print("\n[dim]Alternatives:[/]")
+        for alt in mlx.MLX_PREFERENCE.get(task, mlx.MLX_PREFERENCE["code"]):
+            if alt == tag:
+                continue
+            alt_state = summary.get(alt, "unknown")
+            alt_spec = CATALOG.get(alt)
+            console.print(f"  {alt} — {alt_state} · {alt_spec.size_gb if alt_spec else '?'}GB")
+        return 0
+
     if args.action == "pull":
         from . import mlx
 
@@ -6501,8 +6525,8 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="status",
-        choices=("start", "stop", "status", "models", "pull"),
-        help="start, stop, show, list, or download MLX models",
+        choices=("start", "stop", "status", "models", "pull", "recommend"),
+        help="start, stop, show, list, download, or recommend MLX models",
     )
     mlx.add_argument(
         "--model", default=None, help="MLX model to load on start (e.g. mlx-qwen3-4b-4bit)"
@@ -6536,6 +6560,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mlx.add_argument(
         "--yes", action="store_true", help="skip confirmation prompt when installing mlx-lm"
+    )
+    mlx.add_argument(
+        "--task",
+        default="code",
+        help="task type for recommendation (code, chat, reason, agent, fast)",
     )
 
     browse = sub.add_parser("browse", help="drive a visible browser with the local model")

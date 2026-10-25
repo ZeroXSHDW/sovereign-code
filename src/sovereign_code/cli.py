@@ -6116,15 +6116,9 @@ def _do(settings: Settings, args: argparse.Namespace) -> int:
     back to the agent. This is the "just do it" entry point for a solo session.
     """
     mode = "agent" if args.big else ("direct" if args.quick else "auto")
-    snap = _snapshot(settings)
-    pick = choose(
-        Task.AGENT,
-        snap.views,
-        snap.potential_free_gb,
-        max_context=settings.max_context,
-    )
-    agent = pick.model.tag if pick.model else "qwen3-coder:30b"
-    review = "gemma4:12b"
+    # The agent client runs through the gateway, so use a gateway alias (not a
+    # raw model tag or MLX tag) that the gateway can resolve.
+    agent = "local-code"
     # `--quick` is the fast path: direct mode already writes whole files in one
     # request, so a separate review model round-trip adds latency with little
     # benefit. `auto`/`--big` keep the review.
@@ -6133,9 +6127,9 @@ def _do(settings: Settings, args: argparse.Namespace) -> int:
         settings,
         args.prompt,
         args.dir,
-        plan_model="glm-4.7-flash",
+        plan_model="local-code",
         agent=agent,
-        review_model=review,
+        review_model="local-review",
         yes=args.yes,
         no_review=not review_eager,
         tokens=700,

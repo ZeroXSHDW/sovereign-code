@@ -3940,6 +3940,21 @@ def _launch(
 
         ensure_tier(upstream=snap.settings.gateway_url, ollama=snap.settings.ollama_url)
 
+    # Auto-start the MLX server for OpenCode so Metal-accelerated coding is
+    # available without a separate `sovereign mlx start` step. Only attempted
+    # when mlx-lm is installed and the server is not already online.
+    if client == "opencode" and not cloud and not dry_run:
+        try:
+            from . import mlx as _mlx
+
+            if not _mlx.disabled() and not _mlx.online() and _mlx.module_available():
+                model = _mlx.preferred_start_model()
+                started, detail = _mlx.start_server(model=model)
+                if started:
+                    console.print(f"[dim]MLX: {detail}[/]")
+        except Exception:
+            pass  # MLX is optional; never block the launch.
+
     if client == "claude" and not cloud and not dry_run:
         from .bridge import ensure_running
 

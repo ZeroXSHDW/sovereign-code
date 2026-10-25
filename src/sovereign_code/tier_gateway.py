@@ -1655,8 +1655,19 @@ def resolve_route(
     # actually serving a matching model, so a request never lands on a name the
     # server did not load.
     mlx_resolved = mlx_resolve_model(model)
-    if mlx_resolved is not None and mlx_online():
+    if mlx_resolved is not None:
         tag, task = mlx_resolved
+        if not mlx_online():
+            # MLX is offline: tell the client exactly how to start it instead
+            # of falling through to Ollama (which 404s) or the cloud proxy.
+            return Route(
+                "mlx_offline",
+                tag,
+                MLX_TASK_TIER.get(task, DEEP),
+                mlx_context_for(tag),
+                None,
+                f"mlx offline: run 'sovereign mlx start --model {tag}'",
+            )
         forwarded = mlx_forward_model(tag)
         if forwarded in mlx_served_models():
             return Route(
@@ -2413,6 +2424,21 @@ class _Handler(GuardedHandler):
             return
         if route.kind == "mlx":
             self._mlx(request, route)
+            return
+        if route.kind == "mlx_offline":
+            self._json(
+                503,
+                {
+                    "error": {
+                        "message": (
+                            f"MLX server is offline. Start it with: "
+                            f"sovereign mlx start --model {route.model}"
+                        ),
+                        "type": "mlx_offline",
+                    }
+                },
+                {"x-sovereign-mlx-offline": "1"},
+            )
             return
 
         # Cache only simple, deterministic, tool-free calls (streamed or not).

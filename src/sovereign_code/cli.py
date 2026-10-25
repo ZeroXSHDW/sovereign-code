@@ -222,15 +222,19 @@ def _status(snap: Snapshot) -> None:
                 f"  [green]{view.tag}[/]  ctx {view.context or '?'} · {view.size_gb:.1f} GB{engine}"
             )
 
-    coder = snap.recommended_coder or snap.best_coder
+    # MLX is the performance-priority runner for coding on Apple Silicon, so
+    # the router's pick (best_coder, now MLX when the server is online) leads
+    # the line. The recommended coder is shown as a pull hint when it differs.
+    coder = snap.best_coder or snap.recommended_coder
     if coder:
         style = "green" if coder.installed else "yellow"
         console.print(f"\n[bold]Coder[/]  [{style}]{coder.tag}[/]  {coder.status}")
         if not coder.installed:
             console.print("  [dim]best coder not installed[/]")
-            if snap.best_coder:
-                console.print(f"  [dim]fallback: {snap.best_coder.tag}[/]")
-            console.print(f"  [dim]pull: ollama pull {coder.tag}[/]")
+            if snap.recommended_coder and snap.recommended_coder.tag != coder.tag:
+                console.print(
+                    f"  [dim]pull recommended: ollama pull {snap.recommended_coder.tag}[/]"
+                )
     if snap.chat_selection and snap.chat_selection.model:
         console.print(
             f"[bold]Chat [/]  {snap.chat_selection.model.tag}  "
@@ -500,6 +504,75 @@ def _rm(model: str) -> int:
         return 1
     console.print(f"[green]Removed {model}.[/]")
     return 0
+
+
+def _add(settings: Settings, args: argparse.Namespace) -> int:
+    """Find and pull a self-chosen model from Ollama or Hugging Face.
+
+    This is the "download and set up any model you want" entry point: it pulls
+    an Ollama tag directly, or a Hugging Face GGUF (with the licence and trust
+    warning), or searches the Hub when you only have a description. Every model
+    is your own choice; the local-only default is unchanged.
+    """
+    token = (args.token or "").strip()
+
+    if args.search:
+        from .hf import search_models
+        from .vetting import assess
+
+        hits = search_models(args.search, limit=args.limit, gguf_only=True)
+        if not hits:
+            console.print(f"[dim]No GGUF hits for '{args.search}'.[/]")
+            return 0
+        table = Table(title=f"Hugging Face GGUFs · '{args.search}'", header_style="bold #b794f4")
+        table.add_column("Repository", style="bold", overflow="fold")
+        table.add_column("Downloads", justify="right")
+        table.add_column("License")
+        table.add_column("Trust")
+        for hit in hits:
+            vetted = assess(license=hit.license, downloads=hit.downloads, gated=hit.gated)
+            table.add_row(
+                hit.id,
+                f"{hit.downloads:,}",
+                hit.license or "-",
+                "ok" if vetted.trusted else "refused",
+            )
+        console.print(table)
+        console.print(
+            f"[dim]Import one:[/] sovereign hf import {hits[0].id} "
+            f"--include '*Q4_K_M.gguf' --name <ollama-name>"
+        )
+        console.print("[yellow]Check the licence before importing — you choose what runs here.[/]")
+        return 0
+
+    if not token:
+        console.print("[yellow]Give an Ollama tag, an org/repo, or --search.[/]")
+        return 1
+
+    # A Hugging Face repo id has org/repo; an Ollama tag has an optional :tag.
+    if "/" in token and not token.startswith(("hf.co/", "ollama.com/")):
+        # Import a Hugging Face GGUF into Ollama.
+        from .hf import HFError, info_model
+        from .vetting import assess
+
+        try:
+            info = info_model(token)
+        except HFError as exc:
+            console.print(f"[red]{exc}[/]")
+            return 1
+        vetted = assess(license=info.license, downloads=info.downloads, gated=info.gated)
+        console.print(f"[bold]{token}[/] · licence {info.license or 'unknown'} · {vetted.trusted}")
+        if not vetted.trusted:
+            console.print("[yellow]Review the licence before importing.[/]")
+        name = args.name or token.split("/")[-1].lower()
+        console.print(
+            f"[dim]Import it with:[/] sovereign hf import {token} "
+            f"--include '{args.include}' --name {name}"
+        )
+        return 0
+
+    # Plain Ollama tag, possibly an hf.co/... GGUF ref.
+    return _pull(settings, token, "added by you")
 
 
 def _model_info(settings: Settings, tag: str) -> int:
@@ -6548,6 +6621,17 @@ def build_parser() -> argparse.ArgumentParser:
     pull = sub.add_parser("pull", help="pull one or more Ollama models by tag")
     pull.add_argument("model", nargs="+", help="one or more Ollama model tags")
 
+    add = sub.add_parser(
+        "add", help="find and pull a model you chose: an Ollama tag or a Hugging Face repo"
+    )
+    add.add_argument("token", nargs="?", default=None, help="Ollama tag or org/repo")
+    add.add_argument(
+        "--search", default=None, help="search Hugging Face for GGUFs (e.g. 'abliterated')"
+    )
+    add.add_argument("--name", default=None, help="Ollama name to import a HF GGUF as")
+    add.add_argument("--include", default="*Q4_K_M.gguf", help="HF file pattern for the GGUF")
+    add.add_argument("--limit", type=int, default=10, help="search results to show")
+
     pull_stack = sub.add_parser(
         "pull-stack", help="pull every model in an offline stack (lean/balanced/capable/max)"
     )
@@ -8006,6 +8090,8 @@ def main(argv: list[str] | None = None) -> int:
         return _gateway_aliases(_snapshot(settings))
     if command == "rm":
         return _rm(args.model)
+    if command == "add":
+        return _add(settings, args)
     if command == "run":
         return _run(
             settings,

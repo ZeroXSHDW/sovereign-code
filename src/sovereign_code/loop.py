@@ -733,6 +733,22 @@ def make_runner(config: LoopConfig, settings: Any = None) -> Callable[[str], tup
 
     resolved = settings or Settings.load()
 
+    # Ensure the tier gateway (and MLX, if available) are up before the loop
+    # starts, so 24/7 runs get Metal-accelerated coding without manual setup.
+    try:
+        from .tier_gateway import ensure_running as _ensure_tier
+
+        _ensure_tier(upstream=resolved.gateway_url, ollama=resolved.ollama_url)
+    except Exception:
+        pass
+    try:
+        from . import mlx as _mlx
+
+        if not _mlx.disabled() and not _mlx.online() and _mlx.module_available():
+            _mlx.start_server(model=_mlx.preferred_start_model())
+    except Exception:
+        pass
+
     def run(prompt: str) -> tuple[bool, str]:
         model = config.agent_model
         if model == "auto" and config.agent not in {"opencode", "codex", "claude"}:

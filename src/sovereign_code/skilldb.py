@@ -267,6 +267,12 @@ class SkillDB:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # -------------------------------------------------------------- migration
 
     def _migrate(self) -> None:

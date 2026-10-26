@@ -33,6 +33,7 @@ from .config import LOCAL_AI_ROOT
 from .errors import HFError as HFError
 from .safefile import write_private
 from .stats import human_size
+from .system import system_binary
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
 DOWNLOAD_ROOT = LOCAL_AI_ROOT / "models" / "huggingface"
@@ -392,7 +393,7 @@ def forget_token() -> bool:
 
 
 def hf_cli_path() -> str | None:
-    return shutil.which("hf") or shutil.which("huggingface-cli")
+    return system_binary("hf") or system_binary("huggingface-cli")
 
 
 def hf_cli_version() -> str:

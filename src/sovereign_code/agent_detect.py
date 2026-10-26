@@ -14,10 +14,11 @@ run inside `curl ... | sh`.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .system import system_binary
 
 HOME = Path.home()
 
@@ -98,7 +99,7 @@ def _command_for(key: str) -> str | None:
         "opencode": ("opencode",),
     }
     for candidate in aliases.get(key, (key,)):
-        path = shutil.which(candidate)
+        path = system_binary(candidate)
         if path:
             return path
     return None

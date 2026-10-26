@@ -4,6 +4,8 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-26
+
 ### Added
 - **`sovereign do`** — a one-shot coding entry point with sane defaults: it
   auto-routes a task to direct (one-request) or agent mode, picks the models
@@ -34,6 +36,13 @@ All notable changes to Sovereign Code.
   re-typed the `ANTHROPIC_*` keys inline, so a slot added to one could silently
   miss the other. It now spreads the shared `CLAUDE_LOCAL_ENV` and overrides
   only the dynamic bridge URL and launch-only knobs, with a regression test.
+- **Tools installed outside a non-login PATH were reported missing**: detection
+  now falls back to the usual install prefixes (Homebrew, `~/.local/bin`) before
+  giving up, so `doctor`, client setup and PDF tooling use installed binaries
+  instead of reporting them absent.
+- **A dangling Ollama model-store symlink 500'd every generation**: `doctor`
+  now probes `~/.ollama/models` and reports a broken link (and its target) so
+  the fix is one relink.
 
 ## [0.6.0] - 2026-10-24
 

@@ -18,6 +18,18 @@ from .config import launch_agent_path
 _GIB = 1024**3
 _LABEL = "com.user.sovereign-code"
 
+# Well-known install prefixes that a non-login PATH omits. Homebrew installs to
+# /opt/homebrew/bin on Apple Silicon and /usr/local/bin on Intel, and both are
+# appended to PATH by the login shell's profile — which launchd agents, GUI
+# apps and this project's own login terminal never source. A tool that is
+# installed but unreachable from PATH is reported "missing", so detection falls
+# back to the real install locations before giving up.
+BINARY_PREFIXES: tuple[str, ...] = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    str(Path.home() / ".local" / "bin"),
+)
+
 
 @dataclass(frozen=True)
 class Memory:
@@ -253,8 +265,26 @@ def exposed_ports(*ports: int) -> dict[int, list[str]]:
     return exposed
 
 
+def system_binary(name: str) -> str | None:
+    """Resolve ``name`` on PATH, then in the usual install prefixes.
+
+    ``shutil.which`` alone reports a tool as absent when it is installed but
+    not reachable from a non-login ``PATH`` — precisely how launchd agents and
+    this project's login terminal start. Checking the real install prefixes
+    first means an installed tool is actually used instead of being missed.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for prefix in BINARY_PREFIXES:
+        candidate = Path(prefix) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    return system_binary(name) is not None
 
 
 def login_agent_installed() -> bool:

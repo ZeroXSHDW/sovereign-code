@@ -10,7 +10,6 @@ import html
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -68,6 +67,7 @@ from .config import (
     DATA_DIR,
     LOCAL_AI_ROOT,
     PROJECT_ROOT,
+    RUNTIME_ROOT,
     Settings,
     dashboard_command_path,
     ensure_layout,
@@ -121,6 +121,7 @@ from .system import (
     port_open,
     qwen_memory_path,
     swap_usage_gb,
+    system_binary,
     wired_limit_gb,
 )
 from .system import (
@@ -134,6 +135,7 @@ from .verify import (
     configured_aliases,
     probe_aliases,
     probe_liveness,
+    probe_models_dir,
 )
 
 LABEL = "com.user.sovereign-code"
@@ -1996,6 +1998,16 @@ def _doctor(snap: Snapshot) -> int:
         "ollama pull nomic-embed-text",
         warn=True,
     )
+    # A dangling model-store symlink answers /api/version fine and 500s every
+    # generation, so this is checked before the liveness probe it explains.
+    store = probe_models_dir()
+    add(
+        store.ok,
+        "Model store",
+        store.detail,
+        f"repoint the Ollama models symlink at {RUNTIME_ROOT / 'models'} and restart Ollama",
+        warn=True,
+    )
     if has_embed and snap.ollama_up:
         live = probe_liveness(snap.settings.ollama_url)
         add(
@@ -2037,7 +2049,7 @@ def _doctor(snap: Snapshot) -> int:
     add(
         command_exists("qwen"),
         "Qwen Code CLI",
-        shutil.which("qwen") or "missing",
+        system_binary("qwen") or "missing",
         "npm i -g @qwen-code/qwen-code",
         warn=True,
     )
@@ -3008,7 +3020,7 @@ def _claude(
         "running" if bridge_up else "stopped",
         "http://127.0.0.1:4001/v1",
     )
-    table.add_row("Claude Code CLI", "installed", shutil.which("claude") or "missing")
+    table.add_row("Claude Code CLI", "installed", system_binary("claude") or "missing")
     table.add_row("Claude desktop", "running" if app_up else "stopped", "/Applications/Claude.app")
     from .client_setup import claude_configured_models, claude_slot_routes
     from .tier_gateway import catalog_ids, installed_models
@@ -5191,7 +5203,7 @@ def _hf_import(args: argparse.Namespace, hub: Any) -> int:
         raise hub.HFError("usage: sovereign hf import <org/repo|file.gguf> --include PATTERN")
     if args.dataset:
         raise hub.HFError("Ollama imports model GGUFs, not dataset repositories")
-    ollama = shutil.which("ollama")
+    ollama = system_binary("ollama")
     if not ollama:
         raise hub.HFError("the `ollama` CLI is not installed")
     if args.context is not None and args.context < 1:

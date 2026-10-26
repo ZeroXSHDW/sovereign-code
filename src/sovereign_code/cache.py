@@ -24,6 +24,7 @@ created in the future and therefore never expire.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import sqlite3
@@ -165,6 +166,9 @@ class DiskCache:
         # is still serialised by ``self._lock`` below.
         self._local = threading.local()
         self._lock = threading.Lock()
+        # Keep every per-thread connection we hand out so close() can shut them
+        # all down, not just the one on the calling thread.
+        self._connections: list[sqlite3.Connection] = []
         # Bootstrap the schema on the creating thread so the first reader does
         # not race the writer.
         conn = self._connection()
@@ -187,6 +191,8 @@ class DiskCache:
             conn = sqlite3.connect(str(self.path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
+            with self._lock:
+                self._connections.append(conn)
         return conn
 
     def _harden_sidecars(self) -> None:
@@ -201,16 +207,27 @@ class DiskCache:
             harden(Path(f"{self.path}{suffix}"))
 
     def close(self) -> None:
-        try:
-            self._connection().close()
-        except sqlite3.Error:
-            pass
+        with self._lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._local = threading.local()
 
     def __enter__(self) -> DiskCache:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def get(self, key: str) -> dict[str, Any] | None:
         with self._lock:
@@ -307,6 +324,16 @@ MEMORY = MemoryCache()
 # gateway, the MCP server and the test suite all import it, and the tests
 # assert that a clean checkout stays clean.
 _DISK: DiskCache | None = None
+
+
+def _close_disk_cache() -> None:
+    global _DISK
+    if _DISK is not None:
+        _DISK.close()
+        _DISK = None
+
+
+atexit.register(_close_disk_cache)
 
 
 def __getattr__(name: str) -> Any:

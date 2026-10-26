@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 
@@ -12,6 +13,7 @@ from sovereign_code.verify import (
     probe_alias,
     probe_aliases,
     probe_liveness,
+    probe_models_dir,
 )
 
 
@@ -146,3 +148,48 @@ def test_liveness_probe_reports_http_status() -> None:
     result = probe_liveness("http://ollama", transport=httpx.MockTransport(handler))
     assert result.ok is False
     assert "503" in result.detail
+
+
+def test_models_dir_reports_a_dangling_symlink(tmp_path: Path) -> None:
+    link = tmp_path / "models"
+    link.symlink_to(tmp_path / "moved-away")
+    result = probe_models_dir(link)
+    assert result.ok is False
+    assert "broken symlink" in result.detail
+    assert "moved-away" in result.detail
+
+
+def test_models_dir_passes_on_a_real_store(tmp_path: Path) -> None:
+    store = tmp_path / "models"
+    (store / "manifests").mkdir(parents=True)
+    (store / "blobs").mkdir()
+    (store / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5").mkdir(parents=True)
+    (store / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "latest").write_text(
+        "{}\n"
+    )
+    result = probe_models_dir(store)
+    assert result.ok is True
+    assert "1 manifest" in result.detail
+
+
+def test_models_dir_passes_when_absent(tmp_path: Path) -> None:
+    result = probe_models_dir(tmp_path / "missing")
+    assert result.ok is True
+
+
+def test_models_dir_fails_without_manifests(tmp_path: Path) -> None:
+    store = tmp_path / "models"
+    (store / "blobs").mkdir(parents=True)
+    result = probe_models_dir(store)
+    assert result.ok is False
+    assert "missing" in result.detail
+
+
+def test_models_dir_follows_a_valid_symlink(tmp_path: Path) -> None:
+    store = tmp_path / "real"
+    (store / "manifests").mkdir(parents=True)
+    (store / "blobs").mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(store, target_is_directory=True)
+    result = probe_models_dir(link)
+    assert result.ok is True

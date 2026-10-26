@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var latency = ""
     let home = FileManager.default.homeDirectoryForCurrentUser.path
 
-    var localAI: String { "\(home)/Documents/local-ai" }
+    var localAI: String { "\(home)/Documents/sovereign-code/runtime" }
     var sovereign: String { "\(home)/Documents/sovereign-code/bin/sovereign" }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

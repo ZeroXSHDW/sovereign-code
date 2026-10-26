@@ -20,10 +20,9 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from .config import Settings
+from .config import LOG_DIR, Settings
 
 # How often the guardian looks. Short enough that a dead gateway is back
 # before a person notices, long enough not to wake the machine for nothing.
@@ -32,7 +31,7 @@ DEFAULT_INTERVAL = 30.0
 BRIDGE_PORT = 4001
 WEB_PORT = 4020
 
-LOG_PATH = Path.home() / "Documents" / "local-ai" / "data" / "logs" / "guardian.jsonl"
+LOG_PATH = LOG_DIR / "guardian.jsonl"
 
 
 @dataclass

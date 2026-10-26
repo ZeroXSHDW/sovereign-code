@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -21,6 +20,7 @@ from typing import Any
 
 from .config import DATA_DIR
 from .safefile import ensure_private_dir, open_private, write_private
+from .system import system_binary
 
 MAX_OUTPUT = 400_000
 _SUDO = re.compile(r"^\s*(sudo|doas)\s+(.*)$", re.DOTALL)
@@ -264,7 +264,7 @@ def run_shell(
 
 def tmux_available() -> bool:
     """Return True when tmux is installed and usable."""
-    return shutil.which("tmux") is not None
+    return system_binary("tmux") is not None
 
 
 def _prune_background_logs(folder: Path, keep: int = 50) -> None:

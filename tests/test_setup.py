@@ -118,7 +118,7 @@ def test_migrate_reports_a_failed_rename(tmp_path, monkeypatch):
 
 def test_check_ollama_reports_a_missing_binary(monkeypatch):
     monkeypatch.setattr(setup, "_http_ok", lambda *_a, **_k: False)
-    monkeypatch.setattr(setup.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(setup, "system_binary", lambda _name: None)
     settings = config.Settings()
     step = setup.check_ollama(settings, dry_run=True)
     assert not step.ok

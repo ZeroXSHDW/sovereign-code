@@ -563,9 +563,11 @@ def test_concurrent_index_builds_do_not_share_a_temp_file(
 
     def build() -> None:
         try:
-            search.build_index(root, "http://127.0.0.1:1")
+            _files, _chunks, store = search.build_index(root, "http://127.0.0.1:1")
         except BaseException as exc:
             errors.append(exc)
+        else:
+            store.close()
 
     threads = [threading.Thread(target=build) for _ in range(2)]
     for thread in threads:

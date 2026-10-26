@@ -19,7 +19,6 @@ brief survives.
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from .checks import detect_checks
 from .packs import Pack, brief_block, scope_file
 from .repomap import iter_files
 from .skills_install import _index_block, brief_skills
+from .system import system_binary
 
 ECOSYSTEMS = {
     "Python": "python",
@@ -117,7 +117,7 @@ def _pack_skills(pack: Pack) -> list[tuple[str, str]]:
 
 def _mcp_command() -> list[str]:
     """How this Mac should start the MCP server: installed entry point, else this Python."""
-    entry = shutil.which("sovereign")
+    entry = system_binary("sovereign")
     if entry:
         return [entry, "mcp"]
     return [sys.executable, "-m", "sovereign_code", "mcp"]

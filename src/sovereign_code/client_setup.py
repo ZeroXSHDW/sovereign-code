@@ -22,6 +22,7 @@ from typing import Any
 
 from .config import LOCAL_AI_ROOT, Settings
 from .safefile import write_private
+from .system import system_binary
 from .tier_gateway import CLAUDE_MODEL_ROUTES, CLAUDE_SLOT_MODELS
 
 # A client config is kept beside the live one so `--cloud` can hand it back
@@ -43,7 +44,7 @@ def client_cli_version(name: str) -> str:
     is surfaced instead of silently misfiring. Returns the empty string when
     the CLI is missing or versioning fails, so '' always means "unknown".
     """
-    command = shutil.which(name)
+    command = system_binary(name)
     if not command:
         return ""
     try:
@@ -197,7 +198,7 @@ def complementary_mcp_servers() -> dict[str, dict[str, Any]]:
     # official Python reference servers. Their npm names do not exist, so the
     # old npx entries failed to start on every client; uvx is the supported
     # runner and is already required to install this project.
-    uvx = shutil.which("uvx")
+    uvx = system_binary("uvx")
     if uvx:
         servers["git"] = {"command": uvx, "args": ["mcp-server-git"]}
         servers["fetch"] = {"command": uvx, "args": ["mcp-server-fetch"]}
@@ -287,20 +288,21 @@ def install_claude_desktop_mcp(path: Path | None = None) -> Path:
 
 
 def install_claude_code_mcp() -> str:
-    if shutil.which("claude") is None:
+    claude = system_binary("claude")
+    if claude is None:
         return "claude not installed"
     command = sovereign_argv()
     server_name = "sovereign"
     try:
         subprocess.run(
-            ["claude", "mcp", "remove", server_name, "-s", "user"],
+            [claude, "mcp", "remove", server_name, "-s", "user"],
             capture_output=True,
             text=True,
             check=False,
         )
         result = subprocess.run(
             [
-                "claude",
+                claude,
                 "mcp",
                 "add",
                 server_name,
@@ -326,14 +328,14 @@ def install_claude_code_mcp() -> str:
         # `mcp add` refuses a name that already exists, so a re-install used
         # to report every reference server as failed.
         subprocess.run(
-            ["claude", "mcp", "remove", name, "-s", "user"],
+            [claude, "mcp", "remove", name, "-s", "user"],
             capture_output=True,
             text=True,
             check=False,
         )
         r = subprocess.run(
             [
-                "claude",
+                claude,
                 "mcp",
                 "add",
                 name,
@@ -352,16 +354,17 @@ def install_claude_code_mcp() -> str:
 
 
 def install_qwen_mcp() -> str:
-    if shutil.which("qwen") is None:
+    qwen = system_binary("qwen")
+    if qwen is None:
         return "qwen not installed"
     command = sovereign_argv()
     try:
         subprocess.run(
-            ["qwen", "mcp", "remove", "sovereign"], capture_output=True, text=True, check=False
+            [qwen, "mcp", "remove", "sovereign"], capture_output=True, text=True, check=False
         )
         result = subprocess.run(
             [
-                "qwen",
+                qwen,
                 "mcp",
                 "add",
                 "sovereign",
@@ -380,13 +383,13 @@ def install_qwen_mcp() -> str:
     extras: list[str] = []
     for name, spec in complementary_mcp_servers().items():
         subprocess.run(
-            ["qwen", "mcp", "remove", name],
+            [qwen, "mcp", "remove", name],
             capture_output=True,
             text=True,
             check=False,
         )
         r = subprocess.run(
-            ["qwen", "mcp", "add", name, str(spec["command"]), *[str(arg) for arg in spec["args"]]],
+            [qwen, "mcp", "add", name, str(spec["command"]), *[str(arg) for arg in spec["args"]]],
             capture_output=True,
             text=True,
             check=False,
@@ -1774,17 +1777,18 @@ def install_ponytail() -> str:
     tiny Node.js lifecycle hooks. The marketplace and plugin must be added
     before the hooks can be trusted in the ``/hooks`` view.
     """
-    if shutil.which("codex") is None:
+    codex = system_binary("codex")
+    if codex is None:
         return "codex not installed"
     try:
         add = subprocess.run(
-            ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+            [codex, "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
             capture_output=True,
             text=True,
             check=False,
         )
         install = subprocess.run(
-            ["codex", "plugin", "add", "ponytail@ponytail"],
+            [codex, "plugin", "add", "ponytail@ponytail"],
             capture_output=True,
             text=True,
             check=False,
@@ -1804,7 +1808,7 @@ def install_ponytail_claude() -> str:
     interactive session. This reports an explicit manual status instead of
     pretending the install completed, so `install_all` output is honest.
     """
-    if shutil.which("claude") is None:
+    if system_binary("claude") is None:
         return "claude not installed"
     return (
         "manual: run in Claude Code `/plugin marketplace add DietrichGebert/ponytail` "
@@ -1814,11 +1818,12 @@ def install_ponytail_claude() -> str:
 
 def install_ponytail_qwen() -> str:
     """Register ponytail with Qwen Code as an extension."""
-    if shutil.which("qwen") is None:
+    qwen = system_binary("qwen")
+    if qwen is None:
         return "qwen not installed"
     try:
         result = subprocess.run(
-            ["qwen", "extensions", "install", "DietrichGebert/ponytail:ponytail"],
+            [qwen, "extensions", "install", "DietrichGebert/ponytail:ponytail"],
             capture_output=True,
             text=True,
             check=False,
@@ -1882,7 +1887,7 @@ def desktop_configs() -> dict[str, Path]:
 
 def codium_command() -> str:
     for name in ("codium", "codium-insiders"):
-        found = shutil.which(name)
+        found = system_binary(name)
         if found:
             return found
     return ""
@@ -1900,7 +1905,7 @@ def codium_settings_path() -> Path:
         / "settings.json"
     )
     linux = Path.home() / ".config" / "VSCodium" / "User" / "settings.json"
-    if mac_insiders.is_file() or (shutil.which("codium-insiders") and not shutil.which("codium")):
+    if mac_insiders.is_file() or (system_binary("codium-insiders") and not system_binary("codium")):
         return mac_insiders
     if mac.parent.is_dir() or not linux.parent.is_dir():
         return mac

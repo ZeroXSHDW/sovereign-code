@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -60,6 +61,7 @@ PROMPT = "Reply with exactly: OK"
 # Probing them with the default 8-token budget returned an empty body and
 # reported a healthy alias as broken.
 TOKEN_BUDGETS = {
+    "local-qwen3.8": 512,
     "local-thinking": 512,
     "local-reasoning": 512,
     "local-reasoning-deep": 512,
@@ -83,6 +85,10 @@ def probe_alias(
     transport: httpx.BaseTransport | None = None,
 ) -> AliasResult:
     """Send a tiny completion and require a non-empty reply."""
+    # Embedding aliases are not chat completions: probing them as one always
+    # fails with HTTP 403. They are exercised by `check_embedding` instead.
+    if "embed" in alias.lower():
+        return AliasResult(alias, True, 0.0, "embedding model (not a chat completion)")
     base = base_url.rstrip("/")
     budget = TOKEN_BUDGETS.get(alias, DEFAULT_BUDGET)
     started = time.monotonic()
@@ -149,6 +155,33 @@ def probe_aliases(
 class LivenessResult:
     ok: bool
     detail: str
+
+
+def probe_models_dir(models_path: Path | None = None) -> LivenessResult:
+    """Prove the Ollama model store is actually reachable.
+
+    ``~/.ollama/models`` is usually a symlink to a large folder elsewhere;
+    when that folder moves and the link dangles, Ollama answers
+    ``/api/version`` fine but every generation fails with an opaque mkdir
+    error. Doctor reports that state (and the dangling target) here, so the
+    fix is one relink instead of a restart that changes nothing.
+    """
+    env = os.environ.get("OLLAMA_MODELS")
+    path = models_path or (Path(env) if env else Path.home() / ".ollama" / "models")
+    if path.is_symlink() and not path.exists():
+        target = os.readlink(path)
+        return LivenessResult(False, f"{path} is a broken symlink → {target}")
+    if path.is_symlink():
+        path = path.resolve()
+    if not path.exists():
+        return LivenessResult(True, "absent · fresh install")
+    if not path.is_dir():
+        return LivenessResult(False, f"not a directory: {path}")
+    missing = [name for name in ("manifests", "blobs") if not (path / name).is_dir()]
+    if missing:
+        return LivenessResult(False, f"{'/'.join(missing)} missing in {path}")
+    manifests = sum(1 for file in (path / "manifests").rglob("*") if file.is_file())
+    return LivenessResult(True, f"{path} · {manifests} manifest(s)")
 
 
 def probe_liveness(

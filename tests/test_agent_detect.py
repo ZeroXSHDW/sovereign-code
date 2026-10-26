@@ -76,8 +76,8 @@ def test_summarize_returns_text():
     assert "coding agent" in text.lower() or "No coding agents" in text
 
 
-@patch("sovereign_code.agent_detect.shutil.which", return_value=None)
-def test_detect_agent_not_installed(mock_which):
+@patch("sovereign_code.agent_detect.system_binary", return_value=None)
+def test_detect_agent_not_installed(mock_system_binary):
     report = detect_agent("cursor")
     assert report.installed is False
     assert report.command is None

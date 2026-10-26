@@ -13,7 +13,6 @@ row so a dry run shows exactly what would happen.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 import time
@@ -23,6 +22,7 @@ from typing import Any, cast
 
 from . import config
 from .http import shared_client
+from .system import system_binary
 
 DEFAULT_STACK = ("qwen3.5:4b", "qwen2.5-coder:14b", "gemma4:12b", "nomic-embed-text")
 # Rough installed size, used before anything is downloaded.
@@ -165,7 +165,7 @@ def ensure_layout(*, dry_run: bool = False) -> Step:
 def check_ollama(settings: config.Settings, *, dry_run: bool = False) -> Step:
     if _http_ok(settings.ollama_url):
         return Step("ollama", True, f"serving at {settings.ollama_url}")
-    binary = shutil.which("ollama")
+    binary = system_binary("ollama")
     if not binary:
         return Step(
             "ollama",

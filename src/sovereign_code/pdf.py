@@ -22,7 +22,6 @@ import base64
 import hashlib
 import json
 import re
-import shutil
 import subprocess
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +31,7 @@ from typing import Any
 
 from .config import DATA_DIR
 from .safefile import ensure_private_dir, harden, write_private_bytes
+from .system import system_binary
 
 DEFAULT_DPI = 200
 DEFAULT_LANG = "eng"
@@ -149,7 +149,7 @@ class PDFDocument:
 
 
 def _which(name: str) -> str | None:
-    return shutil.which(name)
+    return system_binary(name)
 
 
 def available() -> dict[str, bool]:
@@ -207,8 +207,8 @@ def page_count(path: str | Path) -> int:
     target = Path(path).expanduser()
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {target}")
-    _require("pdfinfo")
-    result = _run(["pdfinfo", str(target)])
+    binary = _require("pdfinfo")
+    result = _run([binary, str(target)])
     if result.returncode != 0:
         raise RuntimeError(_decode(result.stderr).strip() or "pdfinfo failed")
     for line in _decode(result.stdout).splitlines():
@@ -232,8 +232,8 @@ def extract_text(
     target = Path(path).expanduser()
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {target}")
-    _require("pdftotext")
-    args = ["pdftotext"]
+    binary = _require("pdftotext")
+    args = [binary]
     if layout:
         args.append("-layout")
     if first is not None:
@@ -333,7 +333,7 @@ def render_pages(
     target = Path(path).expanduser()
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {target}")
-    _require("pdftoppm")
+    binary = _require("pdftoppm")
     managed = output_dir is None
     if output_dir is None:
         output_dir = DATA_DIR / "pdf" / "images" / _safe_stem(target)
@@ -355,7 +355,7 @@ def render_pages(
             except OSError:
                 pass
     stem = out / prefix
-    args = ["pdftoppm", f"-{fmt}", "-r", str(dpi)]
+    args = [binary, f"-{fmt}", "-r", str(dpi)]
     if first is not None:
         args += ["-f", str(first)]
     if last is not None:
@@ -406,8 +406,8 @@ def ocr_image(
     target = Path(image_path).expanduser()
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {target}")
-    _require("tesseract")
-    args = ["tesseract", str(target), "stdout", "-l", lang, "--psm", str(psm)]
+    binary = _require("tesseract")
+    args = [binary, str(target), "stdout", "-l", lang, "--psm", str(psm)]
     result = _run(args, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(_decode(result.stderr).strip() or "tesseract failed")

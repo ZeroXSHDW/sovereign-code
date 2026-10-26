@@ -54,7 +54,7 @@ def test_is_git_repo_detects_the_marker(tmp_path: Path) -> None:
 
 def test_project_changes_returns_empty_without_git(tmp_path: Path, monkeypatch) -> None:
     # `git` is present, but this dir is not a repo; both calls return empty.
-    if not cli.shutil.which("git"):
+    if not cli.command_exists("git"):
         monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: type("r", (), {"stdout": ""})())
     assert cli._project_changes(tmp_path) == ""
 

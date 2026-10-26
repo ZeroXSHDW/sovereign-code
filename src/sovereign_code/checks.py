@@ -14,10 +14,11 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .system import system_binary
 
 MAX_LOG = 12000
 
@@ -118,7 +119,7 @@ def _program_path(token: str) -> str | None:
     if os.sep in token or (os.altsep and os.altsep in token):
         path = Path(token).expanduser()
         return str(path) if path.is_file() else None
-    return shutil.which(token)
+    return system_binary(token)
 
 
 def split_command(command: str) -> list[str]:

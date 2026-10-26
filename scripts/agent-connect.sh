@@ -23,7 +23,7 @@ cd "$ROOT"
 SOVEREIGN_BIN="${SOVEREIGN_BIN:-$ROOT/bin/sovereign}"
 PYTHON="${PYTHON:-python3}"
 VENVDIR="${VENVDIR:-$ROOT/.venv}"
-LOCAL_AI_ROOT="${LOCAL_AI_ROOT:-$HOME/Documents/local-ai}"
+LOCAL_AI_ROOT="${LOCAL_AI_ROOT:-$ROOT/runtime}"
 
 log()  { printf '[sovereign] %s\n' "$*" >&2; }
 ok()   { printf '[sovereign] \033[32m✓\033[0m %s\n' "$*" >&2; }

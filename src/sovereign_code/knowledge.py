@@ -95,6 +95,12 @@ class KnowledgeBase:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ---------------------------------------------------------------- index
 
     def index_root(

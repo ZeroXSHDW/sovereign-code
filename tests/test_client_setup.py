@@ -81,7 +81,7 @@ def test_opencode_config_is_native_v2_and_adds_coding_helpers() -> None:
 
 def test_ponytail_installers_are_graceful_without_clis(monkeypatch) -> None:
     """A missing CLI yields a message, never a crash or a hanging subprocess."""
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: None)
     assert client_setup.install_ponytail() == "codex not installed"
     assert client_setup.install_ponytail_claude() == "claude not installed"
     assert client_setup.install_ponytail_qwen() == "qwen not installed"
@@ -121,7 +121,7 @@ def test_claude_code_mcp_registers_complementary_servers(monkeypatch) -> None:
             subprocess.CompletedProcess([], 0, "", ""),  # add sovereign
         ]
     )
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/claude")
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: "/usr/bin/claude")
 
     def fake_run(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         cmd = list(args[0]) if args and isinstance(args[0], list) else []
@@ -143,7 +143,7 @@ def test_claude_code_mcp_registers_complementary_servers(monkeypatch) -> None:
 
 
 def test_unsupported_clients_reports_unknown_majors(monkeypatch) -> None:
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: f"/usr/bin/{_name}")
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: f"/usr/bin/{_name}")
     monkeypatch.setattr(
         client_setup,
         "client_cli_version",
@@ -155,14 +155,14 @@ def test_unsupported_clients_reports_unknown_majors(monkeypatch) -> None:
 
 
 def test_supported_client_versions_are_not_reported(monkeypatch) -> None:
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: f"/usr/bin/{_name}")
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: f"/usr/bin/{_name}")
     versions = {"codex": "0.163.0", "claude": "2.1.0", "opencode": "2.1.0", "qwen": "0.25.3"}
     monkeypatch.setattr(client_setup, "client_cli_version", versions.get)
     assert client_setup.unsupported_clients() == {}
 
 
 def test_client_cli_version_returns_the_first_line(monkeypatch) -> None:
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: "/usr/bin/codex")
     monkeypatch.setattr(
         client_setup.subprocess,
         "run",
@@ -172,14 +172,14 @@ def test_client_cli_version_returns_the_first_line(monkeypatch) -> None:
 
 
 def test_client_cli_version_is_empty_for_a_missing_cli(monkeypatch) -> None:
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: None)
     assert client_setup.client_cli_version("codex") == ""
 
 
 def test_install_qwen_mcp_registers_complementary_servers(monkeypatch) -> None:
     """Qwen gets the reference servers and the explicit computer-control env."""
     calls: list[list[str]] = []
-    monkeypatch.setattr(client_setup.shutil, "which", lambda _name: "/usr/bin/qwen")
+    monkeypatch.setattr(client_setup, "system_binary", lambda _name: "/usr/bin/qwen")
 
     def fake_run(*args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         cmd = list(args[0]) if args and isinstance(args[0], list) else []
@@ -600,7 +600,7 @@ def test_reference_git_and_fetch_use_the_python_servers() -> None:
 def test_reference_git_and_fetch_are_omitted_without_uvx(monkeypatch) -> None:
     """Better no server than one that cannot start."""
     monkeypatch.setattr(
-        client_setup.shutil, "which", lambda name: None if name == "uvx" else "/usr/bin/" + name
+        client_setup, "system_binary", lambda name: None if name == "uvx" else "/usr/bin/" + name
     )
     servers = client_setup.complementary_mcp_servers()
     assert "git" not in servers

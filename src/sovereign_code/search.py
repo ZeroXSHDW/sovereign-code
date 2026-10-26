@@ -259,6 +259,12 @@ class IndexStore:
     def close(self) -> None:
         self.conn.close()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
 
 def search_query(
     ollama_url: str,

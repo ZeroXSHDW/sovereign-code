@@ -1,4 +1,4 @@
-# Hooks mirror `make check`; CI remains the final gate.
+# Fast local hooks; `make check` and CI run the full test and coverage gates.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.2

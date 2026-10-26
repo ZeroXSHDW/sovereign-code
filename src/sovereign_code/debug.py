@@ -79,6 +79,14 @@ def run_under_pdb(script: Path, args: list[str], env: dict[str, str] | None = No
     return 0
 
 
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    sensitive = ("authorization", "cookie", "api-key", "apikey", "token", "secret")
+    return {
+        key: "<redacted>" if any(part in key.lower() for part in sensitive) else value
+        for key, value in headers.items()
+    }
+
+
 def trace_http(
     url: str,
     *,
@@ -99,21 +107,21 @@ def trace_http(
 
     request_headers = dict(headers) if headers else {}
     method = method.upper()
-    client = local_client(timeout=timeout, transport=transport)
     started = time.time()
     try:
-        response = client.request(
-            method,
-            url,
-            headers=request_headers,
-            json=json_data,
-            content=data,
-        )
+        with local_client(timeout=timeout, transport=transport) as client:
+            response = client.request(
+                method,
+                url,
+                headers=request_headers,
+                json=json_data,
+                content=data,
+            )
     except httpx.HTTPError as exc:
         record = {
             "url": url,
             "method": method,
-            "request_headers": request_headers,
+            "request_headers": _redact_headers(request_headers),
             "duration_ms": round((time.time() - started) * 1000, 2),
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -123,9 +131,9 @@ def trace_http(
     record = {
         "url": url,
         "method": method,
-        "request_headers": request_headers,
+        "request_headers": _redact_headers(request_headers),
         "status": response.status_code,
-        "response_headers": dict(response.headers),
+        "response_headers": _redact_headers(dict(response.headers)),
         "body_preview": text[:4000],
         "body_bytes": len(response.content),
         "duration_ms": round((time.time() - started) * 1000, 2),

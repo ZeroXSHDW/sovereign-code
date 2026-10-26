@@ -17,6 +17,18 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - name: Install
+        run: uv sync --locked --all-extras --dev
+      - name: Install PDF tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr
+      - name: Check
+        run: make check
+      - name: Audit dependencies
+        run: make audit
+      - name: Check the tag matches the package version
+        run: |
+          version="$(.venv/bin/python -c 'from sovereign_code import __version__; print(__version__)')"
+          test "$GITHUB_REF_NAME" = "v$version"
       - name: Build
         run: uv build
       - name: Check the wheel installs

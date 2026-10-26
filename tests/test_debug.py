@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -128,3 +129,81 @@ def test_debug_task_uses_gateway(monkeypatch: Any) -> None:
 def test_current_traceback_text() -> None:
     text = debug_mod.current_traceback_text()
     assert "test_current_traceback_text" in text
+
+
+def test_trace_http_redacts_secrets_and_closes_the_client(tmp_path: Path, monkeypatch: Any) -> None:
+    from sovereign_code import http as http_mod
+
+    monkeypatch.setattr(debug_mod, "DEBUG_LOG", tmp_path / "logs" / "debug.log")
+    clients: list[httpx.Client] = []
+    real_local_client = http_mod.local_client
+
+    def tracking_client(**kwargs: Any) -> httpx.Client:
+        client = real_local_client(**kwargs)
+        clients.append(client)
+        return client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer request-secret"
+        return httpx.Response(200, text="ok", headers={"set-cookie": "session=response-secret"})
+
+    monkeypatch.setattr(http_mod, "local_client", tracking_client)
+    record = debug_mod.trace_http(
+        "http://127.0.0.1:4010/v1/models",
+        headers={"Authorization": "Bearer request-secret", "X-API-Key": "api-secret"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert record["request_headers"]["Authorization"] == "<redacted>"
+    assert record["request_headers"]["X-API-Key"] == "<redacted>"
+    assert record["response_headers"]["set-cookie"] == "<redacted>"
+    assert clients[0].is_closed
+    logged = debug_mod.DEBUG_LOG.read_text(encoding="utf-8")
+    assert "request-secret" not in logged
+    assert "response-secret" not in logged
+    assert "api-secret" not in logged
+
+
+def test_debug_trace_accepts_documented_header_syntax(monkeypatch: Any) -> None:
+    from sovereign_code.cli import _debug
+
+    trace = MagicMock(return_value={"method": "GET", "url": "http://x", "status": 200})
+    monkeypatch.setattr("sovereign_code.debug.trace_http", trace)
+    args = SimpleNamespace(
+        debug_command="trace",
+        url="http://x",
+        gateway=False,
+        mcp=False,
+        method="GET",
+        header=["Authorization: Bearer token", "X-Test: yes"],
+        data=None,
+        json=False,
+        timeout=30.0,
+    )
+
+    assert _debug(args, SimpleNamespace(router_url="http://x")) == 0
+    assert trace.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer token",
+        "X-Test": "yes",
+    }
+
+
+def test_debug_trace_rejects_invalid_json(monkeypatch: Any) -> None:
+    from sovereign_code.cli import _debug
+
+    trace = MagicMock()
+    monkeypatch.setattr("sovereign_code.debug.trace_http", trace)
+    args = SimpleNamespace(
+        debug_command="trace",
+        url="http://x",
+        gateway=False,
+        mcp=False,
+        method="POST",
+        header=[],
+        data="{not-json",
+        json=True,
+        timeout=30.0,
+    )
+
+    assert _debug(args, SimpleNamespace(router_url="http://x")) == 1
+    trace.assert_not_called()

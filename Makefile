@@ -27,7 +27,7 @@ help:
 	@echo "make clean           remove build artefacts and caches"
 
 install:
-	$(UV) sync --all-extras --dev --python $(PYTHON)
+	$(UV) sync --locked --all-extras --dev --python $(PYTHON)
 	$(SOVEREIGN) install-clients
 
 sync:
@@ -58,7 +58,7 @@ check: lint typecheck coverage
 	$(VENV)/bin/ruff format --check .
 
 audit:
-	$(UV) export --no-emit-project --no-hashes -o /tmp/sovereign-audit-requirements.txt
+	$(UV) export --no-emit-project --no-hashes --extra browser -o /tmp/sovereign-audit-requirements.txt
 	$(VENV)/bin/pip-audit --strict -r /tmp/sovereign-audit-requirements.txt
 
 hooks:

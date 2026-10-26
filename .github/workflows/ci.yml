@@ -131,7 +131,7 @@ jobs:
       - name: Install
         run: uv sync --locked --all-extras --dev
       - name: Export third-party requirements
-        run: uv export --no-emit-project --no-hashes -o /tmp/sovereign-audit-requirements.txt
+        run: uv export --no-emit-project --no-hashes --extra browser -o /tmp/sovereign-audit-requirements.txt
       - name: pip-audit
         run: uv run pip-audit --strict -r /tmp/sovereign-audit-requirements.txt
 

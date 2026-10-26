@@ -7665,6 +7665,17 @@ def _parse_vars(pairs: list[str]) -> dict[str, str]:
     return out
 
 
+def _parse_headers(pairs: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for pair in pairs:
+        if ":" not in pair:
+            continue
+        key, value = pair.split(":", 1)
+        if key.strip():
+            out[key.strip()] = value.strip()
+    return out
+
+
 # --------------------------------------------------------------------- cache
 
 
@@ -7929,13 +7940,17 @@ def _debug(args: argparse.Namespace, settings: Settings) -> int:
         if not url:
             console.print("[red]Give --url, --gateway, or --mcp.[/]")
             return 1
-        headers = _parse_vars(args.header)
+        headers = _parse_headers(args.header)
         data: str | bytes | None = args.data
         json_data: dict[str, Any] | list[Any] | None = None
         if args.json and data:
             import json as _json
 
-            json_data = _json.loads(data)
+            try:
+                json_data = _json.loads(data)
+            except ValueError as exc:
+                console.print(f"[red]Invalid JSON:[/] {exc}")
+                return 1
             data = None
         try:
             record = trace_http(

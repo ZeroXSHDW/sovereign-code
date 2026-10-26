@@ -224,6 +224,49 @@ def test_disk_free_gb_reports_zero_when_the_path_is_unreadable(monkeypatch):
     assert system.disk_free_gb(Path("/nonexistent")) == 0.0
 
 
+def test_port_open_returns_false_on_failure() -> None:
+    assert system.port_open("127.0.0.1", 1, timeout=0.01) is False
+
+
+def test_probe_listening_skips_empty_host(monkeypatch):
+    monkeypatch.setattr(system.os, "uname", lambda: type("U", (), {"sysname": "Darwin"})())
+    stdout = (
+        "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n"
+        "python3.1 100 user 6u IPv4 0x1 0t0 TCP 127.0.0.1:4010 (LISTEN)\n"
+        "python3.1 100 user 6u IPv4 0x1 0t0 TCP :4010 (LISTEN)\n"
+    )
+    monkeypatch.setattr(
+        system.subprocess,
+        "run",
+        lambda *_a, **_k: type("R", (), {"returncode": 0, "stdout": stdout})(),
+    )
+    assert system._probe_listening(4010) == ["127.0.0.1"]
+
+
+def test_login_agent_installed() -> None:
+    system.login_agent_installed()  # does not raise
+
+
+def test_login_agent_loaded_off_macos(monkeypatch) -> None:
+    monkeypatch.setattr(system.os, "uname", lambda: type("U", (), {"sysname": "Linux"})())
+    assert system.login_agent_loaded() is False
+
+
+def test_login_agent_loaded_tolerates_subprocess_error(monkeypatch) -> None:
+    monkeypatch.setattr(system.os, "uname", lambda: type("U", (), {"sysname": "Darwin"})())
+
+    def boom(*_a, **_k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(system.subprocess, "run", boom)
+    assert system.login_agent_loaded() is False
+
+
+def test_is_loopback_handles_urlsplit_error() -> None:
+    # urlsplit does not raise on malformed ports, but a path-only url with bad chars can
+    assert system.is_loopback("http://[::1") is False
+
+
 def test_run_returns_empty_on_failure(monkeypatch):
     monkeypatch.setattr(
         system.subprocess,
@@ -240,7 +283,7 @@ def test_read_memory_defaults_total_when_sysctl_fails(monkeypatch):
     assert memory.total_gb == 24.0
 
 
-def test_to_gb_handles_bad_unit_and_number(monkeypatch):
+def test_to_gb_handles_bad_number(monkeypatch):
     monkeypatch.setattr(system, "_run", lambda *_a, **_k: "total = XG  used = YM")
     assert system.swap_usage_gb() == (0.0, 0.0)
 

@@ -278,6 +278,8 @@ def test_probe_detail_extracts_text() -> None:
     assert _probe_detail('{"text": "hello"}') == "hello"
     assert _probe_detail('{"part": {"text": "world"}}') == "world"
     assert _probe_detail("plain text") == "plain text"
+    assert _probe_detail("[1, 2, 3]") == "[1, 2, 3]"
+    assert _probe_detail('{"text": "   "}') == '{"text": "   "}'
 
 
 def test_probe_clients_handles_plan_launch_error(monkeypatch, tmp_path: Path) -> None:

@@ -190,3 +190,27 @@ def test_read_context_length_tolerates_db_error(tmp_path: Path) -> None:
     # Write a file with the sqlite header so is_file passes, but make sqlite fail.
     path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
     assert tune.read_context_length(path) is None
+
+
+def test_read_context_length_connect_fails_before_assignment(tmp_path: Path) -> None:
+    # A directory cannot be opened as a sqlite database, so connect raises
+    # before ``con`` is assigned.
+    assert tune.read_context_length(tmp_path) is None
+
+
+def test_current_server_pid_handles_pgrep_failure(monkeypatch) -> None:
+    def boom(*_a, **_k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(tune.subprocess, "run", boom)
+    assert tune._current_server_pid() is None
+
+
+def test_current_server_env_parses_ps_output(monkeypatch) -> None:
+    monkeypatch.setattr(tune, "_current_server_pid", lambda: "1234")
+
+    def fake_run(cmd, **_k):
+        return subprocess.CompletedProcess(cmd, 0, "OLLAMA_CONTEXT_LENGTH=4096\n", "")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    assert tune.current_server_env() == {"OLLAMA_CONTEXT_LENGTH": "4096"}

@@ -180,6 +180,15 @@ def test_touch_handles_http_error_and_skips_unloaded() -> None:
     assert p.status()[0].touch_count >= 1
 
 
+def test_touch_skips_unloaded_model() -> None:
+    p = WarmPool()
+    p.add("cold:1")
+    client = _mock_client()
+    with patch("sovereign_code.warm.shared_client", return_value=client):
+        p.touch()
+    assert client.post.call_count == 0
+
+
 def test_stop_is_safe_when_not_started() -> None:
     p = WarmPool()
     p.stop()  # no thread; should not raise

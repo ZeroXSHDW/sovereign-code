@@ -224,6 +224,44 @@ def test_disk_free_gb_reports_zero_when_the_path_is_unreadable(monkeypatch):
     assert system.disk_free_gb(Path("/nonexistent")) == 0.0
 
 
+def test_port_open_true_when_server_responds() -> None:
+    import socket
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    host, port = server.getsockname()
+    try:
+        assert system.port_open(host, port, timeout=1.0) is True
+    finally:
+        server.close()
+
+
+def test_system_binary_prefers_path_then_prefixes(monkeypatch, tmp_path: Path) -> None:
+    # shutil.which finds it first
+    monkeypatch.setattr(system.shutil, "which", lambda name: f"/bin/{name}")
+    assert system.system_binary("ls") == "/bin/ls"
+
+
+def test_system_binary_returns_none_when_missing_everywhere(monkeypatch) -> None:
+    monkeypatch.setattr(system.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(system, "BINARY_PREFIXES", ())
+    assert system.system_binary("definitely-missing-tool") is None
+
+
+def test_system_binary_skips_non_executable_prefix_file(monkeypatch, tmp_path: Path) -> None:
+    prefix = tmp_path / "bin"
+    prefix.mkdir()
+    (prefix / "tool").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(system.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(system, "BINARY_PREFIXES", (str(prefix),))
+    assert system.system_binary("tool") is None
+
+
+def test_command_exists() -> None:
+    assert isinstance(system.command_exists("ls"), bool)
+
+
 def test_port_open_returns_false_on_failure() -> None:
     assert system.port_open("127.0.0.1", 1, timeout=0.01) is False
 
@@ -284,7 +322,7 @@ def test_read_memory_defaults_total_when_sysctl_fails(monkeypatch):
 
 
 def test_to_gb_handles_bad_number(monkeypatch):
-    monkeypatch.setattr(system, "_run", lambda *_a, **_k: "total = XG  used = YM")
+    monkeypatch.setattr(system, "_run", lambda *_a, **_k: "total = 1.2.3G  used = 4.5.6M")
     assert system.swap_usage_gb() == (0.0, 0.0)
 
 

@@ -189,6 +189,14 @@ def test_touch_skips_unloaded_model() -> None:
     assert client.post.call_count == 0
 
 
+def test_touch_skips_tag_with_no_model() -> None:
+    p = WarmPool()
+    client = _mock_client()
+    with patch("sovereign_code.warm.shared_client", return_value=client):
+        p.touch(["not-added"])
+    assert client.post.call_count == 0
+
+
 def test_stop_is_safe_when_not_started() -> None:
     p = WarmPool()
     p.stop()  # no thread; should not raise
@@ -198,13 +206,21 @@ def test_loop_exception_is_swallowed() -> None:
     p = WarmPool()
     p.add("a:1")
 
+    calls = []
+
     def boom() -> None:
+        calls.append(1)
         raise RuntimeError("boom")
 
     p.touch = boom  # type: ignore[assignment]
-    p._interval = 0.01
-    p.start()
-    import time
+    # Run one iteration of the loop by controlling the stop event.
+    real_wait = p._stop.wait
 
-    time.sleep(0.05)
-    p.stop()
+    def fake_wait(timeout):
+        if calls:
+            return True
+        return real_wait(0.0)
+
+    p._stop.wait = fake_wait  # type: ignore[assignment]
+    p._loop()
+    assert calls

@@ -264,13 +264,18 @@ def test_disk_cache_close_clears_connections(tmp_path):
 def test_disk_cache_del_handles_error(tmp_path):
     db = tmp_path / "cache.db"
     disk = DiskCache(db, ttl=60.0)
+    real_conns = list(disk._connections)
 
     class FakeConn:
         def close(self) -> None:
             raise RuntimeError("boom")
 
     disk._connections = [FakeConn()]  # type: ignore[list-item]
-    disk.__del__()
+    try:
+        disk.__del__()
+    finally:
+        for conn in real_conns:
+            conn.close()
 
 
 def test_close_disk_cache_idempotent(monkeypatch):
@@ -301,6 +306,7 @@ def test_disk_cache_clear_all(tmp_path):
 def test_disk_cache_close_handles_sqlite_error(tmp_path):
     db = tmp_path / "cache.db"
     disk = DiskCache(db, ttl=60.0)
+    real_conns = list(disk._connections)
 
     class FakeConn:
         def close(self) -> None:
@@ -310,6 +316,8 @@ def test_disk_cache_close_handles_sqlite_error(tmp_path):
 
     disk._connections = [FakeConn()]  # type: ignore[list-item]
     disk.close()
+    for conn in real_conns:
+        conn.close()
 
 
 def test_disk_attr_caches_instance(monkeypatch, tmp_path):

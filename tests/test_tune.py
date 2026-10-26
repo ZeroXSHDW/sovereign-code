@@ -177,6 +177,14 @@ def test_any_process_false_when_all_pgrep_return_empty(monkeypatch) -> None:
     assert tune._any_process(("a", "b")) is False
 
 
+def test_any_process_true_when_pgrep_finds_output(monkeypatch) -> None:
+    def fake_run(*_a, **_k):
+        return subprocess.CompletedProcess([], 0, "1234\n", "")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    assert tune._any_process(("a",)) is True
+
+
 def test_any_process_tolerates_pgrep_failure(monkeypatch) -> None:
     def fake_run(*_a, **_k):
         raise OSError("nope")
@@ -192,10 +200,28 @@ def test_read_context_length_tolerates_db_error(tmp_path: Path) -> None:
     assert tune.read_context_length(path) is None
 
 
-def test_read_context_length_connect_fails_before_assignment(tmp_path: Path) -> None:
-    # A directory cannot be opened as a sqlite database, so connect raises
-    # before ``con`` is assigned.
-    assert tune.read_context_length(tmp_path) is None
+def test_read_context_length_connect_fails_before_assignment(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "db.sqlite"
+    path.write_text("not a db", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise sqlite3.Error("boom")
+
+    monkeypatch.setattr("sovereign_code.tune.sqlite3.connect", boom)
+    assert tune.read_context_length(path) is None
+
+
+def test_read_context_length_uses_default_path(monkeypatch, tmp_path: Path) -> None:
+    db = tmp_path / "db.sqlite"
+    con = sqlite3.connect(db)
+    try:
+        con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, context_length INTEGER)")
+        con.execute("INSERT INTO settings (id, context_length) VALUES (1, 8192)")
+        con.commit()
+    finally:
+        con.close()
+    monkeypatch.setattr(tune, "ollama_db_path", lambda: db)
+    assert tune.read_context_length() == 8192
 
 
 def test_current_server_pid_handles_pgrep_failure(monkeypatch) -> None:

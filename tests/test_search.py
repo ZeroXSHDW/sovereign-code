@@ -101,3 +101,54 @@ def test_embed_integration_optional() -> None:
         pytest.skip(f"Ollama embedding unavailable: {exc}")
     assert len(vectors) == 1
     assert len(vectors[0]) == 768
+
+
+def test_cosine_returns_zero_on_dimension_mismatch() -> None:
+    assert cosine([1.0, 0.0], [1.0]) == 0.0
+
+
+def test_chunk_text_honours_overlap_when_it_is_zero() -> None:
+    # max_chars == overlap + 1 forces the guard path: start = end.
+    chunks = chunk_text("x" * 20, max_chars=11, overlap=10)
+    assert len(chunks) > 1
+
+
+def test_embed_raises_on_http_error(monkeypatch) -> None:
+    import httpx
+
+    def boom(*_a, **_k):
+        raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(
+        "sovereign_code.search.shared_client", lambda: type("C", (), {"post": boom})()
+    )
+    with pytest.raises(Exception, match="Ollama unreachable"):
+        embed("http://x", "m", ["hi"])
+
+
+def test_embed_raises_on_bad_status(monkeypatch) -> None:
+    class Resp:
+        status_code = 500
+
+    monkeypatch.setattr(
+        "sovereign_code.search.shared_client",
+        lambda: type("C", (), {"post": lambda *a, **k: Resp()})(),
+    )
+    with pytest.raises(Exception, match="embed HTTP 500"):
+        embed("http://x", "m", ["hi"])
+
+
+def test_build_index_embeds_and_swaps(tmp_path: Path, monkeypatch) -> None:
+    from sovereign_code.search import build_index
+
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "sovereign_code.search.embed", lambda _url, _model, texts: [[1.0, 0.0]] * len(texts)
+    )
+    files, chunks, store = build_index(root, "http://x", model="nomic-embed-text")
+    assert files == 1
+    assert chunks == 1
+    assert store.count() == 1
+    store.close()

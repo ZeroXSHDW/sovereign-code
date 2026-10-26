@@ -174,3 +174,28 @@ ListView > ListItem {
 ListView > ListItem.--highlight {
     background: #24243a;
 }
+
+DebugOverlay {
+    align: center middle;
+    background: #000000 70%;
+}
+
+#debug-dialog {
+    width: 90%;
+    height: 80%;
+    border: round #ff5555;
+    background: #101018;
+}
+
+#debug-title {
+    height: 1;
+    background: #1a1a28;
+    color: #ff5555;
+    padding: 0 1;
+    text-style: bold;
+}
+
+#debug-body {
+    height: 1fr;
+    padding: 0 1;
+}

@@ -5354,6 +5354,7 @@ def _skills(
     include_all: bool = False,
     names: list[str] | None = None,
     dry_run: bool = False,
+    auto_download: bool = False,
     query: str | None = None,
     limit: int = 30,
 ) -> int:
@@ -5391,6 +5392,7 @@ def _skills(
                 include_all=include_all,
                 project=Path(project).expanduser() if project else None,
                 dry_run=dry_run,
+                auto_download=auto_download,
             )
         except (OSError, ValueError) as exc:
             console.print(f"[red]Skill install failed:[/] {exc}")
@@ -6988,6 +6990,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     skills.add_argument("--name", action="append", default=[], help="install only these names")
     skills.add_argument("--dry-run", action="store_true")
+    skills.add_argument(
+        "--auto-download",
+        action="store_true",
+        help="download missing skills from known remote sources",
+    )
     skills.add_argument("--limit", type=int, default=50)
 
     skill = sub.add_parser("skill", help="show or run a saved skill prompt")
@@ -7211,6 +7218,40 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--dpi", type=int, default=200, help="render DPI")
     ocr.add_argument("--lang", default="eng", help="Tesseract language")
 
+    # --- debug --------------------------------------------------------------
+    debug = sub.add_parser("debug", help="debug a script, task or request")
+    debug_sub = debug.add_subparsers(dest="debug_command")
+    debug_run = debug_sub.add_parser("run", help="run a Python script under pdb")
+    debug_run.add_argument("script", help="Python file to debug")
+    debug_run.add_argument("script_args", nargs="*", default=[], help="arguments for the script")
+    debug_run.add_argument("--env", action="append", default=[], help="VAR=value for the process")
+    debug_trace = debug_sub.add_parser("trace", help="trace one HTTP request")
+    debug_trace.add_argument("--url", default=None, help="URL to request")
+    debug_trace.add_argument(
+        "--gateway", action="store_true", help="trace the tier gateway /v1/models"
+    )
+    debug_trace.add_argument(
+        "--mcp", action="store_true", help="trace the HTTP MCP health endpoint"
+    )
+    debug_trace.add_argument("--method", default="GET", help="HTTP method")
+    debug_trace.add_argument("--header", action="append", default=[], help="Header: value")
+    debug_trace.add_argument("--data", default=None, help="raw request body")
+    debug_trace.add_argument("--json", action="store_true", help="parse --data as JSON")
+    debug_trace.add_argument("--timeout", type=float, default=30.0, help="request timeout")
+    debug_task_parser = debug_sub.add_parser(
+        "task", help="run a debugging task through the gateway"
+    )
+    debug_task_parser.add_argument("task", help="description of the problem")
+    debug_task_parser.add_argument("--model", default="best", help="model alias or tag")
+    debug_task_parser.add_argument("--max-tokens", type=int, default=2000, help="max output tokens")
+    debug_logs = debug_sub.add_parser("logs", help="tail recent log lines")
+    debug_logs.add_argument(
+        "--target",
+        default="tier",
+        choices=("gateway", "watchdog", "dashboard", "bridge", "tier", "loop"),
+        help="which log to tail",
+    )
+    debug_logs.add_argument("--tail", type=int, default=40, help="number of lines")
     return parser
 
 
@@ -7856,6 +7897,76 @@ def _ocr(args: argparse.Namespace) -> int:
     return 0
 
 
+def _debug(args: argparse.Namespace, settings: Settings) -> int:
+    import httpx
+
+    from .debug import (
+        debug_task,
+        format_trace_record,
+        recent_logs,
+        run_under_pdb,
+        trace_http,
+    )
+
+    sub = args.debug_command or ""
+    if sub == "run":
+        script = Path(args.script)
+        if not script.is_file():
+            console.print(f"[red]Not a file:[/] {script}")
+            return 1
+        env = _parse_vars(args.env)
+        try:
+            return run_under_pdb(script, args.script_args, env)
+        except FileNotFoundError as exc:
+            console.print(f"[red]{exc}[/]")
+            return 1
+    if sub == "trace":
+        url = args.url
+        if args.gateway:
+            url = f"{settings.router_url}/v1/models"
+        elif args.mcp:
+            url = "http://127.0.0.1:8765/health"
+        if not url:
+            console.print("[red]Give --url, --gateway, or --mcp.[/]")
+            return 1
+        headers = _parse_vars(args.header)
+        data: str | bytes | None = args.data
+        json_data: dict[str, Any] | list[Any] | None = None
+        if args.json and data:
+            import json as _json
+
+            json_data = _json.loads(data)
+            data = None
+        try:
+            record = trace_http(
+                url,
+                method=args.method,
+                headers=headers,
+                json_data=json_data,
+                data=data,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            console.print(f"[red]{type(exc).__name__}:[/] {exc}")
+            return 1
+        console.print(format_trace_record(record))
+        return 0
+    if sub == "task":
+        try:
+            answer = debug_task(args.task, model=args.model, max_tokens=args.max_tokens)
+        except Exception as exc:
+            console.print(f"[red]{type(exc).__name__}:[/] {exc}")
+            return 1
+        console.print(answer)
+        return 0
+    if sub == "logs":
+        for line in recent_logs(args.target, count=args.tail):
+            console.print(line)
+        return 0
+    console.print("[red]Give a debug subcommand:[/] run, trace, task, logs")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -8207,6 +8318,7 @@ def main(argv: list[str] | None = None) -> int:
             include_all=args.include_all,
             names=args.name,
             dry_run=args.dry_run,
+            auto_download=args.auto_download,
             query=args.query,
             limit=args.limit,
         )
@@ -8268,6 +8380,8 @@ def main(argv: list[str] | None = None) -> int:
         return _pdf(args)
     if command == "ocr":
         return _ocr(args)
+    if command == "debug":
+        return _debug(args, settings)
     parser.print_help()
     return 2
 

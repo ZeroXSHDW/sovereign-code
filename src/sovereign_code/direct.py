@@ -141,21 +141,41 @@ def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[s
             continue
         staged.append((target, item.content))
 
-    # Record the previous state so the whole batch can be undone.
+    # Record the previous state so the whole batch can be undone. Never replace
+    # a file whose current contents could not be captured for the undo journal.
     backups: dict[str, object] = {}
-    for target, _content in staged:
+    backed_up: list[tuple[Path, str]] = []
+    for target, content in staged:
         rel = str(target.relative_to(root))
-        backups[rel] = _capture_backup(target)
+        previous = _capture_backup(target)
+        if previous == {"unreadable": True}:
+            rejected.append(rel)
+            continue
+        backups[rel] = previous
+        backed_up.append((target, content))
+    staged = backed_up
+    if not staged:
+        return written, rejected
 
-    # Write everything. If one write fails, restore the ones already written.
+    import json
+
+    journal_path = root / UNDO_FILE
     newly_written: list[str] = []
     try:
         for target, content in staged:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             newly_written.append(str(target.relative_to(root)))
+        journal = {
+            "written": newly_written,
+            "backups": backups,
+        }
+        journal_path.write_text(json.dumps(journal, ensure_ascii=False), encoding="utf-8")
+        from .safefile import harden
+
+        harden(journal_path)
     except OSError:
-        # Best-effort rollback of the files already written.
+        # A missing journal is as much a failed transaction as a missing file.
         for rel in newly_written:
             target = root / rel
             try:
@@ -163,22 +183,6 @@ def apply_writes(root: Path, writes: list[FileWrite]) -> tuple[list[str], list[s
             except OSError:
                 pass
         raise
-
-    # Persist the journal for a later `undo_writes`.
-    import json
-
-    journal = {
-        "written": newly_written,
-        "backups": backups,
-    }
-    journal_path = root / UNDO_FILE
-    try:
-        journal_path.write_text(json.dumps(journal, ensure_ascii=False), encoding="utf-8")
-        from .safefile import harden
-
-        harden(journal_path)
-    except OSError:
-        pass
 
     written.extend(newly_written)
     return written, rejected
@@ -204,21 +208,24 @@ def undo_writes(root: Path) -> list[str]:
     if not isinstance(backups, dict):
         return []
     restored: list[str] = []
+    complete = True
     for rel, previous in backups.items():
         target = resolve_target(root, str(rel))
         if target is None:
             # A journal is a file on disk and can be edited or shipped in a
             # clone; never let it name a path outside the project.
+            complete = False
             continue
         try:
             _restore_backup(target, previous)
             restored.append(rel)
         except OSError:
-            continue
-    try:
-        journal_path.unlink(missing_ok=True)
-    except OSError:
-        pass
+            complete = False
+    if complete:
+        try:
+            journal_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return restored
 
 

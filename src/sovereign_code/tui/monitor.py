@@ -33,6 +33,7 @@ from ..monitor import LiveReport, collect_live, demo_report, format_age, sparkli
 from ..ollama import OllamaClient
 from ..router import Task, choose
 from ..status import Snapshot, collect
+from .debug import DebugOverlay
 
 REFRESH_SECONDS = 2.0
 
@@ -44,7 +45,7 @@ def _refresh_seconds() -> float:
         return REFRESH_SECONDS
 
 
-HINT_TEXT = "F5 refresh · p pause · y copy · F9 free RAM · F2/F4/F6 clients · ? help"
+HINT_TEXT = "F5 refresh · p pause · y copy · F9 free RAM · d debug · F2/F4/F6 clients · ? help"
 
 HELP_TEXT = """\
 Live monitor keys
@@ -96,6 +97,7 @@ class MonitorApp(App[None]):
         Binding("y", "copy", "Copy", show=False),
         Binding("question_mark", "help", "Help", show=False),
         Binding("f10", "open_terminal", "Terminal", show=True),
+        Binding("d", "debug", "Debug", show=True),
     ]
 
     def __init__(self, settings: Settings | None = None, demo: bool = False) -> None:
@@ -443,6 +445,9 @@ class MonitorApp(App[None]):
 
     def action_help(self) -> None:
         self.push_screen(MonitorHelp())
+
+    def action_debug(self) -> None:
+        self.push_screen(DebugOverlay())
 
     def _summary_text(self) -> str:
         report = self.report

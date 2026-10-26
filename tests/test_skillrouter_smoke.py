@@ -24,3 +24,24 @@ def test_playbook() -> None:
 
 def test_category() -> None:
     assert isinstance(skillrouter.category("python"), str)
+
+
+def test_category_collection_prefix() -> None:
+    assert skillrouter.category("x--code--python") == "code"
+
+
+def test_variants_plural_and_singular() -> None:
+    assert skillrouter._variants("forensics") == ["forensics", "forensic"]
+    assert skillrouter._variants("class") == ["class"]
+
+
+def test_description_line_truncates() -> None:
+    long = "x" * 300
+    assert skillrouter._description_line(long).endswith("…")
+    assert len(skillrouter._description_line(long)) <= 200
+
+
+def test_playbook_branches() -> None:
+    assert "security" in " ".join(skillrouter.playbook("security threat")).lower()
+    assert "debug" in " ".join(skillrouter.playbook("debug bug")).lower()
+    assert "benchmark" in " ".join(skillrouter.playbook("slow performance")).lower()

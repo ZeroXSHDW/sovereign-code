@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .config import LOCAL_AI_ROOT, PROJECT_ROOT
-from .skills import resolve_skill_path
+from .skills import ensure_skills_dir, resolve_skill_path
 
 SKILL_DIR = "skills"
 INDEX_START = "<!-- sovereign-skills:start -->"
@@ -39,6 +41,10 @@ CURATED_PATTERNS = (
     "accessibility-compliance--*.md",
     # Ponytail: the lazy-senior-dev ruleset and its review/audit/debt skills.
     "ponytail--*.md",
+    # OpenCode plugin companions (installed on demand if present in the bank).
+    "rtk--*.md",
+    "graphify--*.md",
+    "omniroute--*.md",
     "agent--architect.md",
     "agent--architect-review.md",
     "agent--code-reviewer.md",
@@ -116,6 +122,15 @@ PROFILES: dict[str, tuple[str, ...]] = {
 }
 
 DEFAULT_PROFILE = "core"
+
+# Known remote skill sources for `--auto-download`. The URL is fetched and saved
+# to the user's skill dir when a requested name is not already in the local bank.
+# These are best-effort plugin companions; verify the URL before trusting it.
+REMOTE_SKILL_SOURCES: dict[str, str] = {
+    "rtk": "https://raw.githubusercontent.com/rtk-ai/rtk/main/skills/rtk.md",
+    "graphify": "https://raw.githubusercontent.com/Graphify-Labs/graphify/main/skills/graphify.md",
+    "omniroute": "https://raw.githubusercontent.com/diegosouzapw/OmniRoute/main/skills/omniroute.md",
+}
 
 TARGETS: dict[str, Callable[[], Path]] = {
     "claude": lambda: Path.home() / ".claude" / "skills",
@@ -241,6 +256,7 @@ def install(
     include_all: bool = False,
     project: Path | None = None,
     dry_run: bool = False,
+    auto_download: bool = False,
 ) -> dict[str, list[str]]:
     """Install skills. Returns target -> installed paths."""
     if include_all:
@@ -258,6 +274,8 @@ def install(
             if slug in found:
                 continue
             candidate = _find_skill_file(name, slug)
+            if candidate is None and auto_download:
+                candidate = _auto_fetch(name, slug)
             if candidate is not None:
                 skills.append(load_skill(candidate))
                 found.add(slug)
@@ -412,11 +430,60 @@ def _find_skill_file(name: str, slug: str) -> Path | None:
     return None
 
 
-def get_skill(name: str) -> Skill | None:
-    """Find a skill in the curated set or anywhere in the 22k library."""
+def _download_url(slug: str) -> str | None:
+    """Best-effort remote URL for a missing skill slug."""
+    return REMOTE_SKILL_SOURCES.get(slug)
+
+
+def download_skill(slug: str, url: str | None = None, timeout: float = 30.0) -> Path:
+    """Fetch a skill markdown and save it to the user's skill directory.
+
+    ``url`` overrides the registry. The path is checked for traversal before
+    any write. Returns the path written.
+    """
+    target_url = url or _download_url(slug)
+    if not target_url:
+        raise ValueError(f"no remote source known for skill {slug!r}")
+    root = ensure_skills_dir()
+    path = resolve_skill_path(root, slug)
+    if path is None:
+        raise ValueError(f"unsafe skill name: {slug!r}")
+    try:
+        response = httpx.get(target_url, timeout=timeout, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"download failed for {slug}: {exc}") from exc
+    text = response.text
+    if not text.strip():
+        raise RuntimeError(f"empty download for {slug}")
+    if not text.startswith("---") and "#" not in text:
+        raise RuntimeError(f"download for {slug} does not look like a skill")
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _auto_fetch(name: str, slug: str) -> Path | None:
+    """Try to download a missing skill into the user dir."""
+    url = _download_url(slug) or _download_url(name)
+    if not url:
+        return None
+    try:
+        return download_skill(slug, url=url)
+    except (RuntimeError, ValueError):
+        return None
+
+
+def get_skill(name: str, auto_download: bool = False) -> Skill | None:
+    """Find a skill in the curated set or anywhere in the 22k library.
+
+    With ``auto_download`` the local bank is searched first; if the skill is
+    missing, a known remote source is fetched into the user skill directory.
+    """
     wanted = slugify(name)
     for skill in load_curated():
         if skill.name == wanted or skill.name == name:
             return skill
     candidate = _find_skill_file(name, wanted)
+    if candidate is None and auto_download:
+        candidate = _auto_fetch(name, wanted)
     return load_skill(candidate) if candidate is not None else None

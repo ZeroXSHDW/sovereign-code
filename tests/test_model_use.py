@@ -98,3 +98,44 @@ def test_resolve_domain_validates() -> None:
     assert mu.resolve_domain("legal") == "legal"
     with pytest.raises(ValueError, match="unknown domain"):
         mu.resolve_domain("not-a-domain")
+
+
+def test_opencode_and_claude_default_paths_return_home_paths() -> None:
+    assert mu.opencode_model_path().name == "opencode.json"
+    assert mu.claude_settings_path().name == "settings.json"
+
+
+def test_set_opencode_model_overwrites_non_dict_data(tmp_path) -> None:
+    path = tmp_path / "opencode.json"
+    path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+    mu.set_opencode_model("m:1", path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["model"] == "local/m:1"
+
+
+def test_set_claude_model_overwrites_non_dict_env(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"env": "nope"}), encoding="utf-8")
+    mu.set_claude_model("m:1", path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["env"]["ANTHROPIC_MODEL"] == "m:1"
+
+
+def test_model_use_wires_claude_only(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mu, "claude_settings_path", lambda: tmp_path / "cl.json")
+    done = mu.model_use("m:1", "claude")
+    assert set(done) == {"claude"}
+
+
+def test_current_models_returns_empty_on_missing_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(mu, "opencode_model_path", lambda: tmp_path / "missing.json")
+    monkeypatch.setattr(mu, "claude_settings_path", lambda: tmp_path / "missing.json")
+    monkeypatch.setattr(mu, "codex_home_path", lambda: tmp_path)
+    current = mu.current_models()
+    assert current == {"opencode": "", "codex": "", "claude": ""}
+
+
+def test_is_installed_reflects_installed_models(monkeypatch) -> None:
+    monkeypatch.setattr(mu, "installed_models", lambda: {"m:1"})
+    assert mu.is_installed("m:1") is True
+    assert mu.is_installed("m:2") is False

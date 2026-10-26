@@ -136,3 +136,53 @@ def test_undo_restores_a_binary_file_as_bytes(tmp_path: Path) -> None:
 
     assert undo_writes(tmp_path) == ["bin.dat"]
     assert (tmp_path / "bin.dat").read_bytes() == before
+
+
+def test_undo_keeps_the_journal_when_a_restore_fails(tmp_path, monkeypatch) -> None:
+    (tmp_path / "a.py").write_text("before\n", encoding="utf-8")
+    apply_writes(tmp_path, [FileWrite("a.py", "after\n")])
+    journal_path = tmp_path / ".sovereign-undo.json"
+
+    with monkeypatch.context() as mocked:
+        mocked.setattr(
+            "sovereign_code.direct._restore_backup",
+            lambda *_args: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        assert undo_writes(tmp_path) == []
+        assert journal_path.is_file()
+
+    assert undo_writes(tmp_path) == ["a.py"]
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "before\n"
+    assert not journal_path.exists()
+
+
+def test_apply_writes_rejects_a_file_without_a_usable_backup(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "a.py"
+    target.write_text("before\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "sovereign_code.direct._capture_backup", lambda _target: {"unreadable": True}
+    )
+
+    written, rejected = apply_writes(tmp_path, [FileWrite("a.py", "after\n")])
+
+    assert written == []
+    assert rejected == ["a.py"]
+    assert target.read_text(encoding="utf-8") == "before\n"
+    assert not (tmp_path / ".sovereign-undo.json").exists()
+
+
+def test_apply_writes_rolls_back_when_the_journal_cannot_be_written(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "a.py"
+    target.write_text("before\n", encoding="utf-8")
+    real_write = Path.write_text
+
+    def failing_write(self, content, *args, **kwargs):
+        if self.name == ".sovereign-undo.json":
+            raise OSError("journal is read-only")
+        return real_write(self, content, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+    with pytest.raises(OSError, match="journal is read-only"):
+        apply_writes(tmp_path, [FileWrite("a.py", "after\n")])
+
+    assert target.read_text(encoding="utf-8") == "before\n"

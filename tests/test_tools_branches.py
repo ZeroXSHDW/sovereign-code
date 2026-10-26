@@ -69,3 +69,13 @@ def test_read_text_missing_file() -> None:
     from sovereign_code.tools import read_text
 
     assert read_text(Path("/nonexistent/definitely-missing.txt")) == ""
+
+
+def test_opencode_models_skips_non_dict_models_block() -> None:
+    assert opencode_models('{"providers":{"ollama":{"models":[]}}}') == []
+    assert opencode_models('{"providers":{"ollama":{"models":"nope"}}}') == []
+
+
+def test_opencode_local_models_skips_non_dict_models_block() -> None:
+    assert opencode_local_models('{"providers":{"ollama":{"models":[]}}}') == []
+    assert opencode_local_models('{"providers":{"ollama":{"models":"nope"}}}') == []

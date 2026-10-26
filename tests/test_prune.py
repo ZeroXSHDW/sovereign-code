@@ -49,3 +49,8 @@ def test_nothing_is_pruned_when_everything_is_referenced() -> None:
     # Only the :latest suffix is normalised — "qwen3-coder" is a different tag
     # from "qwen3-coder:30b", so the exact referenced name must match.
     assert prune_candidates([("qwen3-coder:30b", 18.0)], {"qwen3-coder:30b"}) == []
+
+
+def test_referenced_tags_skips_non_sequence_models() -> None:
+    stacks = {"bad": {"models": "not-a-sequence"}}
+    assert referenced_tags(set(), stacks, {}) == set()

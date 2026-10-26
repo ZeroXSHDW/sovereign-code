@@ -5,6 +5,8 @@ from __future__ import annotations
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from sovereign_code.backup import create_backup
 
 
@@ -96,3 +98,34 @@ def test_backup_skips_missing_extra_file(tmp_path: Path) -> None:
     with tarfile.open(path, "r:gz") as archive:
         names = archive.getnames()
     assert not any("missing.txt" in name for name in names)
+
+
+def test_entries_skips_non_directory(tmp_path: Path) -> None:
+    from sovereign_code.backup import _entries
+
+    not_dir = tmp_path / "not-a-dir"
+    not_dir.write_text("x", encoding="utf-8")
+    assert list(_entries([not_dir], {}, None)) == []
+
+
+def test_create_backup_cleans_up_partial_despite_unlink_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import tarfile
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "f.txt").write_text("x", encoding="utf-8")
+
+    def raising_unlink(self, *a, **k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(Path, "unlink", raising_unlink)
+
+    def raising_open(*a, **k):
+        raise RuntimeError("archive failed")
+
+    monkeypatch.setattr(tarfile, "open", raising_open)
+
+    with pytest.raises(RuntimeError):
+        create_backup([data], tmp_path / "backups")

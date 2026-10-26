@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sovereign_code.mcp import handle
+from sovereign_code.mcp import _best_model, handle
 
 
 def _result(method: str, params: dict | None = None):
@@ -238,6 +238,28 @@ def test_ask_rejects_an_unknown_domain() -> None:
     )
     assert response is not None
     assert response["result"]["isError"] is True
+
+
+def test_best_model_accepts_domain_synonyms(monkeypatch) -> None:
+    from sovereign_code.config import Settings
+    from sovereign_code.models import build_views
+    from sovereign_code.status import Snapshot
+
+    settings = Settings()
+    tags = {"models": [{"name": "qwen2.5-coder:14b", "size": 9 * 1024**3, "details": {}}]}
+    snap = Snapshot(settings=settings, views=build_views(tags, None))
+
+    async def fake_collect(_settings: Settings) -> Snapshot:
+        return snap
+
+    monkeypatch.setattr("sovereign_code.status.collect", fake_collect)
+    legal = _best_model("legal")
+    assert legal["task"] == "legal"
+    assert legal["model"] == "qwen2.5-coder:14b"
+    coder = _best_model("coder")
+    assert coder["task"] == "coder"
+    assert coder["model"] == "qwen2.5-coder:14b"
+    assert _best_model("astrology")["task"] == "astrology"
 
 
 def _has_run_pack() -> bool:

@@ -54,3 +54,18 @@ async def test_gateway_check_malformed_json(monkeypatch) -> None:
 
 def test_parse_aliases_returns_empty_for_plain_yaml() -> None:
     assert parse_aliases("") == []
+
+
+@pytest.mark.asyncio
+async def test_gateway_check_unreachable(monkeypatch) -> None:
+    class AsyncClient:
+        async def get(self, *a, **k):
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", "http://x"))
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr("sovereign_code.gateway.async_client", lambda *a, **k: AsyncClient())
+    status = await check("http://127.0.0.1:4000")
+    assert status.up is False
+    assert "ConnectError" in status.detail

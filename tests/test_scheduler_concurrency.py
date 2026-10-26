@@ -96,3 +96,32 @@ def test_exclusive_blocks_regular_entry() -> None:
         # release then ensure the waiter completes
     thread.join(timeout=1)
     assert not thread.is_alive()
+
+
+def test_enter_decrements_waiting_without_deleting_when_others_remain() -> None:
+    scheduler = ModelScheduler()
+    a_started = threading.Event()
+    a_may_exit = threading.Event()
+
+    def run_a() -> None:
+        with scheduler.request("a"):
+            a_started.set()
+            a_may_exit.wait(timeout=5)
+
+    def run_b() -> None:
+        with scheduler.request("b"):
+            pass
+
+    a_thread = threading.Thread(target=run_a)
+    b_threads = [threading.Thread(target=run_b) for _ in range(2)]
+    a_thread.start()
+    assert a_started.wait(timeout=5)
+    for thread in b_threads:
+        thread.start()
+    while scheduler.stats().waiting.get("b", 0) < 2:
+        time.sleep(0.001)
+    a_may_exit.set()
+    a_thread.join(timeout=5)
+    for thread in b_threads:
+        thread.join(timeout=5)
+    assert scheduler.stats().inflight == 0

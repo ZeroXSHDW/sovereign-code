@@ -41,6 +41,20 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _close_global_disk_cache():
+    """Reset the lazy global disk cache so tests do not leak its connection."""
+    yield
+    from sovereign_code.cache import _close_disk_cache
+
+    _close_disk_cache()
+    # Force cleanup of any objects whose __del__ closes sqlite connections,
+    # so the next test does not inherit their ResourceWarning.
+    import gc
+
+    gc.collect()
+
+
 @pytest.fixture
 def codex_home(tmp_path, monkeypatch):
     """A Codex home with the local profile the launcher expects.

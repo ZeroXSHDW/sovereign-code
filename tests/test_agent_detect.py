@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from sovereign_code.agent_detect import (
@@ -81,3 +82,70 @@ def test_detect_agent_not_installed(mock_system_binary):
     report = detect_agent("cursor")
     assert report.installed is False
     assert report.command is None
+
+
+def test_agent_report_to_dict_roundtrip() -> None:
+    report = detect_agent("cursor")
+    d = report.to_dict()
+    assert d["key"] == "cursor"
+    assert d["installed"] == report.installed
+    assert "config_dir" in d
+
+
+def test_version_helpers_handle_failure(monkeypatch) -> None:
+    import subprocess
+
+    from sovereign_code.agent_detect import _version
+
+    assert _version(None) is None
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")),
+    )
+    assert _version("/bin/false") is None
+
+
+def test_detect_agent_omits_empty_version(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "fake-agent"
+    binary.write_text("#!/bin/sh\necho ''\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr("sovereign_code.agent_detect.system_binary", lambda _name: str(binary))
+    report = detect_agent("cursor")
+    assert "version" not in report.details
+
+
+def test_installed_and_missing_helpers() -> None:
+    from sovereign_code.agent_detect import (
+        agent_keys_installed,
+        any_installed,
+        installed_agents,
+        missing_agents,
+    )
+
+    any_installed()  # does not raise
+    assert isinstance(installed_agents(), list)
+    assert isinstance(missing_agents(), list)
+    assert isinstance(agent_keys_installed(), list)
+
+
+def test_summarize_with_and_without_agents(monkeypatch) -> None:
+    from sovereign_code.agent_detect import summarize
+
+    monkeypatch.setattr(
+        "sovereign_code.agent_detect.installed_agents",
+        list,
+    )
+    assert "No coding agents" in summarize()
+
+    class FakeReport:
+        name = "Test"
+        command = None
+        config_dir = None
+        app_bundle = None
+
+    monkeypatch.setattr(
+        "sovereign_code.agent_detect.installed_agents",
+        lambda: [FakeReport()],
+    )
+    assert "Test" in summarize()

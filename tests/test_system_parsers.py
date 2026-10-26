@@ -222,3 +222,64 @@ def test_disk_free_gb_reports_zero_when_the_path_is_unreadable(monkeypatch):
 
     monkeypatch.setattr(system.shutil, "disk_usage", boom)
     assert system.disk_free_gb(Path("/nonexistent")) == 0.0
+
+
+def test_run_returns_empty_on_failure(monkeypatch):
+    monkeypatch.setattr(
+        system.subprocess,
+        "run",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")),
+    )
+    assert system._run(["sysctl", "-n", "hw.memsize"]) == ""
+
+
+def test_read_memory_defaults_total_when_sysctl_fails(monkeypatch):
+    monkeypatch.setattr(system, "total_memory_gb", lambda: 0.0)
+    monkeypatch.setattr(system, "_run", lambda *_a, **_k: _vm_stat())
+    memory = system.read_memory()
+    assert memory.total_gb == 24.0
+
+
+def test_to_gb_handles_bad_unit_and_number(monkeypatch):
+    monkeypatch.setattr(system, "_run", lambda *_a, **_k: "total = XG  used = YM")
+    assert system.swap_usage_gb() == (0.0, 0.0)
+
+
+def test_probe_listening_handles_subprocess_error(monkeypatch):
+    def boom(*_a, **_k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(system.os, "uname", lambda: type("U", (), {"sysname": "Darwin"})())
+    monkeypatch.setattr(system.subprocess, "run", boom)
+    assert system._probe_listening(4010) == []
+
+
+def test_probe_listening_skips_short_lines(monkeypatch):
+    monkeypatch.setattr(system.os, "uname", lambda: type("U", (), {"sysname": "Darwin"})())
+    monkeypatch.setattr(
+        system.subprocess,
+        "run",
+        lambda *_a, **_k: type("R", (), {"returncode": 0, "stdout": "COMMAND PID\nshort line\n"})(),
+    )
+    assert system._probe_listening(4010) == []
+
+
+def test_system_binary_finds_prefix_binary(monkeypatch, tmp_path: Path) -> None:
+    prefix = tmp_path / "bin"
+    prefix.mkdir()
+    binary = prefix / "fake-tool"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setattr(system, "BINARY_PREFIXES", (str(prefix),))
+    monkeypatch.setattr(system.shutil, "which", lambda _name: None)
+    assert system.system_binary("fake-tool") == str(binary)
+
+
+def test_login_agent_helpers() -> None:
+    system.login_agent_installed()  # does not raise
+    system.login_agent_loaded()  # does not raise
+
+
+def test_qwen_paths() -> None:
+    assert system.qwen_config_path().name == "settings.json"
+    assert system.qwen_memory_path().name == "QWEN.md"

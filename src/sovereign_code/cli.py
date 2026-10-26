@@ -3870,8 +3870,9 @@ def _warm_model(settings: Settings, model: str | None, task: str) -> int:
     if not snap.ollama_up:
         console.print("[red]Ollama is offline.[/]")
         return 1
-    tasks = {"code": Task.CODE, "chat": Task.CHAT, "agent": Task.AGENT}
-    want = tasks.get(task, Task.CODE)
+    from .router import task_from_name
+
+    want = task_from_name(task)
     if model:
         view = snap.views.get(model)
         tag = model
@@ -6524,7 +6525,11 @@ def build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--apply", action="store_true", help="remove them (default: dry run)")
     warm = sub.add_parser("warm", help="preload a model so the first prompt is fast")
     warm.add_argument("--model", default=None, help="tag to warm (default: best for --task)")
-    warm.add_argument("--task", default="code", choices=("code", "chat", "agent"))
+    warm.add_argument(
+        "--task",
+        default="code",
+        help="task or domain: code, chat, agent, legal, coder, vision, finance, forensics",
+    )
 
     mlx = sub.add_parser("mlx", help="run MLX models (Apple Silicon) through a local mlx-lm server")
     mlx.add_argument(

@@ -236,3 +236,105 @@ def test_disk_cache_is_not_created_at_import_time(tmp_path):
     )
     assert "LAZY" in out.stdout
     assert not (home / "data" / "response_cache.db").exists()
+
+
+def test_memory_cache_clear(memory):
+    key = cache_key_chat("m", "t", [{"role": "user", "content": "hi"}])
+    memory.put(key, {"content": "x"})
+    memory.clear()
+    assert memory.get(key) is None
+    assert memory.stats()["entries"] == 0.0
+
+
+def test_disk_cache_context_manager_closes(tmp_path):
+    db = tmp_path / "cache.db"
+    with DiskCache(db, ttl=60.0) as disk:
+        disk.put(cache_key_chat("m", "t", [{"role": "user", "content": "hi"}]), {"content": "x"})
+    # after exit, closed
+
+
+def test_disk_cache_close_clears_connections(tmp_path):
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+    disk.get("missing")
+    disk.close()
+    disk.close()  # idempotent
+
+
+def test_disk_cache_del_handles_error(tmp_path):
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+
+    class FakeConn:
+        def close(self) -> None:
+            raise RuntimeError("boom")
+
+    disk._connections = [FakeConn()]  # type: ignore[list-item]
+    disk.__del__()
+
+
+def test_close_disk_cache_idempotent(monkeypatch):
+    closed: list[bool] = []
+
+    class FakeDisk:
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(cache_module, "_DISK", FakeDisk())
+    cache_module._close_disk_cache()
+    assert len(closed) == 1
+    cache_module._close_disk_cache()
+    assert len(closed) == 1
+    monkeypatch.setattr(cache_module, "_DISK", None)
+
+
+def test_disk_cache_clear_all(tmp_path):
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+    key = cache_key_chat("m", "t", [{"role": "user", "content": "hi"}])
+    disk.put(key, {"content": "x"})
+    assert disk.clear() == 1
+    assert disk.get(key) is None
+    disk.close()
+
+
+def test_disk_cache_close_handles_sqlite_error(tmp_path):
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+
+    class FakeConn:
+        def close(self) -> None:
+            import sqlite3
+
+            raise sqlite3.Error("boom")
+
+    disk._connections = [FakeConn()]  # type: ignore[list-item]
+    disk.close()
+
+
+def test_disk_attr_caches_instance(monkeypatch, tmp_path):
+    monkeypatch.setattr(cache_module, "_DISK", None)
+    # Accessing DISK twice returns the same object
+    first = cache_module.__getattr__("DISK")
+    second = cache_module.__getattr__("DISK")
+    assert first is second
+    first.close()
+
+
+def test_cached_chat_returns_memory_hit_without_disk(tmp_path):
+    db = tmp_path / "cache.db"
+    disk = DiskCache(db, ttl=60.0)
+    memory = MemoryCache()
+    key = cache_key_chat("m", "t", [{"role": "user", "content": "hi"}])
+    value = {"content": "from-memory"}
+    memory.put(key, value)
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return {"content": "fetched"}
+
+    result = cached_chat(key, fetch, memory=memory, disk=disk)
+    assert result == value
+    assert calls == []
+    disk.close()

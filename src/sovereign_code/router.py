@@ -199,11 +199,42 @@ def system_prompt(task: Task) -> str:
     )
 
 
+# Domain-flavoured names ChatGPT and other clients use when asking for the
+# best model for a kind of work. They are normalised to the router's task
+# enum so `best_model("legal")` picks a reasoner instead of crashing or
+# falling back to chat.
+_TASK_SYNONYMS: dict[str, Task] = {
+    "coder": Task.CODE,
+    "coding": Task.CODE,
+    "programming": Task.CODE,
+    "developer": Task.CODE,
+    "dev": Task.CODE,
+    "legal": Task.REASON,
+    "law": Task.REASON,
+    "compliance": Task.REASON,
+    "contract": Task.REASON,
+    "finance": Task.REASON,
+    "financial": Task.REASON,
+    "forensics": Task.REASON,
+    "dfir": Task.REASON,
+    "incident": Task.REASON,
+    "image": Task.VISION,
+    "images": Task.VISION,
+    "visual": Task.VISION,
+    "photo": Task.VISION,
+    "agentic": Task.AGENT,
+    "tools": Task.AGENT,
+    "speed": Task.FAST,
+    "quick": Task.FAST,
+}
+
+
 def task_from_name(name: str | None) -> Task:
+    cleaned = (name or "chat").lower().strip()
     try:
-        return Task((name or "chat").lower())
+        return Task(cleaned)
     except ValueError:
-        return Task.CHAT
+        return _TASK_SYNONYMS.get(cleaned, Task.CHAT)
 
 
 def mode_label(task: Task) -> str:

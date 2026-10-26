@@ -155,11 +155,26 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "best_model",
-        "Return the strongest installed model and context window for a task.",
+        "Return the strongest installed model and context window for a task or domain. "
+        "Use domain names (legal, coder, vision, finance, forensics, agentic) when you "
+        "want the router to pick the right specialist model.",
         {
             "task": {
                 "type": "string",
-                "enum": ["code", "chat", "reason", "vision", "fast", "agent"],
+                "enum": [
+                    "code",
+                    "chat",
+                    "reason",
+                    "vision",
+                    "fast",
+                    "agent",
+                    "coder",
+                    "legal",
+                    "finance",
+                    "forensics",
+                    "image",
+                    "agentic",
+                ],
                 "default": "code",
             }
         },
@@ -998,13 +1013,13 @@ def _best_model(task: str) -> dict[str, Any]:
     import asyncio
 
     from .config import Settings
-    from .router import Task, choose
+    from .router import choose, task_from_name
     from .status import collect
 
     settings = Settings.load()
     snap = asyncio.run(collect(settings))
     selection = choose(
-        Task(task),
+        task_from_name(task),
         snap.views,
         snap.potential_free_gb,
         max_context=settings.max_context,

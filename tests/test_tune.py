@@ -8,14 +8,10 @@ from pathlib import Path
 
 from sovereign_code import tune
 from sovereign_code.tune import (
-    _any_process,
-    _current_server_pid,
-    current_server_env,
     desired_env,
     env_drift,
     parse_server_env,
     read_context_length,
-    set_session_env,
     supported,
     write_context_length,
 )
@@ -82,9 +78,12 @@ def test_context_length_handles_corrupt_db(tmp_path: Path) -> None:
 
 def test_read_context_length_returns_none_when_no_row(tmp_path: Path) -> None:
     path = tmp_path / "empty.sqlite"
-    with sqlite3.connect(path) as con:
+    con = sqlite3.connect(path)
+    try:
         con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, context_length INTEGER)")
         con.commit()
+    finally:
+        con.close()
     assert read_context_length(path) is None
 
 
@@ -132,3 +131,62 @@ def test_restart_ollama_does_not_raise(monkeypatch) -> None:
     monkeypatch.setattr(tune.subprocess, "run", fake_run)
     monkeypatch.setattr(tune, "_any_process", lambda _p: False)
     tune.restart_ollama(timeout=0.01)
+
+
+def test_restart_ollama_applies_env(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_k):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    monkeypatch.setattr(tune, "_any_process", lambda _p: False)
+    tune.restart_ollama(timeout=0.01, env={"OLLAMA_FLASH_ATTENTION": "1"})
+    assert any("open" in c[0] for c in calls)
+
+
+def test_restart_ollama_kills_when_timeout(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_k):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    monkeypatch.setattr(tune, "_any_process", lambda _p: True)
+    tune.restart_ollama(timeout=0.01)
+    assert any("-9" in c for c in calls)
+
+
+def test_current_server_env_handles_ps_failure(monkeypatch) -> None:
+    monkeypatch.setattr(tune, "_current_server_pid", lambda: "1234")
+
+    def boom(*_a, **_k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(tune.subprocess, "run", boom)
+    assert tune.current_server_env() == {}
+
+
+def test_any_process_false_when_all_pgrep_return_empty(monkeypatch) -> None:
+    def fake_run(*_a, **_k):
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    assert tune._any_process(("a", "b")) is False
+
+
+def test_any_process_tolerates_pgrep_failure(monkeypatch) -> None:
+    def fake_run(*_a, **_k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(tune.subprocess, "run", fake_run)
+    assert tune._any_process(("a",)) is False
+
+
+def test_read_context_length_tolerates_db_error(tmp_path: Path) -> None:
+    path = tmp_path / "locked.sqlite"
+    # Write a file with the sqlite header so is_file passes, but make sqlite fail.
+    path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+    assert tune.read_context_length(path) is None

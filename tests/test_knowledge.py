@@ -241,6 +241,24 @@ def test_default_knowledge() -> None:
     kb.close()
 
 
+def test_init_uses_provided_ollama_url(tmp_path: Path) -> None:
+    kb = KnowledgeBase(tmp_path / "kb.db", ollama_url="http://custom:1234")
+    assert kb.ollama_url == "http://custom:1234"
+    kb.close()
+
+
+def test_del_handles_error(tmp_path: Path) -> None:
+    kb = KnowledgeBase(tmp_path / "kb.db")
+
+    class FakeConn:
+        def close(self) -> None:
+            raise RuntimeError("boom")
+
+    kb._conn.close()
+    kb._conn = FakeConn()  # type: ignore[assignment]
+    kb.__del__()
+
+
 def test_search_skips_missing_db(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "root"
     root.mkdir()

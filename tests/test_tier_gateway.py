@@ -712,3 +712,64 @@ def test_model_timeouts_are_configurable(monkeypatch) -> None:
     monkeypatch.setenv("SOVEREIGN_STREAM_IDLE_TIMEOUT", "0")
     assert tg.request_timeout() == tg.DEFAULT_REQUEST_TIMEOUT
     assert tg.stream_idle_timeout() == tg.DEFAULT_STREAM_IDLE_TIMEOUT
+
+
+def test_estimate_tokens_at_least_one() -> None:
+    assert tg.estimate_tokens([]) >= 1
+    assert tg.estimate_tokens([{"role": "user", "content": "hi"}]) >= 1
+
+
+def test_text_of_string_and_list() -> None:
+    assert tg._text_of({"content": "hello"}) == "hello"
+    assert tg._text_of({"content": [{"type": "text", "text": "a"}, {"type": "image"}]}) == "a"
+    assert tg._text_of({}) == ""
+
+
+def test_has_signal_word_boundary() -> None:
+    assert tg.has_signal("fix the bug", ("fix",)) is True
+    assert tg.has_signal("prefix", ("fix",)) is False
+
+
+def test_clean_user_text_strips_system_reminder() -> None:
+    assert "secret" not in tg.clean_user_text("hi <system-reminder>secret</system-reminder> bye")
+    assert "bye" in tg.clean_user_text("hi <system-reminder>x</system-reminder> bye")
+
+
+def test_task_user_message_picks_short_latest() -> None:
+    msgs = [
+        {"role": "user", "content": "real prompt"},
+        {"role": "user", "content": "x" * 5000},
+    ]
+    assert tg.task_user_message(msgs)["content"] == "real prompt"
+
+
+def test_is_simple_request() -> None:
+    assert isinstance(tg.is_simple_request([{"role": "user", "content": "hi"}]), bool)
+    assert isinstance(tg.is_simple_request([{"role": "user", "content": "fix typo"}]), bool)
+
+
+def test_detect_intent() -> None:
+    assert tg.detect_intent([{"role": "user", "content": "```python\nx\n```"}]) == "code"
+    assert tg.detect_intent([{"role": "user", "content": "explain this"}]) in ("general", "reason")
+
+
+def test_choose_model_returns_tuple() -> None:
+    model, ctx, _think = tg.choose_model(tg.BALANCED, set(), "code")
+    assert isinstance(model, str)
+    assert isinstance(ctx, int)
+
+
+def test_fit_to_context_no_change_when_fits() -> None:
+    m, c = tg.fit_to_context("m", 1000, 500, set())
+    assert m == "m" and c == 1000
+
+
+def test_fit_to_context_upgrades_when_needed() -> None:
+    m, _c = tg.fit_to_context("m", 1000, 5000, {tg.LONG_CONTEXT_MODEL})
+    assert m == tg.LONG_CONTEXT_MODEL
+
+
+def test_model_available() -> None:
+    assert tg._model_available("x", set()) is True
+    assert tg._model_available("x", {"x"}) is True
+    assert tg._model_available("x", {"y"}) is False

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from sovereign_code.sessions import (
     SessionInfo,
     SessionWriter,
@@ -146,3 +148,33 @@ def test_prune_sessions_tolerates_unlink_failure(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(Path, "unlink", boom)
     assert prune_sessions([info]) == 0
+
+
+def test_read_session_skips_non_dict_json(tmp_path: Path) -> None:
+    path = tmp_path / "a.jsonl"
+    path.write_text("[1, 2, 3]\n", encoding="utf-8")
+    assert read_session(path) == []
+
+
+def test_export_sessions_tolerates_temp_unlink_failure(monkeypatch, tmp_path: Path) -> None:
+    import os
+
+    host = tmp_path / "sessions"
+    host.mkdir()
+    (host / "a.jsonl").write_text(
+        json.dumps({"type": "message", "content": "hi"}) + "\n", encoding="utf-8"
+    )
+    dest = tmp_path / "export.jsonl"
+
+    def raising_fdopen(*a, **k):
+        raise OSError("boom")
+
+    monkeypatch.setattr(os, "fdopen", raising_fdopen)
+
+    def raising_unlink(*a, **k):
+        raise OSError("nope")
+
+    monkeypatch.setattr(os, "unlink", raising_unlink)
+
+    with pytest.raises(OSError):
+        export_sessions(dest, directory=host)

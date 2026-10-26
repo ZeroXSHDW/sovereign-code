@@ -141,3 +141,61 @@ def test_singleton_pool_returns_same_instance() -> None:
         a = pool()
         b = pool()
         assert a is b
+
+
+def test_warm_records_non_http_error() -> None:
+    p = WarmPool()
+    p.add("fail:1")
+    client = MagicMock()
+    client.post.side_effect = ValueError("boom")
+    with patch("sovereign_code.warm.shared_client", return_value=client):
+        result = p.warm()
+    assert result == {"fail:1": 0.0}
+    assert "boom" in p.status()[0].error
+
+
+def test_warm_skips_missing_models() -> None:
+    p = WarmPool()
+    result = p.warm(["not-added"])
+    assert result == {}
+
+
+def test_touch_handles_http_error_and_skips_unloaded() -> None:
+    p = WarmPool()
+    p.add("a:1")
+
+    def make_client():
+        client = MagicMock()
+        client.post.return_value = _mock_response()
+        return client
+
+    warm_client = make_client()
+    touch_client = MagicMock()
+    touch_client.post.side_effect = httpx.ConnectError("boom")
+
+    with patch("sovereign_code.warm.shared_client", return_value=warm_client):
+        p.warm()
+    with patch("sovereign_code.warm.shared_client", return_value=touch_client):
+        p.touch()
+    assert p.status()[0].touch_count >= 1
+
+
+def test_stop_is_safe_when_not_started() -> None:
+    p = WarmPool()
+    p.stop()  # no thread; should not raise
+
+
+def test_loop_exception_is_swallowed() -> None:
+    p = WarmPool()
+    p.add("a:1")
+
+    def boom() -> None:
+        raise RuntimeError("boom")
+
+    p.touch = boom  # type: ignore[assignment]
+    p._interval = 0.01
+    p.start()
+    import time
+
+    time.sleep(0.05)
+    p.stop()

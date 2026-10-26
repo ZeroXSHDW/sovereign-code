@@ -94,3 +94,43 @@ def test_backend_status_fields() -> None:
     assert status.backend is backend
     assert status.online is True
     assert status.models == ("model-a", "model-b")
+
+
+def test_probe_all_runs_every_backend(monkeypatch) -> None:
+    from sovereign_code.backends import probe_all
+
+    seen: list[str] = []
+
+    def fake_probe(backend, timeout):
+        seen.append(backend.key)
+        return BackendStatus(backend, False, ())
+
+    monkeypatch.setattr("sovereign_code.backends.probe", fake_probe)
+    statuses = probe_all(Settings())
+    assert len(statuses) == 6
+    assert set(seen) == {"gateway", "ollama", "jan", "lmstudio", "llamacpp", "mlx"}
+
+
+def test_wait_online_times_out(monkeypatch) -> None:
+    import time
+
+    from sovereign_code.backends import wait_online
+
+    monkeypatch.setattr("sovereign_code.backends.probe", lambda _b: BackendStatus(_b, False, ()))
+    monkeypatch.setattr(time, "sleep", lambda _i: None)
+    backend = Backend("ollama", "Ollama", "http://127.0.0.1:11434")
+    status = wait_online(backend, timeout=0.0, interval=0.0)
+    assert status.online is False
+
+
+def test_wait_online_returns_first_online(monkeypatch) -> None:
+    import time
+
+    from sovereign_code.backends import wait_online
+
+    backend = Backend("ollama", "Ollama", "http://127.0.0.1:11434")
+    online = BackendStatus(backend, True, ("m",))
+    monkeypatch.setattr("sovereign_code.backends.probe", lambda _b: online)
+    monkeypatch.setattr(time, "sleep", lambda _i: None)
+    status = wait_online(backend, timeout=30.0, interval=1.0)
+    assert status is online

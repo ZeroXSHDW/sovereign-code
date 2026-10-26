@@ -88,31 +88,6 @@ def gateway_executable() -> Path:
     return gateway_root() / "venv" / "bin" / "litellm"
 
 
-def cloud_env() -> dict[str, str]:
-    """The optional provider keys for the gateway's cloud passthrough.
-
-    The file is read, not sourced, so a value with spaces or quotes cannot
-    break the plist.
-    """
-    path = gateway_root() / "cloud.env"
-    values: dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return values
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if key.startswith("export "):
-            key = key[len("export ") :].strip()
-        if key:
-            values[key] = value.strip().strip("'\"")
-    return values
-
-
 def _port_of(url: str, default: int) -> int:
     tail = url.rstrip("/").rsplit(":", 1)
     if len(tail) == 2 and tail[1].isdigit():
@@ -164,7 +139,6 @@ def service_definitions(settings: Settings | None = None) -> list[Service]:
             port=gateway_port,
             detail="the alias gateway behind the tier gateway",
             working_dir=str(gateway_root()),
-            env=cloud_env(),
             log_name="service-gateway.log",
         ),
         Service(

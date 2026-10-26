@@ -10,8 +10,7 @@ they are generated, so a long local answer no longer looks like a hung
 connection. Tool calls are buffered and emitted as complete ``tool_use``
 blocks at the end of the turn, which is the shape Claude Code executes.
 
-It works for every gateway alias: local Ollama models, Ollama Cloud, and
-provider routes. No cloud key is needed for local work.
+It works for every gateway alias: local Ollama models and provider routes.
 """
 
 from __future__ import annotations

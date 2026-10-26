@@ -94,22 +94,10 @@ def test_the_session_environment_points_at_the_tier_gateway() -> None:
     assert values["SOVEREIGN_API_KEY"] == "local"
 
 
-def test_the_cloud_keys_are_read_not_sourced(tmp_path, monkeypatch) -> None:
-    root = tmp_path / "gateway"
-    root.mkdir()
-    (root / "cloud.env").write_text(
-        "# a comment\nOPENAI_API_KEY='sk-test'\nexport OTHER=1\n\nbroken line\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(services, "gateway_root", lambda: root)
-    values = services.cloud_env()
-    assert values == {"OPENAI_API_KEY": "sk-test", "OTHER": "1"}
-
-
-def test_a_service_with_keys_is_written_private(tmp_path, monkeypatch) -> None:
+def test_a_service_with_env_is_written_private(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(services, "AGENT_DIR", tmp_path)
     monkeypatch.setattr(services, "LOG_DIR", tmp_path / "logs")
     service = services.service_definitions()[0]
-    service.env = {"OPENAI_API_KEY": "sk-test"}
+    service.env = {"SOVEREIGN_API_KEY": "local"}
     path = services.write_plist(service)
     assert path.stat().st_mode & 0o777 == 0o600

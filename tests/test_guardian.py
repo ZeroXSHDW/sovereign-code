@@ -199,6 +199,67 @@ def test_service_state_as_dict_is_complete() -> None:
     }
 
 
+def test_mlx_service_restarts_the_saved_model_and_options(monkeypatch) -> None:
+    from sovereign_code import mlx
+
+    state = {
+        "model": "mlx-qwen3-4b-4bit",
+        "port": 8081,
+        "max_tokens": 4096,
+        "draft": "repo/draft",
+        "kv_bits": 4,
+        "draft_tokens": 3,
+        "decode_concurrency": 2,
+    }
+    calls = []
+    monkeypatch.setattr(mlx, "supervised", lambda: True)
+    monkeypatch.setattr(mlx, "read_state", lambda: state)
+    monkeypatch.setattr(mlx, "supervised_ok", lambda: False)
+    monkeypatch.setattr(mlx, "mlx_port", lambda: 8081)
+    monkeypatch.setattr(mlx, "mlx_url", lambda: "http://127.0.0.1:8081")
+    monkeypatch.setattr(
+        mlx,
+        "start_server",
+        lambda **kwargs: (calls.append(kwargs), (True, "starting"))[1],
+    )
+
+    service = next(item for item in guardian.services(guardian.Settings()) if item.name == "MLX")
+
+    assert service.running() is False
+    assert service.start() is True
+    assert calls == [
+        {
+            "model": "mlx-qwen3-4b-4bit",
+            "port": 8081,
+            "max_tokens": 4096,
+            "draft": "repo/draft",
+            "kv_bits": 4,
+            "draft_tokens": 3,
+            "decode_concurrency": 2,
+        }
+    ]
+
+
+def test_mlx_restart_preserves_disabled_draft_and_unquantized_cache(monkeypatch) -> None:
+    from sovereign_code import mlx
+
+    monkeypatch.setattr(
+        mlx,
+        "read_state",
+        lambda: {"model": "mlx-qwen3-4b-4bit", "draft": "", "kv_bits": 0},
+    )
+    calls = []
+    monkeypatch.setattr(
+        mlx,
+        "start_server",
+        lambda **kwargs: (calls.append(kwargs), (True, "starting"))[1],
+    )
+
+    assert guardian._start_supervised_mlx() is True
+    assert calls[0]["draft"] == "off"
+    assert calls[0]["kv_bits"] == 0
+
+
 def test_log_writes_only_restarted_services(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(guardian, "LOG_PATH", tmp_path / "guardian.jsonl")
     states = [

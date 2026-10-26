@@ -202,17 +202,11 @@ def test_install_qwen_mcp_registers_complementary_servers(monkeypatch) -> None:
         assert any(call[1:4] == ["mcp", "remove", name] for call in calls[: calls.index(add)]), name
 
 
-def test_opencode_cloud_provider_is_opt_in() -> None:
-    """A local-first install must not put a remote provider in the config.
-
-    Writing the OpenRouter block unconditionally meant a prompt typed in
-    OpenCode could leave the machine without the user asking for it.
-    """
-    local_only = client_setup.opencode_config()
-    assert "openrouter" not in local_only["providers"]
-
-    with_cloud = client_setup.opencode_config(include_cloud=True)
-    assert "moonshotai/kimi-k3" in with_cloud["providers"]["openrouter"]["models"]
+def test_opencode_config_is_local_only() -> None:
+    """The OpenCode config must not include a remote provider."""
+    cfg = client_setup.opencode_config()
+    assert "openrouter" not in cfg["providers"]
+    assert "sovereign" in cfg["providers"]
 
 
 def test_install_opencode_mcp_does_not_add_a_cloud_provider(tmp_path) -> None:
@@ -221,10 +215,6 @@ def test_install_opencode_mcp_does_not_add_a_cloud_provider(tmp_path) -> None:
     written = json.loads(path.read_text(encoding="utf-8"))
     assert "openrouter" not in written["providers"]
     assert "sovereign" in written["providers"]
-
-    client_setup.install_opencode_mcp(path, include_cloud=True)
-    written = json.loads(path.read_text(encoding="utf-8"))
-    assert "openrouter" in written["providers"]
 
 
 def test_codex_mcp_block_is_idempotent(tmp_path) -> None:

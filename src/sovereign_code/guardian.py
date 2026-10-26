@@ -95,14 +95,14 @@ def _start_litellm(settings: Settings) -> bool:
     can run a program by its full path — and this process inherits whatever
     consent it was started with.
     """
-    from .services import cloud_env, gateway_executable, gateway_python, gateway_root
+    from .services import gateway_executable, gateway_python, gateway_root
 
     root = gateway_root()
     executable = gateway_executable()
     if not executable.is_file():
         return False
     log_path = root / "gateway.log"
-    env = {**os.environ, **cloud_env()}
+    env = dict(os.environ)
     cmd = [
         str(gateway_python()),
         str(executable),
@@ -143,6 +143,28 @@ def _launchd_first(label: str, fallback: Callable[[], bool]) -> Callable[[], boo
     return start
 
 
+def _start_supervised_mlx() -> bool:
+    from . import mlx
+
+    state = mlx.read_state()
+    model = str(state.get("model") or "")
+    if not model:
+        return False
+    saved_draft = state.get("draft")
+    draft = "off" if saved_draft == "" else (str(saved_draft) if saved_draft is not None else None)
+    kv_bits = int(str(state["kv_bits"])) if "kv_bits" in state else 8
+    started, _detail = mlx.start_server(
+        model=model,
+        port=int(str(state.get("port") or mlx.DEFAULT_MLX_PORT)),
+        max_tokens=int(str(state.get("max_tokens") or 4096)),
+        draft=draft,
+        kv_bits=kv_bits,
+        draft_tokens=int(str(state.get("draft_tokens") or 4)),
+        decode_concurrency=int(str(state.get("decode_concurrency") or 4)),
+    )
+    return started
+
+
 def services(settings: Settings | None = None) -> list[Service]:
     """The services the guardian looks after."""
     from .bridge import ensure_running as bridge_start
@@ -157,7 +179,7 @@ def services(settings: Settings | None = None) -> list[Service]:
     router_port = _port(settings.router_url) or 4010
     gateway_port = _port(settings.gateway_url) or 4000
     gateway = settings.gateway_url
-    return [
+    services = [
         Service(
             name="LiteLLM gateway",
             port=gateway_port,
@@ -194,6 +216,21 @@ def services(settings: Settings | None = None) -> list[Service]:
             label=BRIDGE_LABEL,
         ),
     ]
+    from . import mlx
+
+    if mlx.supervised():
+        port = mlx.mlx_port()
+        services.append(
+            Service(
+                name="MLX",
+                port=port,
+                url=f"{mlx.mlx_url().rstrip('/')}/v1",
+                running=mlx.supervised_ok,
+                start=_start_supervised_mlx,
+                note="the supervised model saved in data/mlx-server.json",
+            )
+        )
+    return services
 
 
 def _port_open(host: str, port: int) -> bool:

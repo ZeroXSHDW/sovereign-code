@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
-from .cloud import cloud_enabled
 from .config import Settings
 from .gateway import GatewayStatus
 from .gateway import check as check_gateway
@@ -43,9 +42,6 @@ class Snapshot:
     exposed_ports: dict[int, list[str]] = field(default_factory=dict)
     login_installed: bool = False
     login_loaded: bool = False
-    # Ollama Cloud readiness is a machine setting, not a network probe; the
-    # dashboard stays fast and `sovereign cloud --probe` does the live check.
-    cloud_enabled: bool = False
     router_up: bool = False
     code_selection: Selection | None = None
     chat_selection: Selection | None = None
@@ -168,22 +164,19 @@ async def collect(settings: Settings) -> Snapshot:
         asyncio.to_thread(disk_free_gb),
         asyncio.to_thread(login_agent_installed),
         asyncio.to_thread(login_agent_loaded),
-        asyncio.to_thread(cloud_enabled),
         asyncio.to_thread(_port_flags, settings),
         asyncio.to_thread(_exposed_ports, settings),
     )
-    memory = cast(Memory, gathered[0])
-    disk = cast(float, gathered[1])
-    installed = cast(bool, gathered[2])
-    loaded = cast(bool, gathered[3])
-    cloud = cast(bool, gathered[4])
-    ports = cast(tuple[bool, bool, bool], gathered[5])
-    exposed = cast(dict[int, list[str]], gathered[6])
+    memory = gathered[0]
+    disk = gathered[1]
+    installed = gathered[2]
+    loaded = gathered[3]
+    ports = gathered[4]
+    exposed = gathered[5]
     snapshot.memory = memory
     snapshot.disk_free_gb = disk
     snapshot.login_installed = installed
     snapshot.login_loaded = loaded
-    snapshot.cloud_enabled = cloud
     snapshot.ollama_port, snapshot.gateway_port, snapshot.router_up = ports
     snapshot.loopback = (
         is_loopback(settings.ollama_url)

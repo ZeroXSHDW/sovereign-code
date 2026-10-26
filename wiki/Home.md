@@ -69,7 +69,8 @@ sovereign pack pentest brief    # task packs with guardrails + SCOPE gating
 
 ## Where things live
 
-- `~/Documents/local-ai/` — all state: gateway config, sessions, models, logs.
+- `runtime/` — fresh-install state: gateway config, sessions, models, logs.
+  Legacy installs use `~/Documents/local-ai`; `SOVEREIGN_HOME` overrides either.
 - `docs/ARCHITECTURE.md` — modules, data flow, ports.
 - `docs/ROADMAP.md` — current status and next work.
 - `docs/v0.6.0-VERIFICATION.md` — the live-hardware verification checklist.

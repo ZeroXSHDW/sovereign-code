@@ -46,23 +46,6 @@ from .clients import (
     resolve_client_models,
     wrapper_path,
 )
-from .cloud import (
-    ALIAS_TARGETS,
-    PROVIDERS,
-    ProviderError,
-    apply_cloud,
-    cloud_enabled,
-    install_gateway_aliases,
-    is_cloud_tag,
-    probe_cloud,
-    provider_chat,
-    provider_key,
-    provider_status,
-    read_cloud_status,
-    requested_models,
-    route_for,
-    set_provider_key,
-)
 from .config import (
     DATA_DIR,
     LOCAL_AI_ROOT,
@@ -88,7 +71,7 @@ from .harness import log_download
 from .http import shared_client
 from .logs import TARGETS, resolve_log_path, tail_lines
 from .memory import add_memory, clear_memory, project_context, read_memory
-from .models import CATALOG, CLOUD_TAG_ALIASES, CLOUD_TAGS, MODEL_STACKS, TASK_PREFERENCE
+from .models import CATALOG, MODEL_STACKS, TASK_PREFERENCE
 from .ollama import OllamaClient, OllamaError
 from .pipeline import run_pipeline
 from .promptdb import PromptDB
@@ -206,14 +189,8 @@ def _status(snap: Snapshot) -> None:
             "Services",
             f"{up}/{len(services)} running [dim](sovereign autostart)[/]",
         )
-    local_installed = [view for view in snap.installed if not view.spec.cloud]
-    cloud_registered = [view for view in snap.installed if view.spec.cloud]
-    models_line = f"{len(local_installed)} local installed · {len(snap.loaded)} loaded"
-    if cloud_registered:
-        models_line += f" · {len(cloud_registered)} cloud registered"
+    models_line = f"{len(snap.installed)} local installed · {len(snap.loaded)} loaded"
     table.add_row("Models", models_line)
-    cloud = "[green]enabled[/]" if snap.cloud_enabled else "[dim]disabled[/]"
-    table.add_row("Cloud", f"{cloud} [dim](sovereign cloud)[/]")
     console.print(table)
 
     if snap.loaded:
@@ -272,7 +249,6 @@ def _status_json(snap: Snapshot) -> int:
         },
         "disk_free_gb": round(snap.disk_free_gb, 1),
         "loopback": snap.loopback,
-        "cloud_enabled": snap.cloud_enabled,
         "loaded": [
             {
                 "tag": view.tag,
@@ -282,7 +258,7 @@ def _status_json(snap: Snapshot) -> int:
             }
             for view in snap.loaded
         ],
-        "installed": sorted({view.tag for view in snap.installed if not view.spec.cloud}),
+        "installed": sorted({view.tag for view in snap.installed}),
         "apps": {
             "chatgpt": {
                 "local": codex_forced_local(),
@@ -316,14 +292,7 @@ def _models_remote(snap: Snapshot, query: str | None = None) -> int:
     for tag, (desc, _size_gb) in sorted(REMOTE_CATALOG.items()):
         if query and query.lower() not in tag.lower():
             continue
-        spec = CATALOG.get(tag)
-        if spec and spec.cloud:
-            status = "[cyan]registered[/]" if tag in installed else "[cyan]cloud[/]"
-            desc = f"{desc} — remote, needs Ollama Cloud"
-        elif tag in installed:
-            status = "[green]installed[/]"
-        else:
-            status = "[dim]pull[/]"
+        status = "[green]installed[/]" if tag in installed else "[dim]pull[/]"
         rows.append((tag, status, desc))
     if not rows:
         console.print(f"[dim]No models match '{query}'.[/]")
@@ -393,7 +362,6 @@ def _run(
     keep_alive: str,
     think: bool | None,
 ) -> int:
-    model = ALIAS_TARGETS.get(model, CLOUD_TAG_ALIASES.get(model, model))
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
         return 1
@@ -426,16 +394,7 @@ def _run(
         names = [str(item.get("name", "")) for item in data.get("models", [])]
         return any(name == model or name.startswith(model + ":") for name in names)
 
-    # A model that is already local always wins. A `:cloud` tag is never local
-    # weights, so a configured provider route may serve it even when Ollama has
-    # it registered.
-    was_installed = asyncio.run(installed())
-    if was_installed and not is_cloud_tag(model):
-        route = ("ollama", "", "", "")
-    else:
-        route = route_for(model)
-
-    if not was_installed and route[0] == "ollama":
+    if not asyncio.run(installed()):
         if no_pull:
             console.print(f"[red]{model} is not installed.[/] Run: sovereign pull {model}")
             return 1
@@ -447,24 +406,6 @@ def _run(
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-
-    if route[0] != "ollama":
-        # `run` talks to the provider directly, so it works immediately after
-        # --set-key without re-installing gateway aliases.
-        console.print(f"[dim]Running {model} via {route[0]} · {route[1]}…[/]\n")
-        try:
-            answer = provider_chat(
-                route,
-                messages,
-                max_tokens=max(512, min(context, 8192)),
-                temperature=temperature,
-            )
-        except ProviderError as exc:
-            console.print(f"[red]{exc}[/]")
-            return 1
-        console.print(Text(answer))
-        console.print()
-        return 0
 
     console.print(
         f"[dim]Running {model} (ctx={context}, temp={temperature}, keep_alive={keep_alive})…[/]\n"
@@ -494,7 +435,6 @@ def _run(
 
 
 def _rm(model: str) -> int:
-    model = CLOUD_TAG_ALIASES.get(model, model)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", model):
         console.print(f"[red]Invalid model tag:[/] {model}")
         return 1
@@ -578,7 +518,6 @@ def _add(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _model_info(settings: Settings, tag: str) -> int:
-    tag = CLOUD_TAG_ALIASES.get(tag, tag)
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
         console.print(f"[red]Invalid model tag:[/] {tag}")
         return 1
@@ -603,15 +542,6 @@ def _model_info(settings: Settings, tag: str) -> int:
         if value not in (None, ""):
             table.add_row(field, str(value))
     console.print(table)
-    spec = CATALOG.get(tag)
-    if spec and spec.cloud:
-        console.print(
-            "[cyan]Cloud model[/] · served by ollama.com · no local weights · "
-            "prompts leave this Mac"
-        )
-        if not cloud_enabled():
-            console.print("[yellow]Cloud is disabled.[/] Run: sovereign cloud --enable")
-        return 0
     snap = _snapshot(settings)
     view = snap.views.get(tag)
     if view and view.installed:
@@ -724,18 +654,12 @@ def _gateway_aliases(snap: Snapshot) -> int:
     missing = []
     for alias, tag in aliases:
         clean_tag = tag.strip("\"'")
-        if clean_tag.startswith("openai/"):
-            table.add_row(alias, "OpenAI cloud passthrough", "[dim]passthrough[/]", "-")
-            continue
         view = snap.views.get(clean_tag) or (
             snap.views.get(f"{clean_tag}:latest")
             if ":" not in clean_tag
             else snap.views.get(clean_tag.removesuffix(":latest"))
         )
-        if view and view.installed and view.spec.cloud:
-            inst = "[cyan]cloud[/]"
-            size = "remote"
-        elif view and view.installed:
+        if view and view.installed:
             inst = "[green]yes[/]"
             size = f"{view.size_gb:.1f} GB"
         else:
@@ -744,11 +668,6 @@ def _gateway_aliases(snap: Snapshot) -> int:
             missing.append((alias, clean_tag))
         table.add_row(alias, clean_tag, inst, size)
     console.print(table)
-    if any(":cloud" in tag for _alias, tag in aliases) and not cloud_enabled():
-        console.print(
-            "[yellow]Cloud is disabled:[/] the :cloud aliases will fail until "
-            "`sovereign cloud --enable`."
-        )
     if missing:
         console.print("\n[yellow]Aliases pointing to missing models:[/]")
         for alias, tag in missing:
@@ -862,9 +781,6 @@ def _context_label(tokens: int | None) -> str:
 
 
 def _models(snap: Snapshot) -> None:
-    local = [view for view in snap.all_models if not view.spec.cloud]
-    cloud = [view for view in snap.all_models if view.spec.cloud]
-
     table = Table(title="Local models", header_style="bold #b794f4")
     table.add_column("", width=2)
     table.add_column("Model", style="bold")
@@ -873,7 +789,7 @@ def _models(snap: Snapshot) -> None:
     table.add_column("Context", justify="right")
     table.add_column("Status")
     table.add_column("Notes", overflow="fold")
-    for view in local:
+    for view in snap.all_models:
         marker = "▶" if view.loaded else ("●" if view.installed else "↓")
         status = "loaded" if view.loaded else ("installed" if view.installed else "missing")
         style = "green" if view.installed else "yellow"
@@ -887,38 +803,7 @@ def _models(snap: Snapshot) -> None:
             view.spec.summary,
         )
     console.print(table)
-
-    if cloud:
-        ctable = Table(
-            title="Cloud models · remote, prompts leave this Mac",
-            header_style="bold #b794f4",
-        )
-        ctable.add_column("", width=2)
-        ctable.add_column("Model", style="bold")
-        ctable.add_column("Role")
-        ctable.add_column("Context", justify="right")
-        ctable.add_column("Status")
-        ctable.add_column("Notes", overflow="fold")
-        for view in cloud:
-            if view.installed:
-                status, style = "registered", "green"
-            else:
-                status, style = "not pulled", "yellow"
-            ctable.add_row(
-                "☁",
-                view.tag,
-                view.spec.role,
-                _context_label(view.spec.max_context),
-                f"[{style}]{status}[/]",
-                view.spec.summary,
-            )
-        console.print(ctable)
-        console.print(
-            "[dim]Enable once with[/] sovereign cloud --enable "
-            "[dim]then pull a tag;[/] sovereign cloud [dim]shows the mapping.[/]"
-        )
-    else:
-        console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
+    console.print("[dim]Pull the recommended coder:[/] sovereign pull-recommended")
 
 
 def _verify(
@@ -2017,28 +1902,6 @@ def _doctor(snap: Snapshot) -> int:
             "restart Ollama: sovereign tune (or quit and reopen the app)",
             warn=True,
         )
-    from .cloud import available_providers, cloud_env_path
-
-    providers = available_providers()
-    add(
-        True,
-        "Cloud providers",
-        f"{', '.join(providers)} configured"
-        if providers
-        else "none (local-only; Ollama Cloud optional)",
-        "sovereign cloud --set-key openrouter",
-        warn=False,
-    )
-    key_file = cloud_env_path()
-    if key_file.is_file():
-        mode = key_file.stat().st_mode & 0o777
-        add(
-            mode & 0o077 == 0,
-            "Cloud key file",
-            f"{key_file} · {mode:o}",
-            f"chmod 600 {key_file}",
-            warn=True,
-        )
     add(
         (LOCAL_AI_ROOT / "gateway" / "config.yaml").is_file(),
         "Local AI root",
@@ -2189,15 +2052,8 @@ def _uninstall_login() -> int:
 
 
 def _pull(settings: Settings, tag: str, note: str = "") -> int:
-    if tag in CLOUD_TAG_ALIASES:
-        tag = CLOUD_TAG_ALIASES[tag]
     if not re.fullmatch(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?", tag):
         console.print(f"[red]Invalid model tag:[/] {tag}")
-        return 1
-    spec = CATALOG.get(tag)
-    if spec and spec.cloud and not cloud_enabled():
-        console.print("[red]Ollama Cloud is disabled on this Mac.[/]")
-        console.print("[dim]Enable it with:[/] sovereign cloud --enable")
         return 1
     snap = _snapshot(settings)
     if snap.views.get(tag) and snap.views[tag].installed:
@@ -2206,21 +2062,14 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
     from .models import REMOTE_CATALOG
 
     estimated_gb = REMOTE_CATALOG.get(tag, ("", 0.0))[1]
-    if spec and spec.cloud:
-        # Nothing is downloaded: Ollama registers the remote model locally.
+    size_text = f" (~{estimated_gb:.0f} GB)" if estimated_gb else ""
+    if estimated_gb and snap.disk_free_gb < max(2.0, estimated_gb + 2.0):
         console.print(
-            f"Registering [bold]{tag}[/] [cyan](cloud · runs on ollama.com)[/]"
-            + (f" — {note}" if note else "")
+            f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; {tag} is "
+            f"~{estimated_gb:.0f} GB. You may run out of disk — free space or "
+            "remove a model first (`sovereign rm <tag>`)."
         )
-    else:
-        size_text = f" (~{estimated_gb:.0f} GB)" if estimated_gb else ""
-        if estimated_gb and snap.disk_free_gb < max(2.0, estimated_gb + 2.0):
-            console.print(
-                f"[yellow]Warning:[/] only {snap.disk_free_gb:.0f} GB free; {tag} is "
-                f"~{estimated_gb:.0f} GB. You may run out of disk — free space or "
-                "remove a model first (`sovereign rm <tag>`)."
-            )
-        console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
+    console.print(f"Pulling [bold]{tag}[/]{size_text}" + (f" — {note}" if note else ""))
     client = OllamaClient(settings.ollama_url)
     log_download(tag, status="starting")
 
@@ -2271,175 +2120,8 @@ def _pull(settings: Settings, tag: str, note: str = "") -> int:
     except OllamaError as exc:
         log_download(tag, error=str(exc))
         console.print(f"[red]{exc}[/]")
-        if spec and spec.cloud:
-            console.print("[dim]Cloud models also need a one-time login:[/] ollama signin")
         return 1
     console.print(f"[green]{tag} installed.[/] Run: sovereign models")
-    return 0
-
-
-def _cloud(
-    settings: Settings,
-    *,
-    enable: bool = False,
-    disable: bool = False,
-    install_aliases: bool = False,
-    pull: bool = False,
-    probe: bool = False,
-    timeout: float = 12.0,
-    set_key: str | None = None,
-    key: str | None = None,
-    prefer: str = "auto",
-    install_opencode: bool = False,
-) -> int:
-    """Show, enable, and wire the frontier models over Ollama Cloud or a provider."""
-    if enable and disable:
-        console.print("[red]Choose --enable or --disable, not both.[/]")
-        return 1
-    if set_key:
-        provider = PROVIDERS.get(set_key)
-        if provider is None:
-            console.print(f"[red]Unknown provider:[/] {set_key}. Try: {', '.join(PROVIDERS)}")
-            return 1
-        value = key
-        if not value:
-            import getpass
-
-            value = getpass.getpass(f"{provider.name} API key (hidden): ")
-        try:
-            path = set_provider_key(provider.key, value)
-        except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
-            return 1
-        console.print(f"[green]Saved {provider.name} key[/] to {path} [dim](mode 600)[/]")
-        console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
-        console.print(
-            "[dim]Then route the aliases through it:[/] sovereign cloud --install-aliases"
-        )
-        probe = True
-    if enable:
-        console.print("[bold]Enabling Ollama Cloud[/] (persists across restarts)")
-        for action in apply_cloud(True):
-            console.print(f"  [green]·[/] {action}")
-        console.print(
-            "[yellow]Cloud models run on ollama.com.[/] Prompts and context leave "
-            "this Mac when you use a :cloud tag."
-        )
-        console.print("One-time login is still required: [bold]ollama signin[/]")
-        probe = True
-    elif disable:
-        console.print("[bold]Disabling Ollama Cloud[/]")
-        for action in apply_cloud(False):
-            console.print(f"  [green]·[/] {action}")
-        console.print("[dim]Local models are unaffected.[/]")
-
-    if install_aliases and prefer in PROVIDERS:
-        provider = PROVIDERS[prefer]
-        if not provider_key(provider):
-            console.print(
-                f"[red]No {provider.name} key.[/] Run: sovereign cloud --set-key {provider.key}"
-            )
-            return 1
-    if install_aliases:
-        paths = install_gateway_aliases(prefer=prefer)
-        if not paths:
-            console.print(f"[yellow]No gateway config found under[/] {LOCAL_AI_ROOT / 'gateway'}")
-        for path in paths:
-            console.print(f"[green]Cloud aliases written[/] {path}")
-        if paths:
-            console.print("[dim]Restart the gateway to apply:[/] sovereign gateway --restart")
-
-    if install_opencode:
-        from .client_setup import install_opencode_mcp
-
-        path = install_opencode_mcp(include_cloud=True)
-        console.print(f"[green]Cloud provider added to OpenCode[/] {path}")
-        console.print(
-            "[yellow]OpenCode can now reach remote models.[/] "
-            "[dim]Prompts sent to them leave this Mac.[/]"
-        )
-
-    status = read_cloud_status()
-    style = "green" if status.enabled else "yellow"
-    console.print(f"\n[bold]Ollama Cloud[/]  [{style}]{status.detail}[/]")
-    if not status.enabled:
-        console.print("[dim]Enable with:[/] sovereign cloud --enable")
-
-    ptable = Table(title="Provider keys (cloud.env / environment)", header_style="bold #b794f4")
-    ptable.add_column("Provider", style="bold")
-    ptable.add_column("Status")
-    ptable.add_column("Detail")
-    for _key, name, state, detail in provider_status():
-        pstyle = "green" if state == "key set" else "dim"
-        ptable.add_row(name, f"[{pstyle}]{state}[/]", detail)
-    console.print(ptable)
-    console.print(
-        "[dim]Add a key:[/] sovereign cloud --set-key openrouter "
-        "[dim](one key covers all eight; direct provider keys also work)[/]"
-    )
-    rtable = Table(title="Alias routes", header_style="bold #b794f4")
-    rtable.add_column("Alias", style="bold", no_wrap=True)
-    rtable.add_column("Route", no_wrap=True)
-    rtable.add_column("Target")
-    for alias, tag in ALIAS_TARGETS.items():
-        route, provider_model, _base, _env = route_for(tag, alias, prefer=prefer)
-        target = provider_model or tag
-        style = "cyan" if route == "ollama" else "green"
-        rtable.add_row(alias, f"[{style}]{route}[/]", target)
-    console.print(rtable)
-    console.print("[dim]Install them into the gateway:[/] sovereign cloud --install-aliases")
-
-    snap = _snapshot(settings)
-    table = Table(
-        title="Requested models · where each name goes",
-        header_style="bold #b794f4",
-    )
-    table.add_column("Requested", style="bold", no_wrap=True)
-    table.add_column("Ollama tag", style="bold", no_wrap=True)
-    table.add_column("Context", justify="right", no_wrap=True)
-    table.add_column("Status", no_wrap=True)
-    notes: list[str] = []
-    for name, tag, note in requested_models():
-        spec = CATALOG.get(tag)
-        view = snap.views.get(tag)
-        if spec and spec.cloud:
-            state = "registered" if view and view.installed else "not pulled"
-            state_style = "green" if state == "registered" else "yellow"
-        else:
-            state = "local · installed" if view and view.installed else "local · missing"
-            state_style = "green" if view and view.installed else "yellow"
-        table.add_row(
-            name,
-            tag,
-            _context_label(spec.max_context if spec else None),
-            f"[{state_style}]{state}[/]",
-        )
-        notes.append(f"  {name} → {tag} — {note}")
-    console.print(table)
-    console.print("\n[bold]Mapping[/]")
-    for line in notes:
-        console.print(f"[dim]{line}[/]", overflow="fold")
-
-    if probe:
-        result = probe_cloud(settings, timeout=timeout)
-        mark = "[green]PASS[/]" if result.ready else "[red]FAIL[/]"
-        console.print(f"\nCloud probe  {mark} {result.detail}")
-
-    if pull:
-        if not status.enabled:
-            console.print("[red]Enable cloud first:[/] sovereign cloud --enable")
-            return 1
-        if not cloud_enabled():
-            console.print("[red]Cloud is still disabled after the enable step.[/]")
-            return 1
-        for tag in CLOUD_TAGS:
-            if _pull(settings, tag, "cloud") != 0:
-                return 1
-        # Registration succeeds even on a plan that blocks generation, so
-        # check an actual completion instead of declaring success.
-        result = probe_cloud(settings, timeout=timeout)
-        mark = "[green]PASS[/]" if result.ready else "[yellow]NOT USABLE[/]"
-        console.print(f"\nCloud generation  {mark} {result.detail}")
     return 0
 
 
@@ -3107,15 +2789,6 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
     bridge_up = bridge_mod.port_open(port=4001)
     add("Anthropic bridge", bridge_up, "http://127.0.0.1:4001/v1")
 
-    from .cloud import env_cloud_disabled
-
-    ollama_local = env_cloud_disabled()
-    add(
-        "Ollama Cloud",
-        ollama_local,
-        "disabled" if ollama_local else "enabled; run sovereign cloud --disable",
-    )
-
     # Codex local profile: provider must be the tier gateway on 4010.
     profile = Path.home() / ".codex" / "sovereign.config.toml"
     codex_local = False
@@ -3179,11 +2852,7 @@ def _local(fix: bool = False, strict: bool = False, as_json: bool = False) -> in
         health = shared_client().get("http://127.0.0.1:4010/health", timeout=3.0).json()
         tiers = health.get("tiers") or {}
         enforced = bool(health.get("local_only"))
-        gateway_local = (
-            bool(tiers)
-            and enforced
-            and all(not is_cloud_tag(str(model)) for model in tiers.values())
-        )
+        gateway_local = bool(tiers) and enforced
         gateway_detail = ("local-only · " if enforced else "cloud allowed · ") + ", ".join(
             f"{tier}={model}" for tier, model in tiers.items()
         )
@@ -6277,46 +5946,6 @@ def build_parser() -> argparse.ArgumentParser:
     models = sub.add_parser("models", help="list installed and recommended models")
     models.add_argument("--remote", action="store_true", help="list downloadable models")
     models.add_argument("query", nargs="?", default=None, help="filter by name")
-    cloud = sub.add_parser(
-        "cloud", help="use Ollama Cloud models (Kimi K3, DeepSeek V4, GLM 5.3, Qwen 3.8)"
-    )
-    cloud.add_argument("--enable", action="store_true", help="enable Ollama Cloud and restart it")
-    cloud.add_argument("--disable", action="store_true", help="disable Ollama Cloud (local-only)")
-    cloud.add_argument(
-        "--install-aliases",
-        action="store_true",
-        help="write cloud-* aliases into the LiteLLM gateway config",
-    )
-    cloud.add_argument(
-        "--pull",
-        action="store_true",
-        help="register every cloud model with Ollama (no weights downloaded)",
-    )
-    cloud.add_argument("--probe", action="store_true", help="check login/readiness with one model")
-    cloud.add_argument(
-        "--install-opencode",
-        action="store_true",
-        help="add the OpenRouter provider and remote models to OpenCode (opt-in)",
-    )
-    cloud.add_argument("--timeout", type=float, default=30.0, help="probe timeout in seconds")
-    cloud.add_argument(
-        "--set-key",
-        choices=sorted(PROVIDERS),
-        default=None,
-        metavar="PROVIDER",
-        help="store an OpenRouter/DeepSeek/Z.ai/Moonshot/Alibaba key in cloud.env",
-    )
-    cloud.add_argument(
-        "--key",
-        default=None,
-        help="API key value (omit it to be prompted without shell history)",
-    )
-    cloud.add_argument(
-        "--route",
-        choices=("auto", "ollama", *PROVIDERS),
-        default="auto",
-        help="route written by --install-aliases (default: first configured key, else Ollama)",
-    )
     tune = sub.add_parser("tune", help="apply/verify Ollama context, flash attention and q8 KV")
     tune.add_argument("--context", type=int, default=DEFAULT_CONTEXT)
     tune.add_argument("--dry-run", action="store_true", help="show changes without applying")
@@ -8093,20 +7722,6 @@ def main(argv: list[str] | None = None) -> int:
             return _models_remote(snap, args.query)
         _models(snap)
         return 0
-    if command == "cloud":
-        return _cloud(
-            settings,
-            enable=args.enable,
-            disable=args.disable,
-            install_aliases=args.install_aliases,
-            pull=args.pull,
-            probe=args.probe,
-            timeout=args.timeout,
-            set_key=args.set_key,
-            key=args.key,
-            prefer=args.route,
-            install_opencode=args.install_opencode,
-        )
     if command == "tune":
         return _tune(args.context, dry_run=args.dry_run)
     if command == "doctor":

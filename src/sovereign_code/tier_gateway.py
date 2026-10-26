@@ -18,6 +18,7 @@ Endpoints:
   GET  /cache/stats
   POST /v1/chat/completions   (stream and non-stream)
   POST /v1/responses          (Responses API for Codex, stream and non-stream)
+  POST /v1/embeddings         (batched local embeddings)
 """
 
 from __future__ import annotations
@@ -40,19 +41,20 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .cache import MEMORY, cache_key_chat, disk_cache
+from .cache import MEMORY, MemoryCache, cache_key_chat, disk_cache
 from .domains import DOMAINS
 from .http import leased_client, shared_client
 from .mlx import available_tags as mlx_available_tags
 from .mlx import context_for as mlx_context_for
+from .mlx import fast_loaded_tag as mlx_fast_loaded_tag
 from .mlx import forward_model as mlx_forward_model
 from .mlx import mlx_url as mlx_url
 from .mlx import online as mlx_online
 from .mlx import resolve_model as mlx_resolve_model
 from .mlx import served_models as mlx_served_models
-from .models import is_cloud_tag
 from .safefile import ensure_private_dir, open_private
 from .scheduler import ModelScheduler
+from .search import DEFAULT_EMBED, EmbedError, embed_with_usage
 from .serverguard import BodyTooLarge, GuardedHandler, GuardedServer, content_length
 
 DEFAULT_HOST = "127.0.0.1"
@@ -548,9 +550,8 @@ def catalog_models(installed: set[str] | None = None) -> list[dict[str, Any]]:
 
     # The models Ollama has installed, so a client can name one directly.
     for tag in sorted(installed):
-        if "embed" in tag.lower() or is_cloud_tag(tag):
-            # An embedding model cannot answer a chat turn, and a cloud model
-            # is not a local one: the local-only gateway refuses it.
+        if "embed" in tag.lower():
+            # An embedding model cannot answer a chat turn.
             continue
         name = tag.removesuffix(":latest") if tag.endswith(":latest") else tag
         if name in seen:
@@ -1298,6 +1299,7 @@ class _CombinedCache:
 
 
 CACHE = _CombinedCache()
+EMBED_CACHE = MemoryCache(max_entries=512, ttl=3600.0)
 _METRICS_LOCK = threading.Lock()
 
 
@@ -1741,6 +1743,18 @@ def resolve_route(
         intent = ALIAS_INTENT.get(model) or detect_intent(
             request.get("messages") or [], bool(request.get("tools"))
         )
+        if _tier_value == FAST:
+            mlx_tag = mlx_fast_loaded_tag()
+            forwarded = mlx_forward_model(mlx_tag) if mlx_tag else ""
+            if forwarded and forwarded in mlx_served_models():
+                return Route(
+                    "mlx",
+                    forwarded,
+                    FAST,
+                    mlx_context_for(mlx_tag),
+                    None,
+                    "warm MLX fast tier",
+                )
         target, context, think = choose_model(_tier_value, installed, intent)
         context = context_for_request(
             context, request.get("messages") or [], int(request.get("max_tokens") or 0)
@@ -1749,7 +1763,7 @@ def resolve_route(
         if _tier_value in (DEEP, ULTRA):
             reason = f"{reason}/{intent}"
         return Route("local", target, _tier_value, context, think, reason)
-    if installed and not is_cloud_tag(model) and _model_available(model, installed):
+    if installed and _model_available(model, installed):
         # A model name rather than a route: serve exactly that model, with the
         # context the catalog gives it. A client that names a model it can see
         # in the list must get that model.
@@ -2396,9 +2410,91 @@ class _Handler(GuardedHandler):
         # request, so a client can tell "auto" apart from a fixed model.
         self._json(200, response, _tier_headers(result))
 
+    def _embeddings(self, request: dict[str, Any]) -> None:
+        requested = request.get("model") or "local-embed"
+        if not isinstance(requested, str) or not requested.strip():
+            self._json(
+                400,
+                {"error": {"message": "model must be a name", "type": "invalid_request"}},
+            )
+            return
+        model = DEFAULT_EMBED if requested == "local-embed" else requested
+        if request.get("encoding_format", "float") != "float":
+            self._json(
+                400,
+                {
+                    "error": {
+                        "message": "only encoding_format=float is supported",
+                        "type": "invalid_request",
+                    }
+                },
+            )
+            return
+        raw_input = request.get("input", [])
+        if isinstance(raw_input, str):
+            texts = [raw_input]
+        elif isinstance(raw_input, list) and all(isinstance(item, str) for item in raw_input):
+            texts = raw_input
+        else:
+            self._json(
+                400,
+                {
+                    "error": {
+                        "message": "input must be a string or a list of strings",
+                        "type": "invalid_request",
+                    }
+                },
+            )
+            return
+
+        resolved: dict[str, list[float]] = {}
+        pending: set[str] = set()
+        missing: list[str] = []
+        for text in texts:
+            if text in resolved or text in pending:
+                continue
+            key = hashlib.sha256(f"{model}\0{text}".encode()).hexdigest()
+            cached = EMBED_CACHE.get(key)
+            if cached is not None:
+                resolved[text] = cached["embedding"]
+            else:
+                pending.add(text)
+                missing.append(text)
+
+        usage = 0
+        if missing:
+            try:
+                with _SCHEDULER.request(model):
+                    try:
+                        ensure_model_room(model, self.ollama, 2048)
+                    except Exception:
+                        pass
+                    fresh, usage = embed_with_usage(self.ollama, model, missing)
+            except EmbedError as exc:
+                self._json(502, {"error": {"message": str(exc), "type": "upstream_error"}})
+                return
+            for text, vector in zip(missing, fresh, strict=True):
+                resolved[text] = vector
+                key = hashlib.sha256(f"{model}\0{text}".encode()).hexdigest()
+                EMBED_CACHE.put(key, {"embedding": vector})
+
+        self._json(
+            200,
+            {
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": index, "embedding": resolved[text]}
+                    for index, text in enumerate(texts)
+                ],
+                "model": model,
+                "usage": {"prompt_tokens": usage, "total_tokens": usage},
+            },
+            {"x-sovereign-model": model},
+        )
+
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
-        if path not in ("/v1/chat/completions", "/v1/responses"):
+        if path not in ("/v1/chat/completions", "/v1/responses", "/v1/embeddings"):
             self._json(404, {"error": {"message": "not found", "type": "not_found_error"}})
             return
         try:
@@ -2413,6 +2509,9 @@ class _Handler(GuardedHandler):
             return
         if path == "/v1/responses":
             self._responses(request)
+            return
+        if path == "/v1/embeddings":
+            self._embeddings(request)
             return
         forced = self.headers.get("x-sovereign-tier")
         installed = _installed(self.ollama)

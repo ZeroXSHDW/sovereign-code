@@ -4,7 +4,7 @@
 
 | Module | Responsibility |
 | --- | --- |
-| `config.py` | XDG paths, TOML settings, project root, login paths |
+| `config.py` | Runtime paths, TOML settings, project root, login paths |
 | `models.py` | Model catalog, `/api/tags` + `/api/ps` merge, display views |
 | `router.py` | Task→model priority, context fitting against free RAM, system prompts |
 | `ollama.py` | Async Ollama client, NDJSON streaming, pull progress |
@@ -63,18 +63,18 @@ launches, so the catalog ceiling is 32,768. Gemma 12B reaches 32k only with
 
 ## Local clients
 
-`clients.py` is a pure planner: it detects commands, writes
-`~/Documents/local-ai/config/codex/local.config.toml`, and builds argv/env for each client without
-mutating the current process. The TUI and CLI share `plan_launch`.
+`clients.py` is a pure planner: it detects commands and builds argv/env for each
+client without mutating the current process. `client_setup.py` writes the native
+client configurations. The TUI and CLI share `plan_launch`.
 
-- Agent clients (Qwen Code, OpenCode) get the verified tool-calling model.
-- Chat clients (Codex, Claude Code) get loopback gateway settings only.
-- Wrappers are written to `~/Documents/local-ai/bin` and symlinked into
-  `~/.local/bin` so they stay on `PATH`.
+- Qwen Code and OpenCode call tools through their local provider configs.
+- Codex uses the tier gateway's Responses API; Claude Code uses the Anthropic
+  bridge, so both receive real streamed tool calls rather than JSON as prose.
+- Wrappers are written to `runtime/bin` and symlinked into `~/.local/bin` so they
+  stay on `PATH`.
 
-The capability split is intentional. Ollama's streamed tool calls do not survive
-the LiteLLM translation reliably enough for Codex or Claude Code to edit files,
-so the project routes edits to Qwen Code rather than pretending otherwise.
+All four agent clients can edit locally. Continue provides chat, edit, apply,
+and autocomplete through its generated YAML.
 
 ## TUI event loop
 
@@ -98,8 +98,9 @@ so the project routes edits to Qwen Code rather than pretending otherwise.
 ### Opt-in chat (`tui/app.py`, `sovereign chat`)
 
 - `on_input_submitted` handles slash commands or starts a `run_worker` chat task.
-- `_stream_reply` consumes `OllamaClient.chat_stream` and updates a `Markdown`
-  widget in place; it never blocks the refresh timer.
+- `_stream_reply` consumes `OllamaClient.chat_stream` or the MLX server's
+  OpenAI SSE stream and updates a `Markdown` widget in place; it never blocks
+  the refresh timer.
 - `sovereign free` and the chat `/free` command unload residents on demand.
 
 `F2` / `F4` / `F6` use Textual's `suspend()` to hand the real terminal to
@@ -117,8 +118,8 @@ both the plist and the loaded job.
 ## The stack as services
 
 `sovereign autostart --install` writes one `~/Library/LaunchAgents` plist per
-service the clients actually need: the LiteLLM gateway, the tier gateway and
-the Anthropic bridge. Each has `RunAtLoad` (it starts at login, so it survives
+service the clients actually need: the LiteLLM gateway, tier gateway, Anthropic
+bridge, and HTTP MCP server. Each has `RunAtLoad` (it starts at login, so it survives
 a reboot) and `KeepAlive` with `SuccessfulExit: false` (launchd restarts it
 after a crash, but leaves it alone after a clean exit — a clean exit means
 another instance already owns the port).
@@ -130,8 +131,9 @@ bring them back at the next login.
 
 `sovereign guardian` is still available as a one-shot check. It republishes
 `CODEX_APP_SERVER_OPENAI_BASE_URL` and `SOVEREIGN_API_KEY` with
-`launchctl setenv` and repairs drifted client configs when asked; it is no
-longer installed as a watch loop.
+`launchctl setenv`, repairs drifted client configs when asked, and restarts a
+saved supervised MLX model when it is down. It is no longer installed as a
+watch loop.
 
 ## 24/7 coding loop (opt-in)
 
@@ -305,7 +307,9 @@ idempotent; backups are written next to edited configs.
 
 ## Storage layout
 
-All runtime state is in `~/Documents/local-ai`:
+Fresh installs keep runtime state in `runtime/` inside the checkout. An existing
+`~/Documents/local-ai` root remains supported as the legacy location, and
+`SOVEREIGN_HOME` overrides the default:
 
 - `gateway/` — config, venv, supervisor, logs
 - `config/{sovereign,codex}/` — app configs
@@ -314,8 +318,8 @@ All runtime state is in `~/Documents/local-ai`:
 - `qwen/` — Qwen Code state; `~/.qwen` is a symlink
 - `bin/` — client wrappers (symlinked into `~/.local/bin`)
 
-`~/.codex` still holds the cloud Codex app state; only the local profile and
-`CODEX_HOME` for local launches live in Documents.
+`~/.codex` still holds the cloud Codex app state; local profiles and
+`CODEX_HOME` use the configured runtime and client-config paths.
 
 ## Failure behaviour
 

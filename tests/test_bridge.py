@@ -27,7 +27,6 @@ def test_resolve_model_maps_claude_ids_and_keeps_aliases() -> None:
     assert resolve_model("claude-3-5-haiku-latest") == "fast"
     assert resolve_model("claude-opus-9") == "local-agent"
     assert resolve_model("local-claude") == "local-claude"
-    assert resolve_model("cloud-kimi-k3") == "cloud-kimi-k3"
     assert resolve_model(None) == "local-agent"
 
 

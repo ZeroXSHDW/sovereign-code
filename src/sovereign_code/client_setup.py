@@ -496,14 +496,11 @@ def _opencode_commands() -> dict[str, dict[str, object]]:
     }
 
 
-def opencode_config(include_cloud: bool = False, max_context: int | None = None) -> dict[str, Any]:
+def opencode_config(max_context: int | None = None) -> dict[str, Any]:
     """The native OpenCode V2 configuration this project writes.
 
-    The cloud provider block is only included when ``include_cloud`` is set.
-    Writing it unconditionally put an OpenRouter provider and eight remote
-    models into the user's live config, so a prompt typed in OpenCode could
-    leave the machine even though the whole project is local-first. It is now
-    opt-in, the way the README describes it.
+    This config is local-only: no remote provider block is included, so a
+    prompt typed in OpenCode stays on this Mac.
 
     V2 names the maps ``providers`` and ``mcp.servers``, uses ordered
     ``permissions`` rules, and adds subagents, commands, todo tracking and
@@ -579,29 +576,7 @@ def opencode_config(include_cloud: bool = False, max_context: int | None = None)
                 for name, (title, context) in MLX_MODELS.items()
             },
         },
-        "openrouter": {
-            "name": "OpenRouter",
-            "package": OPENCODE_PACKAGE,
-            "settings": {
-                "baseURL": "https://openrouter.ai/api/v1",
-                "apiKey": "{env:OPENROUTER_API_KEY}",
-            },
-            "models": {
-                name: _opencode_model(name, title, 131072, 131072)
-                for name, title in (
-                    ("moonshotai/kimi-k3", "Kimi K3"),
-                    ("moonshotai/kimi-k2.6", "Kimi K2.6"),
-                    ("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-                    ("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro"),
-                    ("z-ai/glm-5.3", "GLM 5.3"),
-                    ("z-ai/glm-5.3-flash", "GLM 5.3 Flash"),
-                    ("z-ai/glm-5.2", "GLM 5.2"),
-                )
-            },
-        },
     }
-    if not include_cloud:
-        providers.pop("openrouter", None)
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": "sovereign/auto",
@@ -717,9 +692,7 @@ def _merge_permission_rules(base: list[dict[str, Any]], extra: object) -> list[d
     return rules
 
 
-def install_opencode_mcp(
-    path: Path | None = None, include_cloud: bool = False, max_context: int | None = None
-) -> Path:
+def install_opencode_mcp(path: Path | None = None, max_context: int | None = None) -> Path:
     target = path or opencode_config_path()
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
@@ -727,9 +700,8 @@ def install_opencode_mcp(
         raw = {}
     data: dict[str, Any] = raw if isinstance(raw, dict) else {}
     # Preserve the user's other settings and providers; add the working local
-    # provider, and the MCP server. Cloud providers are only added when the
-    # user asks for them, so a local-first install stays local-first.
-    merged: dict[str, Any] = opencode_config(include_cloud=include_cloud, max_context=max_context)
+    # provider, and the MCP server. This stays local-only.
+    merged: dict[str, Any] = opencode_config(max_context=max_context)
     providers: dict[str, Any] = merged["providers"]
     user_providers: dict[str, Any] = {}
     for key in ("providers", "provider"):

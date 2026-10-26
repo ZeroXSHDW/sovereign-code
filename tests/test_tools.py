@@ -78,7 +78,7 @@ def test_opencode_and_qwen_models_are_listed() -> None:
         '{"providers":{'
         '"local":{"models":{"local-a":{}}},'
         '"sovereign":{"models":{"auto":{}}},'
-        '"openrouter":{"models":{"cloud-b":{}}}}}'
+        '"remote":{"models":{"remote-b":{}}}}}'
     )
     assert opencode_local_models(config) == ["local-a", "auto"]
     assert qwen_models('{"modelProviders":{"openai":[{"id":"x"},{"id":"y"}]}}') == ["x", "y"]

@@ -21,10 +21,6 @@ class ServiceError(SovereignError):
     """A local service (Ollama, the gateway, the bridge, the monitor) failed."""
 
 
-class ProviderError(ServiceError):
-    """A cloud provider request failed."""
-
-
 class SourceError(ServiceError):
     """A file or URL could not be read."""
 
@@ -68,7 +64,6 @@ __all__ = [
     "HFError",
     "OllamaError",
     "PolicyError",
-    "ProviderError",
     "ServiceError",
     "SourceError",
     "SovereignError",

@@ -150,7 +150,7 @@ def _tool(
 TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_models",
-        "List installed local models, cloud models, and every name a client may ask for.",
+        "List installed local models and every name a client may ask for.",
         {},
     ),
     _tool(
@@ -439,9 +439,9 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "local_status",
-        "Report whether this machine is running the local stack only: the tier "
-        "gateway, the Anthropic bridge, Ollama Cloud, and whether the ChatGPT "
-        "and Claude desktop apps are pointed at the local path without a sign-in.",
+        "Report whether this machine is running the local stack: the tier "
+        "gateway, the Anthropic bridge, and whether the ChatGPT and Claude "
+        "desktop apps are pointed at the local path without a sign-in.",
         {},
     ),
     _tool(
@@ -979,12 +979,6 @@ def _models_payload() -> dict[str, Any]:
     local = [
         {"tag": view.tag, "role": view.spec.role, "context": view.spec.max_context}
         for view in snap.installed
-        if not view.spec.cloud
-    ]
-    cloud = [
-        {"tag": view.tag, "role": view.spec.role, "context": view.spec.max_context}
-        for view in snap.installed
-        if view.spec.cloud
     ]
     from .tier_gateway import catalog_models, installed_models
 
@@ -1001,11 +995,9 @@ def _models_payload() -> dict[str, Any]:
     ]
     return {
         "local": local,
-        "cloud": cloud,
         "routes": routes,
         "gateway": snap.settings.gateway_url,
         "router": snap.settings.router_url,
-        "cloud_enabled": snap.cloud_enabled,
     }
 
 
@@ -1488,7 +1480,6 @@ def _local_status() -> dict[str, Any]:
     """
     from . import bridge as bridge_mod
     from .client_setup import claude_forced_local, codex_forced_local, codex_needs_openai_signin
-    from .cloud import env_cloud_disabled
     from .config import Settings
 
     settings = Settings.load()
@@ -1506,10 +1497,9 @@ def _local_status() -> dict[str, Any]:
     except Exception:
         pass
     return {
-        "local_only": bool(gateway["up"] and gateway["local_only"] and env_cloud_disabled()),
+        "local_only": bool(gateway["up"] and gateway["local_only"]),
         "gateway": gateway,
         "bridge_up": bridge_mod.port_open(port=4001),
-        "ollama_cloud": "disabled" if env_cloud_disabled() else "enabled",
         "apps": {
             "chatgpt": {
                 "local": codex_forced_local(),
@@ -1851,7 +1841,7 @@ def resources() -> list[dict[str, Any]]:
         {
             "uri": "sovereign://models",
             "name": "models",
-            "description": "Installed local and cloud models",
+            "description": "Installed local models",
             "mimeType": "application/json",
         }
     )

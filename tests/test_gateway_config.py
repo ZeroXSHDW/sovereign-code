@@ -58,16 +58,5 @@ def test_write_creates_file(tmp_path):
     assert "model_list:" in text
 
 
-def test_render_includes_cloud_block_when_provided():
-    cloud_block = (
-        "  - model_name: cloud-kimi-k3\n"
-        "    litellm_params:\n"
-        "      model: ollama/kimi-k3:cloud\n"
-        "      api_base: http://127.0.0.1:11434\n"
-    )
-    text = render(cloud_block=cloud_block)
-    assert "cloud-kimi-k3" in text
-
-
 def test_default_path_under_local_ai_root():
     assert default_path().name == "model_list.yaml"

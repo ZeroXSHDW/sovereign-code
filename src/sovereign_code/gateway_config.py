@@ -295,8 +295,6 @@ def _direct_model_entries() -> list[ModelEntry]:
     """Every installed-capable catalog model as a direct alias."""
     entries: list[ModelEntry] = []
     for tag, spec in CATALOG.items():
-        if spec.cloud:
-            continue
         alias = f"local-{tag.replace(':', '-')}"
         entries.append(_entry(alias, f"ollama/{tag}", OLLAMA_DIRECT, spec.max_context))
     return entries

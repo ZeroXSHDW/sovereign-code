@@ -16,7 +16,12 @@ from sovereign_code.checks import (
 )
 
 
-def test_detects_makefile_test_target(tmp_path: Path) -> None:
+def test_detects_makefile_check_target_before_test(tmp_path: Path) -> None:
+    (tmp_path / "Makefile").write_text("check: lint test\n\ntest:\n\tpytest -q\n", encoding="utf-8")
+    assert detect_checks(tmp_path) == ["make check"]
+
+
+def test_detects_makefile_test_target_as_a_fallback(tmp_path: Path) -> None:
     (tmp_path / "Makefile").write_text("test:\n\tpytest -q\n", encoding="utf-8")
     assert detect_checks(tmp_path) == ["make test"]
 

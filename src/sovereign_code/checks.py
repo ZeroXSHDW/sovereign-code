@@ -72,13 +72,15 @@ def python_command(directory: Path) -> str:
 
 
 def detect_checks(directory: Path) -> list[str]:
-    """Best guess at the project's test command, or [] when unknown."""
+    """Best guess at the project's verification command, or [] when unknown."""
     makefile = directory / "Makefile"
     if makefile.is_file():
         try:
             text = makefile.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             text = ""
+        if re.search(r"^check:", text, re.MULTILINE):
+            return ["make check"]
         if re.search(r"^test:", text, re.MULTILINE):
             return ["make test"]
 

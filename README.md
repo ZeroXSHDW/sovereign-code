@@ -71,23 +71,18 @@ to set as the repository's social preview.)
 - **24/7 coding loop** — opt-in, gated by the project's own checks, and paused
   by a dirty tree or repeated failure instead of spinning.
 
-## New in 0.6.0
+## New in 0.7.0
 
-- **`sovereign model-use`** selects an installed model for OpenCode, Codex and
-  Claude Code in one command — pull a specialist model (`sovereign pull` or
-  `sovereign hf import`) and `model-use` wires it into all three clients.
-- **Specialist task packs and domains**: red/blue/purple team, SOC, threat
-  intel, malware, cloud and app security alongside legal, forensics and
-  finance; `run_pack` and `domain=` route a task to the right skill and model.
-- **MLX live-verified on Apple Silicon**: `sovereign mlx start` serves a
-  supervised model with a 0.6B speculative draft and 8-bit KV cache
-  (~0.45 s warm reply, 2.8 s full answer); `sovereign run` now routes MLX tags
-  to the mlx-lm server.
-- **Browser and full computer control verified end-to-end**, with the policy
-  guard, secret refusal, confirmation gates, and the destructive-command
-  deny-list.
-- **Coverage floor 53%, 1000+ tests**, `pip-audit` clean, every dependency at
-  its latest release.
+- **`sovereign do`** is the one-shot coding entry point: it chooses direct or
+  agent mode, resolves the models, and detects the project's checks.
+- **`sovereign model-use --domain`** selects a specialist domain for OpenCode,
+  Codex and Claude in one step; **`sovereign summarize --dir`** grounds a
+  whole-codebase summary in its token-bounded repo map.
+- **Chat `/resume`** restores the latest saved conversation after a restart.
+- **MLX run routing**: `sovereign run` sends MLX tags and aliases to the
+  mlx-lm server instead of failing through Ollama's model list.
+- **Leaner startup and safer local installs**: the gateway does not preload a
+  model it may never use, and doctor detects broken tool/model-store paths.
 
 See the [changelog](CHANGELOG.md) for the full list.
 
@@ -95,7 +90,7 @@ See the [changelog](CHANGELOG.md) for the full list.
 <summary><strong>Contents</strong></summary>
 
 - [Screenshots](#screenshots)
-- [New in 0.6.0](#new-in-060)
+- [New in 0.7.0](#new-in-070)
 - [Quick start](#quick-start)
 - [Task packs](#task-packs-pentest-vulnerability-risk-vendor-legal-compliance-forensics-finance)
 - [Skills](#skills-find-check-install)
@@ -137,10 +132,12 @@ sovereign                       # open the dashboard now
 ```
 
 The script uses the checkout it lives in, so it does not have to be under
-`~/Documents`. The first run uses
-`~/Documents/local-ai/config/sovereign/config.toml` and
-`~/Documents/local-ai/data/` (sessions and logs). Bootstrap already runs
-`sovereign install-clients`; re-run it after installing a new client.
+`~/Documents`. A fresh install stores configuration in
+`runtime/config/sovereign/config.toml` and sessions/logs in `runtime/data/`.
+An existing `~/Documents/local-ai` installation keeps that legacy location until
+it is migrated; `SOVEREIGN_HOME` overrides either default. Examples below use
+`runtime/`. Bootstrap already runs `sovereign install-clients`; re-run it after
+installing a new client.
 
 Verify the install and pull a starter stack:
 
@@ -185,7 +182,7 @@ verified models: check the licence, then `sovereign hf import <repo>` and
 
 Run the checks the agent should pass before it reports done: `make check`.
 `make quality` adds the dependency audit (pip-audit), and `make bench` runs
-the model benchmark. `CONSTRAINTS.md` records the exact bar.
+the model benchmark. The `Makefile` and `pyproject.toml` record the exact bar.
 
 ### Make any folder agent-ready
 
@@ -252,10 +249,10 @@ SOVEREIGN_LOCAL_ONLY=0 sovereign router --restart   # allow provider routes via 
 sovereign cloud --set-key openrouter        # prompts leave the Mac on provider routes
 ```
 
-Everything the system owns lives in `~/Documents/local-ai`:
+Everything the system owns lives in `runtime`:
 
 ```text
-~/Documents/local-ai/
+runtime/
 ├── gateway/     LiteLLM config, venv, supervisor, logs
 ├── bin/         qwen-local, codex-local, claude-local
 ├── config/      sovereign/ and codex/ profiles
@@ -272,8 +269,8 @@ models natively on Metal and speaks the same OpenAI API, so every client can
 use it through the same aliases:
 
 ```sh
-python3.13 -m venv ~/Documents/local-ai/mlx-venv
-~/Documents/local-ai/mlx-venv/bin/python -m pip install mlx mlx-lm
+python3.13 -m venv runtime/mlx-venv
+runtime/mlx-venv/bin/python -m pip install mlx mlx-lm
 sovereign mlx models                # catalog, downloaded state, HF repository
 sovereign mlx pull --model mlx-qwen3-14b-4bit   # weights + 0.6B draft
 sovereign mlx start --model mlx-qwen3-4b-4bit
@@ -281,7 +278,7 @@ sovereign mlx status                # online, supervised PID, draft, downloaded 
 sovereign mlx stop
 ```
 
-`sovereign mlx start` uses `~/Documents/local-ai/mlx-venv` automatically
+`sovereign mlx start` uses `runtime/mlx-venv` automatically
 (or `SOVEREIGN_MLX_PYTHON`), records the model/port/PID in
 `data/mlx-server.json`, and the guardian restarts that exact model if it
 crashes. Starting with no `--model` picks the strongest downloaded model.
@@ -327,12 +324,12 @@ curl -s http://127.0.0.1:4010/v1/embeddings \
 ```
 
 `local-embed` is the stable alias (768-dim vectors). A request's whole list is
-embedded in one Ollama call (64 new chunks took 0.28 s instead of 21.7 s
-one-by-one), and identical strings are memoized in-process, so re-indexing
-unchanged files costs microseconds instead of a transformer pass.
-`sovereign index` also reuses stored vectors by text fingerprint: a rebuild of
-an unchanged tree makes no model calls at all. `sovereign install-clients` adds the embed model to
-Continue and to the LiteLLM model list; `sovereign doctor` reports it.
+embedded in one Ollama call, and identical strings are memoized in the gateway
+process so repeated `/v1/embeddings` input skips another transformer pass.
+`sovereign index` batches chunks through Ollama directly, builds into a
+temporary database, and swaps it in only on success, so a failed rebuild keeps
+the old index. `sovereign install-clients` adds the embed model to Continue and
+to the LiteLLM model list; `sovereign doctor` reports it.
 
 ### Speed notes
 
@@ -376,7 +373,7 @@ sovereign monitor --json            # one machine-readable report
 sovereign monitor --demo            # deterministic UI for screenshots/tests
 ```
 
-`workspace` lives in `~/Documents/local-ai/config/sovereign/config.toml` and defaults to
+`workspace` lives in `runtime/config/sovereign/config.toml` and defaults to
 `~/Documents`; `sovereign code /path/to/repo` overrides it for one session.
 
 ## Models (24 GB M5 Pro)
@@ -524,7 +521,7 @@ Routing is `auto` by default: a configured direct provider key, then OpenRouter,
 then Ollama Cloud. Force a route with `--route openrouter` (or `ollama`,
 `deepseek`, `zai`, `moonshot`, `dashscope`). `local-qwen3.8` is always local;
 `cloud-qwen3.8` uses a provider when one is configured. Keys live in
-`~/Documents/local-ai/gateway/cloud.env` (mode 0600), which the gateway
+`runtime/gateway/cloud.env` (mode 0600), which the gateway
 supervisor sources; `sovereign cloud` only shows a masked value.
 
 **Privacy.** A `:cloud` tag sends the prompt, system message, and attached
@@ -610,7 +607,7 @@ the tier gateway. It also:
   tells a model to stop when the same tool call repeats three times — so multi-hour
   sessions do not silently overflow the context or loop forever;
 - exposes `x-sovereign-tier`, `x-sovereign-model`, and `x-sovereign-reason` headers;
-- writes per-request latency to `~/Documents/local-ai/data/logs/tiers.jsonl`.
+- writes per-request latency to `runtime/data/logs/tiers.jsonl`.
 
 Measured on this M5 Pro / 24 GB: a cached short answer returned in ~0.1 s, a warm
 9B agent turn took ~7–9 s, a 30B code turn took ~12–28 s depending on prompt size,
@@ -634,8 +631,8 @@ them to proxy through LiteLLM.
 
 ### Client defaults with the tier gateway
 
-- OpenCode: `sovereign/auto`, small model `sovereign/balanced` (avoids a model
-  swap on every turn), plus the `local/` provider; `openrouter/` is opt-in.
+- OpenCode: `sovereign/auto`, plus the `local/` provider; `openrouter/` is
+  opt-in. The native V2 config does not use the removed `small_model` override.
 - Continue: `Sovereign Best`, `Sovereign Auto`, `Sovereign Deep`, and
   `Sovereign Ultra` OpenAI-compatible models.
 - Qwen Code: default `best` in its OpenAI provider list.
@@ -683,7 +680,7 @@ Code, and the configured local provider for each other client. Separately,
 `:4000` still serves the named aliases (`local-chat`, `local-code`,
 `local-agent`, `local-claude`, `local-reasoning`, `local-reasoning-deep`,
 `local-chat-qwen3`, `local-fast`, `local-vision`, …). Those aliases are mapped
-to Ollama models in `~/Documents/local-ai/gateway/config.yaml`. Use these
+to Ollama models in `runtime/gateway/config.yaml`. Use these
 commands to make sure an alias you rely on points at a model you have
 downloaded:
 
@@ -937,21 +934,16 @@ first install.
 ### Complementary MCP servers
 
 `sovereign install-clients` keeps the `sovereign` server as the single source of
-truth for skills, browser, filesystem, and checks. It also registers two
-official reference servers alongside it; they are independent and never replace
-Sovereign's tools:
+truth for skills, browser, filesystem, and checks. It also registers independent
+reference servers alongside it:
 
-- `@modelcontextprotocol/server-filesystem` — fast, sandboxed file reads/writes
-  for large trees, scoped to `~/Documents` and `~/Downloads`.
-- `@modelcontextprotocol/server-memory` — persistent knowledge graph across
-  sessions.
-
-Install any other reference server on demand with `npx -y` when you need more:
-
+- `@modelcontextprotocol/server-filesystem` — sandboxed file reads/writes scoped
+  to `~/Documents` and `~/Downloads`.
+- `@modelcontextprotocol/server-memory` — a persistent knowledge graph.
 - `@playwright/mcp` — full browser automation independent of Sovereign's
   policy-checked browser.
-- `@modelcontextprotocol/server-git` / `server-fetch` — deeper git history and
-  HTTP fetching.
+- `mcp-server-git` and `mcp-server-fetch` — official Python servers for git
+  history and HTTP fetching, registered through `uvx` when it is available.
 
 All of these run on stdio and compose with the `sovereign` server; OpenCode,
 Claude Code, and Qwen Code can load any subset by adding an entry to their MCP
@@ -1010,8 +1002,8 @@ read command.
 Downloads are file-selective by default; `--all` is required to take every
 file in a repository, and downloads over 20 GB ask for confirmation. The
 default destinations are
-`~/Documents/local-ai/models/huggingface/<org>--<repo>` for models and
-`~/Documents/local-ai/datasets/huggingface/<org>--<repo>` for datasets. Use
+`runtime/models/huggingface/<org>--<repo>` for models and
+`runtime/datasets/huggingface/<org>--<repo>` for datasets. Use
 `--local-dir` to change it, `--exclude` to omit files, `--max-workers` to tune
 parallelism, `--dry-run` to inspect the command, and `--revision` to pin a
 branch, tag, or commit.
@@ -1056,31 +1048,17 @@ generated local provider configs (gateway, MLX, or Ollama).
 
 ### Chat composer
 
-`sovereign chat` has a multi-line composer: `Enter` sends, `Shift+Enter` adds a
-line, `Tab` completes slash commands and installed model tags, and `↑`/`↓`
-recall submitted lines. `Esc` stops a streaming reply. `/copy` copies the last
-answer, `/export [path]` saves the conversation as Markdown, `/sessions` lists
-saved chats, `/sessions <n>` resumes one, `/attach <path>` adds read-only file
-context, `/attachments` lists what is attached, and `/context` shows the budget
-and what will be trimmed. `/pull <tag>` downloads any Ollama model with live
-progress; `/undo [list]` restores the files saved before the last applied
-patch. `/compact [keep]` summarizes older turns (instead of silently dropping
-them) so long chats keep their gist; `/messages` numbers the transcript,
-`/find <text>` searches it, and `/copy <n>` copies a turn. `/retry`
-asks the last question again; `/edit` puts it back in the composer. `/tests`
-detects and runs the workspace checks, `/fix` runs them and asks the model for
-a repair patch (applying it re-runs the checks), `/run <command>` runs one
-allow-listed test/lint command, `/diff` attaches the working-tree diff, and
-`/git` shows the branch, changed files, and recent commits — their output joins
-the next prompt's context. Type `@path` in a message to attach that workspace
-file; `Tab` completes paths. Replies containing `<<<FILE: path>>>` blocks are
-staged, not written: `/apply` opens a per-file diff and applies only on `a`,
-backing up existing files first (`/undo` restores them); `/reject` discards
-them. `Ctrl+P` opens the
-command palette, which fuzzy-searches installed models, saved chats (including
-transcript content), and the 22k-skill bank. Long conversations are trimmed to
-the selected model's window automatically, so a chat cannot silently overrun
-its context.
+`sovereign chat` uses a single-line composer: `Enter` sends, and replies stream
+from the selected Ollama or MLX model. `/model` and `/models` select models;
+`/chat`, `/code`, `/reason`, `/vision`, and `/fast` change the task. `/browse`,
+`/search`, `/index`, `/summarize`, `/pdf`, `/ocr`, `/skills`, `/hf`, and `/run`
+expose their corresponding local tools without leaving the dashboard.
+
+Conversations persist as JSONL. `/history` shows recent turns, `/resume` loads
+the latest saved session, and `/clear` starts a new conversation. `/status`
+refreshes the system view, `/free` unloads resident models, and `/help` lists
+every command. `F2`, `F4`, and `F6` suspend chat into Qwen, Codex, or Claude;
+`Ctrl+N` starts a new chat and `Ctrl+Q` quits.
 
 ## Commands
 
@@ -1234,7 +1212,7 @@ when it needs you. Run it from the CLI with `sovereign browse <url> --task "…"
   you pass `--yes`.
 - **Local/private addresses** need `--allow-local`; `--allow-domain` restricts
   navigation. Every step is recorded (fills are length-only) under
-  `~/Documents/local-ai/data/browser/runs/`.
+  `runtime/data/browser/runs/`.
 
 Install: `pip install -e '.[browser]' && playwright install chromium`.
 
@@ -1275,7 +1253,7 @@ Install: `brew install poppler tesseract`.
 
 ## Skills, memory, and multi-model
 
-Saved prompt templates live in `~/Documents/local-ai/config/skills/` as Markdown
+Saved prompt templates live in `runtime/config/skills/` as Markdown
 files — `code-review`, `write-tests`, `refactor`, `explain`, `specify`,
 `security-review`, `financial-analysis`, and `legal-review`. `sovereign skills`
 lists them; `sovereign skill <name> --prompt "…"` runs one through the local
@@ -1377,7 +1355,7 @@ binaries), chunks each text file, and stores local embeddings from Ollama's
 `nomic-embed-text` (274 MB, pulled automatically via `ollama pull
 nomic-embed-text`). `sovereign search` ranks chunks by cosine similarity against
 the query. Everything stays on the machine; the index lives under
-`~/Documents/local-ai/data/index/` and is excluded from backups and Time Machine
+`runtime/data/index/` and is excluded from backups and Time Machine
 (it is cheap to rebuild).
 
 ## Login terminal
@@ -1451,7 +1429,7 @@ retired by `--install`; their plists are kept as `.superseded` and
 `com.user.ailocalgateway.plist` used to run:
 
 ```sh
-/usr/bin/open -gj -a Terminal ~/Documents/local-ai/gateway/start_gateway.command
+/usr/bin/open -gj -a Terminal runtime/gateway/start_gateway.command
 ```
 
 That hidden Terminal window detached `run_gateway.sh` with `nohup` and exited;
@@ -1488,8 +1466,8 @@ registers the four launchd services.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — prioritised work and current status.
 - [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) — the design decisions behind the build.
 - [docs/BEST_SKILL_BANKS.md](docs/BEST_SKILL_BANKS.md) — how the skill library is ranked.
-- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.6.0 model-selection
-  and verified-hardware pass.
+- [CHANGELOG.md](CHANGELOG.md) — every release, including the 0.7.0 one-shot
+  coding, domain-routing, and chat-resume work.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, checks, and review expectations.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — how contributors are expected to behave.
 - [SECURITY.md](SECURITY.md) — reporting a vulnerability.
@@ -1513,13 +1491,14 @@ and prints the fix. The most common issues:
 | A long session loops or overflows | the gateway truncates, compacts, and stops repeated tool calls; resume with the client's own `--continue` |
 
 Logs: `sovereign logs gateway -f`, `sovereign logs bridge -f`, and per-request
-latency in `~/Documents/local-ai/data/logs/tiers.jsonl`. Survived exceptions
-are appended to `data/logs/swallowed.log` rather than hidden.
+latency in `runtime/data/logs/tiers.jsonl`. Survived exceptions are appended to
+`runtime/data/logs/swallowed.log` rather than hidden.
 
 ## Updating
 
-Your config, sessions, and models live under `~/Documents/local-ai`, outside the
-checkout, so an update does not overwrite them.
+Fresh installs keep config, sessions, and models under `runtime/` in the
+checkout; legacy installs keep `~/Documents/local-ai`. Updates do not overwrite
+either location. Back up before deleting a checkout because it may contain state.
 
 ```sh
 git pull --ff-only
@@ -1548,11 +1527,12 @@ sovereign rm <model>                   # remove an Ollama model
 sovereign hf remove ORG/REPO --yes     # remove a Hub model/dataset download
 ```
 
-`~/Documents/local-ai` holds the gateway config, sessions, logs, and model
-weights; delete it by hand only after a backup. The Python package itself is
-`pip uninstall sovereign-code`, and deleting the checkout removes the source.
-Never delete `~/.ollama/models` unless you also intend to remove models used by
-other tools — Sovereign Code symlinks it to `~/Documents/local-ai/models`.
+`runtime/` holds the gateway config, sessions, logs, and model weights on a
+fresh install; delete it only after a backup. Removing the checkout removes that
+state as well as the source. Legacy installs instead use `~/Documents/local-ai`.
+The Python package itself is removed with `pip uninstall sovereign-code`. Never
+delete `~/.ollama/models` unless you also intend to remove models used by other
+tools — Sovereign Code symlinks it to the runtime model store.
 
 ## FAQ
 
@@ -1575,7 +1555,7 @@ resident models before a turn.
 --cloud` and `sovereign launch claude --cloud` bypass the local stack. The
 default never selects a cloud model on its own.
 
-**Where are my chats?** JSONL files under `~/Documents/local-ai/data/sessions`,
+**Where are my chats?** JSONL files under `runtime/data/sessions`,
 mode `0600`. `sovereign sessions --search` finds them, and `sovereign backup`
 archives them.
 
@@ -1589,8 +1569,8 @@ archives them.
 Layout: `src/sovereign_code/` is the package, `tests/` the pytest suite,
 `skills/` the 22k Markdown library plus `MANIFEST.sha256`, `docs/` the Pages
 site and design docs, and `bin/` the launcher and dashboard. Generated state
-(config, sessions, logs, model weights) lives under `~/Documents/local-ai`, not
-in the checkout.
+(config, sessions, logs, model weights) lives under `runtime/` in a fresh
+checkout, or under the legacy `~/Documents/local-ai` root.
 
 Before reporting a task done, run the project's gates:
 
@@ -1655,7 +1635,7 @@ drops the Swift/SDK coupling and menu-bar-only workflow.
 | Single model pinned at build time | Curated remote catalog with ~35 downloadable tags, model-info, and offline stacks |
 | Context fitting spread across UI code | `router.py` estimates KV + weights against free RAM |
 | Client setup mutates many apps | Detects clients, writes only its own profile and `*-local` wrappers |
-| No session history | JSONL per conversation under `~/Documents/local-ai/data` |
+| No session history | JSONL per conversation under `runtime/data` |
 | Session retention | optional: `session_retention_days` / `session_keep` in `config.toml` |
 
 See [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and

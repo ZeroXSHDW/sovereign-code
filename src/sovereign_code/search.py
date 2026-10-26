@@ -86,12 +86,13 @@ def _base(url: str) -> str:
     return value if value.startswith("http") else f"http://{value}"
 
 
-def embed(
+def embed_with_usage(
     ollama_url: str,
     model: str,
     texts: list[str],
     timeout: float = 300.0,
-) -> list[list[float]]:
+) -> tuple[list[list[float]], int]:
+    """Embed one batch and return Ollama's prompt-token count when provided."""
     try:
         response = shared_client().post(
             f"{_base(ollama_url).rstrip('/')}/api/embed",
@@ -103,12 +104,23 @@ def embed(
     if response.status_code != 200:
         raise EmbedError(f"embed HTTP {response.status_code}")
     try:
-        vectors: list[list[float]] = response.json()["embeddings"]
-    except (ValueError, KeyError, TypeError) as exc:
+        data = response.json()
+        vectors: list[list[float]] = data["embeddings"]
+        usage = int(data.get("prompt_eval_count") or 0)
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise EmbedError("malformed embedding response") from exc
     if len(vectors) != len(texts):
         raise EmbedError(f"expected {len(texts)} embeddings, got {len(vectors)}")
-    return vectors
+    return vectors, usage
+
+
+def embed(
+    ollama_url: str,
+    model: str,
+    texts: list[str],
+    timeout: float = 300.0,
+) -> list[list[float]]:
+    return embed_with_usage(ollama_url, model, texts, timeout)[0]
 
 
 def pack(vector: list[float]) -> bytes:

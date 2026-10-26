@@ -120,7 +120,17 @@ def complete(
     if response.status_code != 200:
         # LiteLLM wraps an upstream 402 in a 500, so the useful reason (the
         # Ollama plan or a disabled cloud) is only in the body. Surface it.
-        from .cloud import PRO_UPGRADE, plan_required
+        PRO_UPGRADE = "https://ollama.com/upgrade"
+
+        def plan_required(message: str) -> bool:
+            text = str(message).lower()
+            return (
+                "not in the free plan" in text
+                or "free plan" in text
+                or "free usage limit" in text
+                or "ollama.com/upgrade" in text
+                or ("upgrade" in text and "plan" in text)
+            )
 
         detail = response.text.strip().replace("\n", " ")[:240]
         if plan_required(detail):
@@ -134,8 +144,6 @@ def complete(
             message = f"gateway HTTP {response.status_code}"
             if detail:
                 message += f": {detail}"
-            if "cloud is disabled" in detail.lower():
-                message += " — enable it with: sovereign cloud --enable"
         raise SourceError(message)
     try:
         return response.json()["choices"][0]["message"]["content"] or ""

@@ -86,12 +86,8 @@ class OllamaClient:
         except httpx.HTTPError as exc:
             raise OllamaError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
         if response.status_code >= 400:
-            from .cloud import ollama_error_hint
-
             raise OllamaError(
-                ollama_error_hint(
-                    f"Ollama {path} returned {response.status_code}: {response.text[:300]}"
-                )
+                f"Ollama {path} returned {response.status_code}: {response.text[:300]}"
             )
         try:
             return cast(dict[str, Any], response.json())
@@ -198,11 +194,7 @@ class OllamaClient:
         ) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", "replace")
-                from .cloud import ollama_error_hint
-
-                raise OllamaError(
-                    ollama_error_hint(f"Ollama chat returned {response.status_code}: {body[:300]}")
-                )
+                raise OllamaError(f"Ollama chat returned {response.status_code}: {body[:300]}")
             async for line in response.aiter_lines():
                 if not line.strip():
                     continue
@@ -262,11 +254,7 @@ class OllamaClient:
         ) as response:
             if response.status_code >= 400:
                 body = (await response.aread()).decode("utf-8", "replace")
-                from .cloud import ollama_error_hint
-
-                raise OllamaError(
-                    ollama_error_hint(f"pull failed ({response.status_code}): {body[:300]}")
-                )
+                raise OllamaError(f"pull failed ({response.status_code}): {body[:300]}")
             async for line in response.aiter_lines():
                 if not line.strip():
                     continue

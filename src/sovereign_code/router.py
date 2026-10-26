@@ -92,9 +92,7 @@ def _fallback(views: dict[str, ModelView]) -> ModelView | None:
     installed: list[ModelView] = []
     seen: set[int] = set()
     for view in views.values():
-        # A cloud tag is "installed" in Ollama's model list, but selecting it
-        # would send the prompt off-device and break the local-first promise.
-        if view.installed and not view.spec.cloud and id(view) not in seen:
+        if view.installed and id(view) not in seen:
             seen.add(id(view))
             installed.append(view)
     if not installed:

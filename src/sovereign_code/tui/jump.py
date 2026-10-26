@@ -44,7 +44,7 @@ class JumpProvider(Provider):
         snapshot = getattr(self.app, "snapshot", None)
         if snapshot is not None:
             for view in getattr(snapshot, "sorted_models", []):
-                if not view.installed or view.cloud:
+                if not view.installed:
                     continue
                 items.append(
                     _Jump(

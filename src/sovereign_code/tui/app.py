@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shlex
 import subprocess
 import sys
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -18,7 +20,10 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Ma
 
 from ..clients import local_clients, plan_launch, resolve_client_models
 from ..config import Settings
+from ..http import async_client
 from ..memory import project_context
+from ..mlx import forward_model as mlx_forward_model
+from ..mlx import mlx_url
 from ..models import ModelView
 from ..ollama import OllamaClient
 from ..router import Selection, Task, choose, mode_label, system_prompt, task_from_name
@@ -88,6 +93,41 @@ class ModelListItem(ListItem):
             Label(label),
             id="model-" + view.tag.replace(":", "-").replace("/", "-").replace(".", "-"),
         )
+
+
+async def _stream_mlx(
+    model: str, messages: list[dict[str, str]], temperature: float
+) -> AsyncIterator[str]:
+    """Stream an MLX chat through its OpenAI-compatible local server."""
+    client = async_client("mlx-chat", timeout=180.0)
+    async with client.stream(
+        "POST",
+        f"{mlx_url().rstrip('/')}/v1/chat/completions",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "model": mlx_forward_model(model),
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        },
+    ) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            raw = line[5:].strip()
+            if raw == "[DONE]":
+                break
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                continue
+            choices = payload.get("choices") or []
+            if not choices:
+                continue
+            content = (choices[0].get("delta") or {}).get("content")
+            if content:
+                yield str(content)
 
 
 class SovereignApp(App[None]):
@@ -395,25 +435,34 @@ class SovereignApp(App[None]):
         stats = ""
         last_update = 0.0
         try:
-            think = False if model.spec.thinking else None
-            async for chunk in self.ollama.chat_stream(
-                model.tag,
-                messages,
-                context=selection.context or 0,
-                temperature=self.settings.temperature,
-                think=think,
-            ):
-                if chunk.content:
-                    chunks.append(chunk.content)
+            if model.runner == "mlx":
+                async for content in _stream_mlx(model.tag, messages, self.settings.temperature):
+                    chunks.append(content)
                     now = time.monotonic()
                     if now - last_update > 0.06:
                         await assistant.update("".join(chunks))
                         last_update = now
-                if chunk.done:
-                    stats = (
-                        f"\n\n`{model.tag} · {selection.context} ctx · "
-                        f"{chunk.eval_count} tok · {chunk.total_duration_ns / 1e9:.1f}s`"
-                    )
+                stats = f"\n\n`{model.tag} · {selection.context} ctx · MLX`"
+            else:
+                think = False if model.spec.thinking else None
+                async for chunk in self.ollama.chat_stream(
+                    model.tag,
+                    messages,
+                    context=selection.context or 0,
+                    temperature=self.settings.temperature,
+                    think=think,
+                ):
+                    if chunk.content:
+                        chunks.append(chunk.content)
+                        now = time.monotonic()
+                        if now - last_update > 0.06:
+                            await assistant.update("".join(chunks))
+                            last_update = now
+                    if chunk.done:
+                        stats = (
+                            f"\n\n`{model.tag} · {selection.context} ctx · "
+                            f"{chunk.eval_count} tok · {chunk.total_duration_ns / 1e9:.1f}s`"
+                        )
             answer = "".join(chunks).strip()
             if not answer:
                 raise RuntimeError("the model returned no content")

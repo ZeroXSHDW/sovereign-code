@@ -203,3 +203,58 @@ async def test_resume_with_no_session_is_a_noop(monkeypatch):
         await app._resume_session()
         await pilot.pause()
     assert app.history == []
+
+
+async def test_mlx_stream_parses_openai_sse(monkeypatch):
+    import httpx
+
+    from sovereign_code.tui import app as app_module
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://127.0.0.1:8081/v1/chat/completions"
+        assert request.content
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"MLX"}}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(app_module, "async_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(app_module, "mlx_url", lambda: "http://127.0.0.1:8081")
+    monkeypatch.setattr(app_module, "mlx_forward_model", lambda _tag: "repo/model")
+
+    chunks = [chunk async for chunk in app_module._stream_mlx("mlx-tag", [], 0.2)]
+
+    assert chunks == ["hello ", "MLX"]
+    await client.aclose()
+
+
+async def test_mlx_selection_does_not_call_ollama(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from sovereign_code.models import CATALOG, ModelView
+    from sovereign_code.router import Selection, Task
+    from sovereign_code.tui import app as app_module
+
+    async def fake_stream(*_args):
+        yield "hello "
+        yield "MLX"
+
+    monkeypatch.setattr(app_module, "_stream_mlx", fake_stream)
+    app = SovereignApp(settings=Settings(), demo=True)
+    app.ollama = MagicMock()
+    model = ModelView(spec=CATALOG["mlx-qwen3-4b-4bit"], installed=True, runner="mlx")
+    selection = Selection(Task.CHAT, model, 1024, "test")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._assistant = await app.add_message("assistant", "…")
+        app.history = [{"role": "user", "content": "hi"}]
+        await app._stream_reply(selection)
+        await pilot.pause()
+
+    assert app.history[-1] == {"role": "assistant", "content": "hello MLX"}
+    app.ollama.chat_stream.assert_not_called()

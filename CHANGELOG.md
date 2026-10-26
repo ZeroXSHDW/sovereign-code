@@ -4,6 +4,28 @@ All notable changes to Sovereign Code.
 
 ## [Unreleased]
 
+### Added
+- **Batched `/v1/embeddings`**: the tier gateway serves the stable `local-embed`
+  alias through Ollama, deduplicates input, and reuses recent vectors in-process.
+- **Debugger and installer**: `sovereign debug`, the monitor debug overlay, a
+  one-command installer, and optional skill download are covered by tests.
+
+### Changed
+- **Autonomous verification uses `make check`** when a project provides it, so
+  pipelines and loops no longer treat tests alone as the full quality gate.
+- **Release and setup hardening**: tags run checks and dependency audits, the
+  browser extra is audited, and all setup entry points use one installer.
+
+### Fixed
+- **Direct-mode undo preserves recovery data**: failed restores keep their
+  journal, unreadable files are not overwritten, and journal failures roll back.
+- **MLX paths match their documentation**: chat streams through mlx-lm, a warm
+  small model can serve `fast`, and the guardian restores saved MLX settings.
+- **Debug traces do not store sensitive headers**, parse documented HTTP header
+  syntax, reject malformed JSON cleanly, and close their HTTP clients.
+- **Current docs match 0.7.0 and the runtime layout**, including storage,
+  native client configuration, chat commands, and remaining structural work.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added

@@ -3,10 +3,6 @@ from __future__ import annotations
 from sovereign_code import models
 
 
-def test_is_cloud_tag() -> None:
-    assert isinstance(models.is_cloud_tag("qwen3:8b"), bool)
-
-
 def test_parse_size_gb() -> None:
     assert models.parse_size_gb("1.2 GB") >= 0
 

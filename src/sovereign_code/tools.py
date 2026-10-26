@@ -96,7 +96,7 @@ def opencode_models(text: str) -> list[str]:
     providers = data.get("providers") or data.get("provider")
     if not isinstance(providers, dict):
         return found
-    # Known local providers first, then any other provider so a cloud block
+    # Known local providers first, then any other provider so a custom block
     # cannot hide from doctor/prune.
     ordered = [
         providers[key]
@@ -118,8 +118,8 @@ def opencode_models(text: str) -> list[str]:
 def opencode_local_models(text: str) -> list[str]:
     """Model ids from the local Ollama and Sovereign providers only.
 
-    A remote OpenRouter/Anthropic model is not expected to exist in Ollama, so
-    it must not be reported as a dangling local reference.
+    A remote model is not expected to exist in Ollama, so it must not be
+    reported as a dangling local reference.
     """
     try:
         data = json.loads(text)

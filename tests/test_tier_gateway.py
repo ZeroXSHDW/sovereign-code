@@ -78,8 +78,21 @@ def test_resolve_route_aliases() -> None:
     claude = tg.resolve_route({"model": "local-claude", "messages": []})
     assert claude.model in {"qwen3.5:9b", "qwen3-coder:30b", "glm-4.7-flash"}
     assert 8192 <= claude.context <= 65536
-    cloud = tg.resolve_route({"model": "cloud-kimi-k3", "messages": []})
-    assert cloud.kind == "proxy"
+
+
+def test_fast_route_uses_an_already_warm_mlx_model(monkeypatch) -> None:
+    monkeypatch.setattr(tg, "mlx_fast_loaded_tag", lambda: "mlx-qwen3-4b-4bit")
+    monkeypatch.setattr(tg, "mlx_forward_model", lambda _tag: "repo/qwen3-4b")
+    monkeypatch.setattr(tg, "mlx_served_models", lambda: ("repo/qwen3-4b",))
+
+    route = tg.resolve_route(
+        {"model": "fast", "messages": [{"role": "user", "content": "hi"}]},
+        installed={"qwen3.5:4b"},
+    )
+
+    assert route.kind == "mlx"
+    assert route.model == "repo/qwen3-4b"
+    assert route.tier == tg.FAST
 
 
 def test_tool_history_is_converted_for_ollama() -> None:
@@ -567,20 +580,9 @@ def test_an_installed_model_name_is_served_directly() -> None:
     assert route.model == "qwen3.5:9b"
 
 
-def test_a_cloud_tag_is_not_served_locally() -> None:
-    installed = {"kimi-k3:cloud"}
-    route = tg.resolve_route(
-        {"model": "kimi-k3:cloud", "messages": [{"role": "user", "content": "hi"}]},
-        None,
-        installed,
-    )
-    assert route.kind == "proxy"
-
-
-def test_the_catalog_holds_no_cloud_or_embedding_model() -> None:
-    installed = {"kimi-k3:cloud", "nomic-embed-text:latest", "glm-4.7-flash:latest"}
+def test_the_catalog_holds_no_embedding_model() -> None:
+    installed = {"nomic-embed-text:latest", "glm-4.7-flash:latest"}
     ids = {entry["id"] for entry in tg.catalog_models(installed)}
-    assert "kimi-k3:cloud" not in ids
     assert "nomic-embed-text" not in ids
     # A ":latest" tag is listed under the name the configs use.
     assert "glm-4.7-flash" in ids
@@ -757,6 +759,64 @@ def test_choose_model_returns_tuple() -> None:
     model, ctx, _think = tg.choose_model(tg.BALANCED, set(), "code")
     assert isinstance(model, str)
     assert isinstance(ctx, int)
+
+
+def test_embeddings_batches_deduplicates_and_reuses_vectors(monkeypatch) -> None:
+    monkeypatch.setattr(tg, "EMBED_CACHE", tg.MemoryCache())
+    calls: list[tuple[str, str, list[str]]] = []
+    vectors = {"a": [0.1, 0.2], "b": [0.3, 0.4]}
+
+    def fake_embed(url: str, model: str, texts: list[str]):
+        calls.append((url, model, texts))
+        return [vectors[text] for text in texts], 6
+
+    monkeypatch.setattr(tg, "embed_with_usage", fake_embed)
+    monkeypatch.setattr(tg, "ensure_model_room", lambda *_args: None)
+    handler = tg._Handler.__new__(tg._Handler)
+    handler.path = "/v1/embeddings"
+    request = {"model": "local-embed", "input": ["a", "b", "a"]}
+    handler._read = lambda: request  # type: ignore[attr-defined]
+    replies = []
+    handler._json = lambda status, payload, extra=None: replies.append(  # type: ignore[attr-defined]
+        (status, payload)
+    )
+
+    handler.do_POST()
+    handler.do_POST()
+
+    assert calls == [(tg.DEFAULT_OLLAMA, "nomic-embed-text", ["a", "b"])]
+    assert replies[0][0] == 200
+    response = replies[0][1]
+    assert response["object"] == "list"
+    assert response["model"] == "nomic-embed-text"
+    assert [item["index"] for item in response["data"]] == [0, 1, 2]
+    assert [item["embedding"] for item in response["data"]] == [
+        vectors["a"],
+        vectors["b"],
+        vectors["a"],
+    ]
+    assert response["usage"] == {"prompt_tokens": 6, "total_tokens": 6}
+    assert replies[1][1]["usage"] == {"prompt_tokens": 0, "total_tokens": 0}
+
+
+def test_embeddings_rejects_non_text_input(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tg,
+        "embed_with_usage",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not call Ollama")),
+    )
+    handler = tg._Handler.__new__(tg._Handler)
+    handler.path = "/v1/embeddings"
+    handler._read = lambda: {"model": "local-embed", "input": ["ok", 3]}  # type: ignore[attr-defined]
+    replies = []
+    handler._json = lambda status, payload, extra=None: replies.append(  # type: ignore[attr-defined]
+        (status, payload)
+    )
+
+    handler.do_POST()
+
+    assert replies[0][0] == 400
+    assert replies[0][1]["error"]["type"] == "invalid_request"
 
 
 def test_fit_to_context_no_change_when_fits() -> None:

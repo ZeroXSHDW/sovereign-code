@@ -191,8 +191,9 @@ class DiskCache:
             conn = sqlite3.connect(str(self.path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
-            with self._lock:
-                self._connections.append(conn)
+            # Called either from __init__ (single-threaded) or from the
+            # public methods that already hold self._lock, so no extra lock.
+            self._connections.append(conn)
         return conn
 
     def _harden_sidecars(self) -> None:

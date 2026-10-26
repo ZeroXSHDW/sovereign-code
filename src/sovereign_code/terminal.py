@@ -9,6 +9,7 @@ interactive root shells prompt inside the new Terminal window.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import shlex
@@ -24,6 +25,11 @@ from .system import system_binary
 
 MAX_OUTPUT = 400_000
 _SUDO = re.compile(r"^\s*(sudo|doas)\s+(.*)$", re.DOTALL)
+
+# Keep background Popen objects alive so their __del__ does not emit a
+# ResourceWarning while the launched process is still running. Processes are
+# reaped and the set is cleared at interpreter exit.
+_BACKGROUND_PROCS: set[subprocess.Popen[bytes]] = set()
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT) -> str:
@@ -276,6 +282,21 @@ def _prune_background_logs(folder: Path, keep: int = 50) -> None:
             continue
 
 
+def _cleanup_background_processes() -> None:
+    """Terminate and reap any background processes we still track."""
+    for proc in list(_BACKGROUND_PROCS):
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+        except Exception:
+            pass
+        _BACKGROUND_PROCS.discard(proc)
+
+
+atexit.register(_cleanup_background_processes)
+
+
 def run_background(
     command: str,
     *,
@@ -309,6 +330,7 @@ def run_background(
             )
     except OSError as exc:
         return {"ok": False, "error": str(exc), "cwd": str(workdir)}
+    _BACKGROUND_PROCS.add(proc)
     return {
         "ok": True,
         "pid": proc.pid,

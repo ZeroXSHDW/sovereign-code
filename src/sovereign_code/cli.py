@@ -5738,7 +5738,7 @@ def _pipeline(
         for attempt in range(2):
             try:
                 raw = complete(
-                    settings.ollama_url,
+                    settings.gateway_url,
                     model or agent,
                     messages,
                     max_tokens=direct_tokens,

@@ -68,11 +68,15 @@ def read_context_length(path: Path | None = None) -> int | None:
     db = path or ollama_db_path()
     if not db.is_file():
         return None
+    con = None
     try:
-        with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
-            row = con.execute("SELECT context_length FROM settings WHERE id = 1").fetchone()
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        row = con.execute("SELECT context_length FROM settings WHERE id = 1").fetchone()
     except sqlite3.Error:
         return None
+    finally:
+        if con is not None:
+            con.close()
     return int(row[0]) if row else None
 
 
@@ -81,13 +85,17 @@ def write_context_length(value: int, path: Path | None = None) -> bool:
     db = path or ollama_db_path()
     if not db.is_file():
         return False
+    con = None
     try:
-        with sqlite3.connect(db) as con:
-            cur = con.execute("UPDATE settings SET context_length = ? WHERE id = 1", (int(value),))
-            con.commit()
-            return cur.rowcount > 0
+        con = sqlite3.connect(db)
+        cur = con.execute("UPDATE settings SET context_length = ? WHERE id = 1", (int(value),))
+        con.commit()
+        return cur.rowcount > 0
     except sqlite3.Error:
         return False
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _current_server_pid() -> str | None:

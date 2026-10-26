@@ -228,6 +228,7 @@ def test_close_handles_error(tmp_path: Path) -> None:
 
             raise sqlite3.Error("boom")
 
+    kb._conn.close()  # close the real connection before replacing it
     kb._conn = FakeConn()  # type: ignore[assignment]
     kb.close()  # should not raise
 

@@ -12,6 +12,7 @@ def test_memory_cache() -> None:
 def test_disk_cache() -> None:
     c = cache.disk_cache()
     assert c is not None
+    c.close()
 
 
 def test_cache_key_chat() -> None:

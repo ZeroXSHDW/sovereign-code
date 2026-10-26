@@ -43,9 +43,13 @@ def test_env_drift_reports_missing_and_wrong() -> None:
 
 def _db(tmp_path: Path) -> Path:
     path = tmp_path / "db.sqlite"
-    with sqlite3.connect(path) as con:
+    con = sqlite3.connect(path)
+    try:
         con.execute("CREATE TABLE settings (id INTEGER PRIMARY KEY, context_length INTEGER)")
         con.execute("INSERT INTO settings (id, context_length) VALUES (1, 65536)")
+        con.commit()
+    finally:
+        con.close()
     return path
 
 
